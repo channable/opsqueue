@@ -1,0 +1,39 @@
+use toypsqueue::submission::Submission;
+use toypsqueue::chunk::Chunk;
+use toypsqueue::persistence::Persistence;
+
+fn main() -> rusqlite::Result<()> {
+    // let mut conn = rusqlite::Connection::open_in_memory()?;
+    let mut conn = rusqlite::Connection::open("./example_db.db3")?;
+    conn.migrate()?;
+    let res = conn.atomically(|tx| {
+        let (submission, chunks) = Submission::from_vec(vec!["a".into(), "b".into(), "c".into(), "d".into()], None);
+        tx.insert_submission(&submission)?;
+        for chunk in chunks {
+            tx.insert_chunk(&chunk)?;
+        }
+        Ok(())
+   })?;
+   println!("result: {:?}", res);
+
+    // println!("Hello, world!");
+
+    // let conn = rusqlite::Connection::open_in_memory()?;
+    // conn.execute("CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, chunks_total INTEGER, chunks_done INTEGER, metadata BLOB);", ())?;
+
+    // let example = Submission {id: 0, chunks_total: 100, chunks_done: 0, metadata: None};
+    // conn.execute("INSERT INTO submissions (chunks_total, chunks_done, metadata) VALUES (?1, ?2, ?3)", (&example.chunks_total, &example.chunks_done, &example.metadata))?;
+
+    let mut iter_query = conn.prepare("SELECT submission_id, id, uri FROM chunks;")?;
+    let iter = iter_query.query_map([], |row| Ok(Chunk {
+        submission_id: row.get(0)?,
+        id: row.get(1)?,
+        uri: row.get(2)?,
+    }))?;
+
+    for sub in iter {
+        println!("Found submission: {:?}", sub?);
+    }
+
+    Ok(())
+}

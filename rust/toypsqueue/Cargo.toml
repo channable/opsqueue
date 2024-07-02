@@ -3,12 +3,22 @@ name = "toypsqueue"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name="toypsqueue"
+path="src/lib.rs"
+
+[[bin]]
+name="toypsqueue"
+path="app/main.rs"
+
 
 [dependencies]
 rkyv = "0.7.44"
 rusqlite = {version = "0.31.0", features = ["bundled"]}
 serde = { version = "1.0.203", features = ["derive"] }
+snowflaked = {version = "1.0.3", features = ["sync"] }
 # surrealdb = { version = "1.5.3", features = ["kv-mem", "kv-rocksdb", "kv-speedb"] }
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 warp = "0.3.7"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
