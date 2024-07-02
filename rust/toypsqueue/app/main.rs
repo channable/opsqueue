@@ -6,15 +6,10 @@ fn main() -> rusqlite::Result<()> {
     // let mut conn = rusqlite::Connection::open_in_memory()?;
     let mut conn = rusqlite::Connection::open("./example_db.db3")?;
     conn.migrate()?;
-    let res = conn.atomically(|tx| {
-        let (submission, chunks) = Submission::from_vec(vec!["a".into(), "b".into(), "c".into(), "d".into()], None);
-        tx.insert_submission(&submission)?;
-        for chunk in chunks {
-            tx.insert_chunk(&chunk)?;
-        }
-        Ok(())
-   })?;
-   println!("result: {:?}", res);
+
+    for _ in 0..10 {
+        let _ = write_fake_submission(&mut conn, 100000)?;
+    }
 
     // println!("Hello, world!");
 
@@ -32,8 +27,22 @@ fn main() -> rusqlite::Result<()> {
     }))?;
 
     for sub in iter {
-        println!("Found submission: {:?}", sub?);
+        println!("Found chunk: {:?}", sub?);
     }
 
     Ok(())
+}
+
+fn write_fake_submission(conn: &mut rusqlite::Connection, size: usize) -> rusqlite::Result<()> {
+    let res = conn.atomically(|tx| {
+        let vec = (1..size).map(|num| num.to_string().into()).collect();
+        let (submission, chunks) = Submission::from_vec(vec, None);
+        tx.insert_submission(&submission)?;
+        for chunk in chunks {
+            tx.insert_chunk(&chunk)?;
+        }
+        Ok(())
+   })?;
+   println!("result: {:?}", res);
+   Ok(())
 }

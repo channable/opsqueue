@@ -35,6 +35,9 @@ impl Persistence for rusqlite::Connection {
     }
 
     fn migrate(&self) -> Self::DbResult<()> {
+        self.pragma_update(None, "journal_mode", "wal")?;
+        self.pragma_update(None, "synchronous", "normal")?;
+
         self.execute("CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY, chunks_total INTEGER, chunks_done INTEGER, metadata BLOB);", ())?;
         self.execute("CREATE TABLE IF NOT EXISTS chunks (submission_id INTEGER, id INTEGER, uri BLOB, PRIMARY KEY (submission_id, id));", ())?;
 
