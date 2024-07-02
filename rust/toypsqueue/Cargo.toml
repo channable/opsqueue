@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 rkyv = "0.7.44"
-rusqlite = "0.31.0"
+rusqlite = {version = "0.31.0", features = ["bundled"]}
 serde = { version = "1.0.203", features = ["derive"] }
-surrealdb = { version = "1.5.3", features = ["kv-mem", "kv-rocksdb", "kv-speedb"] }
+# surrealdb = { version = "1.5.3", features = ["kv-mem", "kv-rocksdb", "kv-speedb"] }
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 warp = "0.3.7"
