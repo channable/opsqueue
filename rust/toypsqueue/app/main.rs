@@ -4,12 +4,24 @@ use toypsqueue::submission::Submission;
 
 fn main() -> rusqlite::Result<()> {
     // let mut conn = rusqlite::Connection::open_in_memory()?;
-    let mut conn = rusqlite::Connection::open("./example_db.db3")?;
+    let conn = rusqlite::Connection::open("./example_db.db3")?;
     conn.migrate()?;
 
-    for _ in 0..100 {
-        let _ = write_fake_submission(&mut conn, 100000)?;
-    }
+    std::thread::scope(|s| {
+        for _ in 0..10 {
+            s.spawn(move || {
+                for sid in 0..100 {
+                    let mut conn = rusqlite::Connection::open("./example_db.db3").unwrap();
+
+                    conn.pragma_update(None, "busy_timeout", "50000").unwrap();
+                    let _ = write_fake_submission(&mut conn, sid, 10000).unwrap();
+
+                    println!("tid {:?}, inserted submission {} ", std::thread::current().id(), sid);
+                }
+            });
+        }
+
+    });
 
     // println!("Hello, world!");
 
@@ -37,17 +49,19 @@ fn main() -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn write_fake_submission(conn: &mut rusqlite::Connection, size: usize) -> rusqlite::Result<()> {
+fn write_fake_submission(conn: &mut rusqlite::Connection, submission_index: usize, size: usize) -> rusqlite::Result<()> {
     let vec = (1..size).map(|num| num.to_string().into()).collect();
     let (submission, chunks) = Submission::from_vec(vec, None);
-    for block in chunks.chunks(100) {
+    for block in chunks.chunks(1000) {
         loop {
             let res = conn.atomically(|tx| {
                 for chunk in block {
+                    // println!("{:?}, Inserting a chunk of chunks for submission with index {}", std::thread::current().id(), submission_index);
                     tx.insert_chunk(&chunk)?;
                 }
                 Ok(())
             });
+            std::thread::sleep_ms(1);
             match res {
                 Ok(_) => break,
                 Err(_) => continue,
@@ -59,6 +73,5 @@ fn write_fake_submission(conn: &mut rusqlite::Connection, size: usize) -> rusqli
         Ok(())
     })?;
     // })?;
-    println!("result: {:?}", res);
     Ok(())
 }
