@@ -8,7 +8,11 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn new(submission_id: u64, chunk_index: usize,  uri: ChunkURI) -> Self {
-        Chunk {submission_id, id: chunk_index, uri}
+    pub fn new(submission_id: u64, chunk_index: usize, uri: ChunkURI) -> Self {
+        Chunk {
+            submission_id,
+            id: chunk_index,
+            uri,
+        }
     }
 }

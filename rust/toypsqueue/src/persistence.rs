@@ -1,23 +1,29 @@
-use crate::submission::Submission;
 use crate::chunk::Chunk;
+use crate::submission::Submission;
 
 pub trait Persistence {
-  type DbResult<R>;
-  type TxConn<'t>;
-  fn atomically<'t, R, F: FnMut(&Self::TxConn<'t>) -> Self::DbResult<R>>(&'t mut self, fun: F) -> Self::DbResult<R>;
+    type DbResult<R>;
+    type TxConn<'t>;
+    fn atomically<'t, R, F: FnMut(&Self::TxConn<'t>) -> Self::DbResult<R>>(
+        &'t mut self,
+        fun: F,
+    ) -> Self::DbResult<R>;
 
-  fn insert_submission(&self, submission: &Submission) -> Self::DbResult<()>;
+    fn insert_submission(&self, submission: &Submission) -> Self::DbResult<()>;
 
-  fn insert_chunk(&self, chunk: &Chunk) -> Self::DbResult<()>;
+    fn insert_chunk(&self, chunk: &Chunk) -> Self::DbResult<()>;
 
-  fn migrate(&self) -> Self::DbResult<()>;
+    fn migrate(&self) -> Self::DbResult<()>;
 }
 
 impl Persistence for rusqlite::Connection {
-    type DbResult<R> = rusqlite::Result<R>; 
+    type DbResult<R> = rusqlite::Result<R>;
     type TxConn<'t> = rusqlite::Transaction<'t>;
 
-    fn atomically<'t, R, F: FnMut(&Self::TxConn<'t>) -> Self::DbResult<R>>(&'t mut self, mut fun: F) -> Self::DbResult<R> {
+    fn atomically<'t, R, F: FnMut(&Self::TxConn<'t>) -> Self::DbResult<R>>(
+        &'t mut self,
+        mut fun: F,
+    ) -> Self::DbResult<R> {
         let tx = self.transaction()?;
         let res = fun(&tx);
         let _ = tx.commit()?;
@@ -30,7 +36,10 @@ impl Persistence for rusqlite::Connection {
     }
 
     fn insert_chunk(&self, chunk: &Chunk) -> Self::DbResult<()> {
-        let _ = self.execute("INSERT INTO chunks (submission_id, id, uri) VALUES (?1,?2,?3)", (&&chunk.submission_id, chunk.id, &chunk.uri))?;
+        let _ = self.execute(
+            "INSERT INTO chunks (submission_id, id, uri) VALUES (?1,?2,?3)",
+            (&&chunk.submission_id, chunk.id, &chunk.uri),
+        )?;
         Ok(())
     }
 
