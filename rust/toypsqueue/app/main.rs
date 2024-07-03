@@ -26,23 +26,31 @@ fn main() -> rusqlite::Result<()> {
         uri: row.get(2)?,
     }))?;
 
-    for sub in iter {
-        println!("Found chunk: {:?}", sub?);
+    for (index, sub) in iter.enumerate() {
+        if index % 100 == 99 {
+            println!("Found 100 chunks, 100th chunk: {:?}", sub?);
+        }
     }
 
     Ok(())
 }
 
 fn write_fake_submission(conn: &mut rusqlite::Connection, size: usize) -> rusqlite::Result<()> {
-    let res = conn.atomically(|tx| {
-        let vec = (1..size).map(|num| num.to_string().into()).collect();
-        let (submission, chunks) = Submission::from_vec(vec, None);
-        tx.insert_submission(&submission)?;
-        for chunk in chunks {
-            tx.insert_chunk(&chunk)?;
-        }
+    let vec = (1..size).map(|num| num.to_string().into()).collect();
+    let (submission, chunks) = Submission::from_vec(vec, None);
+    for block in chunks.chunks(100) {
+        let _ = conn.atomically(|tx| {
+            for chunk in block {
+                tx.insert_chunk(&chunk)?;
+            };
         Ok(())
-   })?;
+        })?;
+    }
+    let res = conn.atomically(|tx| {
+        tx.insert_submission(&submission)?;
+        Ok(())
+    })?;
+   // })?;
    println!("result: {:?}", res);
    Ok(())
 }
