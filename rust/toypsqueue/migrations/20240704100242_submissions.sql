@@ -1,4 +1,7 @@
 -- Add migration script here
+PRAGMA journal_mode="WAL";
+PRAGMA synchronous="normal";
+
 CREATE TABLE submissions
 (
     id INTEGER PRIMARY KEY NOT NULL,

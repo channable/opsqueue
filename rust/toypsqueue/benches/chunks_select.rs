@@ -1,23 +1,88 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use sqlx::Connection;
 use toypsqueue::chunk;
 
 const DATABASE_URL: &str = "sqlite://opsqueue.db";
+const SIZES: [u64; 8] = [1, 10, 20, 50, 100, 200, 500, 1000];
 
 
 pub fn select_newest(c: &mut Criterion) {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    const DATABASE_URL: &str = "sqlite://opsqueue.db";
-    let db = runtime.block_on(async {
-        sqlx::SqlitePool::connect(DATABASE_URL).await.expect("Could not connect to sqlite DB")
-    });
-
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
     let mut group = c.benchmark_group("select_newest");
-    for size in [1, 10, 100, 1000] {
+    for size in SIZES {
         group.throughput(Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-            b.to_async(&runtime).iter(|| async {
-                chunk::select_newest_chunks(&db, size as u32).await
+            b.to_async(&runtime).iter_custom(|iters| async move {
+                let mut db = sqlx::SqliteConnection::connect(DATABASE_URL)
+                    .await
+                    .expect("Could not connect to sqlite DB");
+
+                let start = std::time::Instant::now();
+                for _i in 0..iters {
+                    black_box({
+                        let _ = chunk::select_newest_chunks(&mut db, size as u32).await;
+                    })
+                }
+                start.elapsed()
+            });
+        });
+    }
+    group.finish();
+}
+pub fn select_oldest(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("select_oldest");
+    for size in SIZES {
+        group.throughput(Throughput::Elements(size));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            b.to_async(&runtime).iter_custom(|iters| async move {
+                let mut db = sqlx::SqliteConnection::connect(DATABASE_URL)
+                    .await
+                    .expect("Could not connect to sqlite DB");
+
+                let start = std::time::Instant::now();
+                for _i in 0..iters {
+                    black_box({
+                        let _ = chunk::select_oldest_chunks(&mut db, size as u32).await;
+                    })
+                }
+                start.elapsed()
+            });
+        });
+    }
+    group.finish();
+}
+
+pub fn select_random(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("select_oldest");
+    for size in SIZES {
+        group.throughput(Throughput::Elements(size));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            b.to_async(&runtime).iter_custom(|iters| async move {
+                let mut db = sqlx::SqliteConnection::connect(DATABASE_URL)
+                    .await
+                    .expect("Could not connect to sqlite DB");
+
+                let start = std::time::Instant::now();
+                for _i in 0..iters {
+                    black_box({
+                        let _ = chunk::select_random_chunks(&mut db, size as u32).await;
+                    })
+                }
+                start.elapsed()
             });
         });
     }
@@ -25,5 +90,6 @@ pub fn select_newest(c: &mut Criterion) {
 }
 
 
-criterion_group!(benches, select_newest);
+
+criterion_group!(benches, select_newest, select_oldest, select_random);
 criterion_main!(benches);

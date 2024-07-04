@@ -35,3 +35,7 @@ criterion = {version = "0.3", features = ["async_tokio"]}
 name = "chunks_select"
 harness = false
 
+[[bench]]
+name = "submissions_insert"
+harness = false
+
