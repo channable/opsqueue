@@ -3,8 +3,9 @@
 // use toypsqueue::submission::Submission;
 
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool, Row, FromRow};
+use toypsqueue::chunk::Chunk;
 
-const DATABASE_URL: &str = "sqlite://sqlite.db";
+const DATABASE_URL: &str = "sqlite://example_db.db";
 
 #[derive(Clone, FromRow, Debug)]
 struct User {
@@ -25,8 +26,8 @@ async fn main() {
         println!("Database already exists");
     }
     let db = SqlitePool::connect(DATABASE_URL).await.unwrap();
-    let result = sqlx::query("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY NOT NULL, name VARCHAR(250) NOT NULL);").execute(&db).await.unwrap();
-    println!("Create user table result: {:?}", result);
+    // let result = sqlx::query("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY NOT NULL, name VARCHAR(250) NOT NULL);").execute(&db).await.unwrap();
+    // println!("Create user table result: {:?}", result);
 
     let result = 
       sqlx::query!("SELECT rowid, name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%';",)
@@ -38,29 +39,30 @@ async fn main() {
         println!("[{}]: {:?}", row.rowid, row.name.as_ref().unwrap());
     }
 
-    let result = 
-      sqlx::query!("INSERT INTO users (name) VALUES (?)", "bobby")
-      .execute(&db)
-      .await
-      .unwrap();
-
     println!("Query result: {:?}", result);
 
-    let users = 
-        sqlx::query_as!(User, "SELECT id, name FROM users")
-        .fetch_all(&db)
-        .await
-        .unwrap();
+    // let users = 
+    //     sqlx::query_as!(User, "SELECT id, name FROM users")
+    //     .fetch_all(&db)
+    //     .await
+    //     .unwrap();
 
-    for user in users {
-        println!( "[{}] name: {}", user.id, &user.name);
+    // for user in users {
+    //     println!( "[{}] name: {}", user.id, &user.name);
+    // }
+
+    for _ in 1..10 {
+        let now = std::time::Instant::now();
+        let users = select_random_chunks(&db, 10).await;
+        let elapsed = now.elapsed();
+        println!("Random chunks: {users:?}, fetching took {elapsed:?}");
     }
 
     for _ in 1..10 {
         let now = std::time::Instant::now();
-        let users = select_random_users(&db, 10).await;
+        let users = select_oldest_chunks(&db, 10).await;
         let elapsed = now.elapsed();
-        println!("Random users: {users:?}, fetching took {elapsed:?}");
+        println!("Oldest chunks: {users:?}, fetching took {elapsed:?}");
     }
 
     // let delete_result = 
@@ -72,16 +74,29 @@ async fn main() {
     // println!("Delete result: {:?}", delete_result);
 }
 
-async fn select_random_users(db: &sqlx::Pool<Sqlite>, count: i32) -> Vec<User> {
-    let count_div10 = count / 5;
-    sqlx::query_as!(User, "SELECT id, name FROM users JOIN
-    (SELECT rowid as rid FROM users
-        WHERE random() % $1 = 0  -- Reduce rowids by Nx
-        LIMIT $2) AS srid
-    ON users.rowid = srid.rid;", count_div10, count)
+async fn select_oldest_chunks(db: &sqlx::Pool<Sqlite>, count: i32) -> Vec<(Option<i64>, Option<i64>)>{
+    sqlx::query!("SELECT * FROM chunks ORDER BY submission_id ASC, id ASC LIMIT $1", count)
     .fetch_all(db)
     .await
     .unwrap()
+    .iter()
+    .map(|row| (row.submission_id, row.id))
+    .collect()
+}
+
+async fn select_random_chunks(db: &sqlx::Pool<Sqlite>, count: i32) -> Vec<(Option<i64>, Option<i64>)> {
+    let count_div10 = count / 2;
+    sqlx::query!("SELECT submission_id, id, uri FROM chunks JOIN
+    (SELECT rowid as rid FROM chunks
+        WHERE random() % $1 = 0  -- Reduce rowids by Nx
+        LIMIT $2) AS srid
+    ON chunks.rowid = srid.rid;", count_div10, count)
+    .fetch_all(db)
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| (row.submission_id, row.id))
+    .collect()
     // .fetch_all(db)
     // .await
 }
