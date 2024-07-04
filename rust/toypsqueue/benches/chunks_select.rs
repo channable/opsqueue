@@ -1,10 +1,12 @@
-use criterion::{black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration, Throughput};
+use criterion::{
+    black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
+    PlotConfiguration, Throughput,
+};
 use sqlx::Connection;
 use toypsqueue::chunk;
 
 const DATABASE_URL: &str = "sqlite://opsqueue.db";
 const SIZES: [u64; 8] = [1, 10, 20, 50, 100, 200, 500, 1000];
-
 
 pub fn select_newest(c: &mut Criterion) {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -23,9 +25,10 @@ pub fn select_newest(c: &mut Criterion) {
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
-                    black_box({
+                    {
                         let _ = chunk::select_newest_chunks(&mut db, size as u32).await;
-                    })
+                    };
+                    black_box(())
                 }
                 start.elapsed()
             });
@@ -51,9 +54,10 @@ pub fn select_oldest(c: &mut Criterion) {
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
-                    black_box({
+                    {
                         let _ = chunk::select_oldest_chunks(&mut db, size as u32).await;
-                    })
+                    };
+                    black_box(())
                 }
                 start.elapsed()
             });
@@ -81,9 +85,10 @@ pub fn select_random(c: &mut Criterion) {
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
-                    black_box({
+                    {
                         let _ = chunk::select_random_chunks(&mut db, size as u32).await;
-                    })
+                    };
+                    black_box(())
                 }
                 start.elapsed()
             });
@@ -92,8 +97,6 @@ pub fn select_random(c: &mut Criterion) {
     group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.finish();
 }
-
-
 
 criterion_group!(benches, select_newest, select_oldest, select_random);
 criterion_main!(benches);

@@ -2,7 +2,7 @@
 // use toypsqueue::persistence::Persistence;
 // use toypsqueue::submission::Submission;
 
-use sqlx::{migrate::MigrateDatabase, Acquire, FromRow, Row, Sqlite, SqlitePool};
+use sqlx::{migrate::MigrateDatabase, Acquire, Sqlite, SqlitePool};
 use tokio::task::JoinSet;
 use toypsqueue::{
     chunk::{self},

@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use sqlx::{query, Executor, Pool, QueryBuilder, Sqlite};
+use sqlx::{query, Executor, QueryBuilder, Sqlite};
 
 pub type ChunkURI = Vec<u8>;
 

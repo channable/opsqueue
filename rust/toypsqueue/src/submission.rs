@@ -1,4 +1,4 @@
-use sqlx::{Executor, Pool, Sqlite};
+use sqlx::{Executor, Sqlite};
 
 use crate::chunk::{Chunk, ChunkURI};
 
@@ -12,6 +12,12 @@ pub struct Submission {
     pub chunks_total: u32,
     pub chunks_done: u32,
     pub metadata: Option<Metadata>,
+}
+
+impl Default for Submission {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Submission {
@@ -49,7 +55,7 @@ impl Submission {
                 Chunk::new(submission_id, chunk_index, uri)
             })
             .collect();
-        return Some((submission, chunks));
+        Some((submission, chunks))
     }
 }
 
