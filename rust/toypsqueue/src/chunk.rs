@@ -1,4 +1,6 @@
-use sqlx::{Pool, query, Sqlite};
+use std::ops::{Deref, DerefMut};
+
+use sqlx::{query, Executor, Pool, QueryBuilder, Sqlite};
 
 pub type ChunkURI = Vec<u8>;
 
@@ -19,10 +21,34 @@ impl Chunk {
     }
 }
 
-
-pub async fn insert_chunk(chunk: &Chunk, pool: &Pool<Sqlite>) -> sqlx::Result<()> {
+// NOTE: Sqlx supports inserting many items at once using sqlx::QueryBuilder
+// we're not using it here for simplicity, but performance of inserting many items at once is probably much better.
+pub async fn insert_chunk(chunk: Chunk, conn: impl Executor<'_, Database =Sqlite>) -> sqlx::Result<()> {
     query!("INSERT INTO chunks (submission_id, id, uri) VALUES ($1, $2, $3)", chunk.submission_id, chunk.id, chunk.uri)
-    .execute(pool)
+    .execute(conn)
     .await?;
+    Ok(())
+}
+
+pub async fn insert_many_chunks<Tx, Conn>(chunks: Vec<Chunk>, mut conn: Tx) -> sqlx::Result<()> 
+where
+  for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
+  Tx: Deref<Target = Conn> + DerefMut
+{
+    // use itertools::Itertools;
+    // let chunks_per_query = 1000;
+    // for query_chunks in chunks.chunks(chunks_per_query).into_iter().map(|c| c.collect_vec()) {
+    for query_chunks in chunks.chunks(1000) {
+        let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new("INSERT INTO chunks (submission_id, id, uri) ");
+        query_builder.push_values(query_chunks, |mut b, chunk| {
+            b
+            .push_bind(chunk.submission_id)
+            .push_bind(chunk.id)
+            .push_bind(chunk.uri.clone());
+        });
+        let query = query_builder.build();
+
+        query.execute(conn.deref_mut()).await?;
+    }
     Ok(())
 }

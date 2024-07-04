@@ -2,8 +2,9 @@
 // use toypsqueue::persistence::Persistence;
 // use toypsqueue::submission::Submission;
 
-use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool, Row, FromRow};
-use toypsqueue::chunk::Chunk;
+use sqlx::{migrate::MigrateDatabase, Acquire, FromRow, Row, Sqlite, SqlitePool};
+use tokio::task::JoinSet;
+use toypsqueue::{chunk::{self, Chunk}, submission::{self, Submission}};
 
 const DATABASE_URL: &str = "sqlite://opsqueue.db";
 
@@ -15,7 +16,7 @@ async fn main () {
     let db = SqlitePool::connect(DATABASE_URL).await.expect("Could not connect to sqlite DB");
     ensure_db_migrated(&db).await;
 
-
+    create_fake_submissions(&db, 1000, 100, 10).await;
 }
 
 async fn ensure_db_exists() {
@@ -32,6 +33,35 @@ async fn ensure_db_migrated(db: &SqlitePool) {
     println!("Migrating backing DB");
     sqlx::migrate!("./migrations").run(db).await.expect("DB migrations failed");
     println!("Finished migrating backing DB");
+}
+
+async fn create_fake_submissions(db: &SqlitePool, submission_size: u32, n_submissions_per_writer: u32, n_writers: u32) {
+    let mut set: JoinSet<()> = JoinSet::new();
+    for i in 0..n_writers {
+        let mut conn = db.acquire().await.unwrap();
+        set.spawn(async move {
+            for n in 0..n_submissions_per_writer {
+                println!("{i}: Starting on submission {}", n);
+                let mut tx = conn.begin().await.unwrap();
+                let vec = (0..submission_size).map(|num| num.to_string().into()).collect();
+                let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
+
+                let _ = chunk::insert_many_chunks(chunks, &mut *tx).await;
+                // for chunk in chunks {
+                //     let _ = chunk::insert_chunk(chunk, &mut *tx).await;
+                // }
+                let _ = submission::insert_submission(submission, &mut *tx).await;
+
+                tx.commit().await.unwrap();
+                println!("{i}: Submitted submission {n}");
+                tokio::task::yield_now().await;
+            }
+        });
+    }
+    
+    while let Some(res) = set.join_next().await {
+        println!("Thread result: {:?}", res);
+    }
 }
 
 // #[derive(Clone, FromRow, Debug)]

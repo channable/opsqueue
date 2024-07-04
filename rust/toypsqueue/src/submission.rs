@@ -1,4 +1,4 @@
-use sqlx::{Pool, Sqlite};
+use sqlx::{Executor, Pool, Sqlite};
 
 use crate::chunk::{Chunk, ChunkURI};
 
@@ -50,9 +50,9 @@ impl Submission {
     }
 }
 
-pub async fn insert_submission(submission: Submission, pool: &Pool<Sqlite>) -> sqlx::Result<()> {
+pub async fn insert_submission(submission: Submission, conn: impl Executor<'_, Database =Sqlite>) -> sqlx::Result<()> {
     sqlx::query!("INSERT INTO submissions (id, chunks_total, chunks_done, metadata) VALUES ($1, $2, $3, $4)", submission.id, submission.chunks_total, submission.chunks_done, submission.metadata)
-    .execute(pool)
+    .execute(conn)
     .await?;
     Ok(())
 }

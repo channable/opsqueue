@@ -13,6 +13,7 @@ path="app/main.rs"
 
 
 [dependencies]
+itertools = "0.13.0"
 rkyv = "0.7.44"
 # rusqlite = {version = "0.31.0", features = ["bundled"]}
 serde = { version = "1.0.203", features = ["derive"] }
