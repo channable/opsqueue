@@ -94,7 +94,8 @@ pub async fn select_newest_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
 }
 
 pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
-    let count_div10 = count / 2;
+    // TODO: Document what we're doing here exactly
+    let count_div10 = std::cmp::max(count / 10, 100);
     sqlx::query_as!(
         Chunk,
         "SELECT submission_id, id, uri FROM chunks JOIN

@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration, Throughput};
 use sqlx::{Connection, SqliteConnection};
 use toypsqueue::{chunk::{self, Chunk}, submission::{self, Submission}};
 
@@ -103,6 +103,7 @@ pub fn bench_insert_submission(c: &mut Criterion) {
             });
         });
     }
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.finish();
 }
 

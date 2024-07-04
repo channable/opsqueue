@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration, Throughput};
 use sqlx::Connection;
 use toypsqueue::chunk;
 
@@ -31,6 +31,7 @@ pub fn select_newest(c: &mut Criterion) {
             });
         });
     }
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.finish();
 }
 pub fn select_oldest(c: &mut Criterion) {
@@ -58,6 +59,7 @@ pub fn select_oldest(c: &mut Criterion) {
             });
         });
     }
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.finish();
 }
 
@@ -67,8 +69,9 @@ pub fn select_random(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let mut group = c.benchmark_group("select_oldest");
+    let mut group = c.benchmark_group("select_random");
     for size in SIZES {
+        group.sample_size(10);
         group.throughput(Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter_custom(|iters| async move {
@@ -86,6 +89,7 @@ pub fn select_random(c: &mut Criterion) {
             });
         });
     }
+    group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.finish();
 }
 
