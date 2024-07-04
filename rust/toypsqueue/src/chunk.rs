@@ -7,7 +7,7 @@ pub type ChunkURI = Vec<u8>;
 #[derive(Debug)]
 pub struct Chunk {
     pub submission_id: i64,
-    pub id: u32,
+    pub id: i64,
     pub uri: ChunkURI,
 }
 
@@ -15,7 +15,7 @@ impl Chunk {
     pub fn new(submission_id: i64, chunk_index: u32, uri: ChunkURI) -> Self {
         Chunk {
             submission_id,
-            id: chunk_index,
+            id: chunk_index as i64,
             uri,
         }
     }
@@ -54,4 +54,30 @@ where
     }
     println!("Inserting {} chunks took {:?}", chunks.len(), start.elapsed());
     Ok(())
+}
+
+pub async fn select_oldest_chunks(db: &sqlx::Pool<Sqlite>, count: u32) -> Vec<Chunk> {
+    sqlx::query_as!(Chunk, "SELECT submission_id, id, uri FROM chunks ORDER BY submission_id ASC, id ASC LIMIT $1", count)
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+pub async fn select_newest_chunks(db: &sqlx::Pool<Sqlite>, count: u32) -> Vec<Chunk> {
+    sqlx::query_as!(Chunk, "SELECT submission_id, id, uri FROM chunks ORDER BY submission_id DESC, id ASC LIMIT $1", count)
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+pub async fn select_random_chunks(db: &sqlx::Pool<Sqlite>, count: u32) -> Vec<Chunk> {
+    let count_div10 = count / 2;
+    sqlx::query_as!(Chunk,"SELECT submission_id, id, uri FROM chunks JOIN
+    (SELECT rowid as rid FROM chunks
+        WHERE random() % $1 = 0  -- Reduce rowids by Nx
+        LIMIT $2) AS srid
+    ON chunks.rowid = srid.rid;", count_div10, count)
+    .fetch_all(db)
+    .await
+    .unwrap()
 }
