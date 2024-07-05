@@ -2,48 +2,23 @@
 // use toypsqueue::persistence::Persistence;
 // use toypsqueue::submission::Submission;
 
-use sqlx::{migrate::MigrateDatabase, Acquire, Sqlite, SqlitePool};
+use sqlx::{Acquire, SqlitePool};
 use tokio::task::JoinSet;
 use toypsqueue::{
-    chunk::{self},
+    chunk, db_connect_pool, ensure_db_exists, ensure_db_migrated,
     submission::{self, Submission},
 };
-
-const DATABASE_URL: &str = "sqlite://opsqueue.db";
 
 #[tokio::main]
 async fn main() {
     ensure_db_exists().await;
 
-    let db = SqlitePool::connect(DATABASE_URL)
-        .await
-        .expect("Could not connect to sqlite DB");
+    let db = db_connect_pool().await;
     ensure_db_migrated(&db).await;
 
     // Play with the numbers here to see how this affects Sqlite write performance
     // or the characteristics of Litestream:
-    create_fake_submissions(&db, 1_000_000, 1000, 1).await;
-}
-
-async fn ensure_db_exists() {
-    if !Sqlite::database_exists(DATABASE_URL).await.unwrap_or(false) {
-        println!("Creating backing sqlite DB {}", DATABASE_URL);
-        Sqlite::create_database(DATABASE_URL)
-            .await
-            .expect("Could not create backing sqlite DB");
-        println!("Finished creating backing sqlite DB");
-    } else {
-        println!("Starting up using existing sqlite DB {}", DATABASE_URL);
-    }
-}
-
-async fn ensure_db_migrated(db: &SqlitePool) {
-    println!("Migrating backing DB");
-    sqlx::migrate!("./migrations")
-        .run(db)
-        .await
-        .expect("DB migrations failed");
-    println!("Finished migrating backing DB");
+    create_fake_submissions(&db, 100_000, 1000, 1).await;
 }
 
 async fn create_fake_submissions(
@@ -57,7 +32,10 @@ async fn create_fake_submissions(
         let mut conn = db.acquire().await.unwrap();
         set.spawn(async move {
             for n in 0..n_submissions_per_writer {
-                println!("{i}: Starting on submission {}", n);
+                println!(
+                    "{i}: Starting on submission {} ({} chunks)",
+                    n, submission_size
+                );
                 let mut tx = conn.begin().await.unwrap();
                 let vec = (0..submission_size)
                     .map(|num| format!("{}", num).into())
@@ -65,9 +43,6 @@ async fn create_fake_submissions(
                 let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
 
                 let _ = chunk::insert_many_chunks(&chunks, &mut *tx).await;
-                // for chunk in chunks {
-                //     let _ = chunk::insert_chunk(chunk, &mut *tx).await;
-                // }
                 let _ = submission::insert_submission(submission, &mut *tx).await;
 
                 tx.commit().await.unwrap();
