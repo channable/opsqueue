@@ -1,5 +1,5 @@
 use criterion::{
-    black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
+    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
     PlotConfiguration, Throughput,
 };
 use sqlx::{Connection, SqliteConnection};
@@ -109,10 +109,10 @@ pub fn bench_insert_submission(c: &mut Criterion) {
                 for _i in 0..iters {
                     {
                         let (submission, chunks) = build_fake_submission(size);
-                        let _ =
+                        {
                             create_fake_submission_multi_chunk(&mut db, submission, chunks).await;
+                        };
                     };
-                    black_box(())
                 }
                 start.elapsed()
             });
@@ -130,12 +130,13 @@ pub fn bench_insert_submission(c: &mut Criterion) {
                     for _i in 0..iters {
                         {
                             let (submission, chunks) = build_fake_submission(size);
-                            let _ = create_fake_submission_multi_transaction(
-                                &mut db, submission, chunks,
-                            )
-                            .await;
+                            {
+                                create_fake_submission_multi_transaction(
+                                    &mut db, submission, chunks,
+                                )
+                                .await;
+                            };
                         };
-                        black_box(())
                     }
                     start.elapsed()
                 });

@@ -36,17 +36,21 @@ pub async fn insert_chunk(
     Ok(())
 }
 
-pub async fn insert_many_chunks<Tx, Conn>(chunks: &[Chunk], mut conn: Tx) -> sqlx::Result<()>
+pub async fn insert_many_chunks<Tx, Conn>(
+    chunks: impl IntoIterator<Item = &Chunk>,
+    mut conn: Tx,
+) -> sqlx::Result<()>
 where
     for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
     Tx: Deref<Target = Conn> + DerefMut,
 {
-    // let start = std::time::Instant::now();
-    // NOTE: The following might be doable with itertools' Chunks to reduce copies further,
-    // but combining this with Tokio async is a bit tricky.
     let chunks_per_query = 1000;
-    for query_chunks in chunks.chunks(chunks_per_query) {
-        // let inner_start = std::time::Instant::now();
+
+    // let start = std::time::Instant::now();
+    let mut iter = chunks.into_iter().peekable();
+    while iter.peek().is_some() {
+        let query_chunks = iter.by_ref().take(chunks_per_query);
+
         let mut query_builder: QueryBuilder<Sqlite> =
             QueryBuilder::new("INSERT INTO chunks (submission_id, id, uri) ");
         query_builder.push_values(query_chunks, |mut b, chunk| {
@@ -57,17 +61,8 @@ where
         let query = query_builder.build();
 
         query.execute(conn.deref_mut()).await?;
-        // println!(
-        //     "Running one single query for {} chunks took {:?}",
-        //     query_chunks.len(),
-        //     inner_start.elapsed()
-        // );
     }
-    // println!(
-    //     "Inserting {} chunks took {:?}",
-    //     chunks.len(),
-    //     start.elapsed()
-    // );
+
     Ok(())
 }
 

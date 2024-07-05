@@ -1,3 +1,21 @@
+# Before the first run
+
+We test the queries used in the program at compile time.
+This means that to compile the test program for the first time, 
+we need to ensure that a SQLite database with the desired schema is available:
+
+```bash
+cargo install sqlx-cli --no-default-features --features sqlite
+```
+
+```bash
+sqlx database create
+sqlx migrate run
+```
+
+This is only necessary for the initial build.
+Once the binary is compiled and placed somewhere else, it will happily create a SQLite DB (and/or migrate an existing Sqlite DB to the latest schema) in its directory on startup.
+
 # Running the test program
 
 Simply call `cargo run`.

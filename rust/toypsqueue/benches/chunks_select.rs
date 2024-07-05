@@ -26,9 +26,8 @@ pub fn select_newest(c: &mut Criterion) {
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
                     {
-                        let _ = chunk::select_newest_chunks(&mut db, size as u32).await;
+                        let _ = black_box(chunk::select_newest_chunks(&mut db, size as u32).await);
                     };
-                    black_box(())
                 }
                 start.elapsed()
             });
@@ -55,9 +54,8 @@ pub fn select_oldest(c: &mut Criterion) {
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
                     {
-                        let _ = chunk::select_oldest_chunks(&mut db, size as u32).await;
+                        let _ = black_box(chunk::select_oldest_chunks(&mut db, size as u32).await);
                     };
-                    black_box(())
                 }
                 start.elapsed()
             });
@@ -86,9 +84,8 @@ pub fn select_random(c: &mut Criterion) {
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
                     {
-                        let _ = chunk::select_random_chunks(&mut db, size as u32).await;
+                        let _ = black_box(chunk::select_random_chunks(&mut db, size as u32).await);
                     };
-                    black_box(())
                 }
                 start.elapsed()
             });

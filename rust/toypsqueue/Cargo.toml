@@ -13,6 +13,7 @@ path="app/main.rs"
 
 
 [dependencies]
+futures = "0.3.30"
 itertools = "0.13.0"
 rkyv = "0.7.44"
 # rusqlite = {version = "0.31.0", features = ["bundled"]}
