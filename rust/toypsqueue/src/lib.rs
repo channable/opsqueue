@@ -5,6 +5,7 @@ use sqlx::{
 };
 
 pub mod chunk;
+pub mod consumer;
 pub mod submission;
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
