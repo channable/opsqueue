@@ -73,6 +73,7 @@ def chunk_factory(cursor, row):
     fields = [column[0] for column in cursor.description]
     return Chunk(**{k: v for k, v in zip(fields, row)})
 
+
 @app.get("/chunks")
 async def get_chunks():
     """
