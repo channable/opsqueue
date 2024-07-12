@@ -66,20 +66,29 @@ def submission_factory(cursor, row):
     return Submission(**{k: v for k, v in zip(fields, row)})
 
 
-@app.get("/chunks")
-async def get_submissions():
+def chunk_factory(cursor, row):
     """
-    Return a random chunk that is available to be executed.
+    Build a Pydantic Chunk object from a raw sqlite3.Row object.
+    """
+    fields = [column[0] for column in cursor.description]
+    return Chunk(**{k: v for k, v in zip(fields, row)})
+
+@app.get("/chunks")
+async def get_chunks():
+    """
+    Return all chunks.
+
+    TODO: Also accept a strategy argument (ideally, we want to be able to configure the strategy per ops-type)
     """
     connection = sqlite3.connect(DB_NAME)
 
     # Returns every row as a dict (for nicer ergonomics)
-    connection.row_factory = submission_factory
+    connection.row_factory = chunk_factory
     cursor = connection.cursor()
 
-    rows = cursor.execute("SELECT * FROM submissions")
+    rows = cursor.execute("SELECT * FROM chunks")
 
-    return {"submissions": list(rows)}
+    return {"chunks": list(rows)}
 
 
 @app.get("/submissions")

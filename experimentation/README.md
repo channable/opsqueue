@@ -14,3 +14,5 @@ curl --header "Content-Type: application/json" \
   --data '{"submission_directory":"asdf","chunk_count": 12}' \
   http://localhost:8000/submissions
 ```
+
+Chunks: `curl --request GET --url "http://127.0.0.1:8000/chunks"`
