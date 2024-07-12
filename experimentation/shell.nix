@@ -3,6 +3,8 @@
     python = pkgs.python311.withPackages (ps: [
       # ps.google-cloud-storage
       ps.sqlite-utils
+      ps.fastapi
+      ps.uvicorn
     ]);
     buildInputs = with pkgs; [
       sqlite
