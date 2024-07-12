@@ -58,24 +58,43 @@ async def root():
     return {"msg": "Hello World"}
 
 
+def submission_factory(cursor, row):
+    """
+    Build a Pydantic Submission object from a raw sqlite3.Row object.
+    """
+    fields = [column[0] for column in cursor.description]
+    return Submission(**{k: v for k, v in zip(fields, row)})
+
+
 @app.get("/submissions")
 async def get_submissions():
     """
     Return all submissions stored in the DB.
     """
-    # TODO: Actually return the submissions here
-    return {"submissions": []}
+    connection = sqlite3.connect(DB_NAME)
+
+    # Returns every row as a dict (for nicer ergonomics)
+    connection.row_factory = submission_factory
+    cursor = connection.cursor()
+
+    rows = cursor.execute("SELECT * FROM submissions")
+
+    return {"submissions": list(rows)}
 
 
 @app.post("/submissions")
-async def post_submissions(submission: Submission):
-    # TODO: Insert the submission into the DB here
-
+async def post_submissions(submission: Submission) -> Submission:
+    """
+    Insert a new submission into the DB.
+    """
     with db(DB_NAME) as cursor:
-        cursor.execute(
-            "INSERT INTO submissions VALUES (?, ?)",
-            (submission.submission_directory, submission.chunk_count),
-        )
+        try:
+            cursor.execute(
+                "INSERT INTO submissions VALUES (?, ?)",
+                (submission.submission_directory, submission.chunk_count),
+            )
+        except sqlite3.IntegrityError as e:
+            print(f"Invalid submission: {e}")
 
     return submission
 
