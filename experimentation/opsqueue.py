@@ -11,11 +11,10 @@ client = TestClient(app)
 
 
 class Chunk(BaseModel):
-    # Note: (submission_id, chunk_id) must be unique
+    # Note: (submission_directory, chunk_id) must be unique
     id: int
-    submission_id: str
-    gcs_path: str
-    created_at: datetime
+    submission_directory: str
+    # created_at: datetime
 
 
 class Submission(BaseModel):
@@ -58,14 +57,26 @@ def create_db(filename: str) -> None:
     """
     con = sqlite3.connect(filename)
     cur = con.cursor()
-    cur.execute("CREATE TABLE chunks(id, url, created_at)")
+    # TODO: Add metadata JSON field
+    cur.execute(
+        """CREATE TABLE submissions(submission_directory TEXT PRIMARY KEY, chunk_count INTEGER)"""
+    )
+    cur.execute(
+        """CREATE TABLE chunks(
+submission_directory TEXT,
+chunk_id INTEGER,
+FOREIGN KEY(submission_directory) REFERENCES submissions(submission_directory),
+PRIMARY KEY (submission_directory, chunk_id)
+)"""
+    )
 
 
 def main() -> None:
     print("Starting up Opsqueue...")
+    create_db("opsqueue.db")
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     main()
 
 
