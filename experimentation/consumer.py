@@ -5,10 +5,33 @@ This file implements a super simple consumer for Opsqueue.
 import requests
 import time
 
+from google.cloud import storage
 
-def ops_generator():
-    # TODO: The opsfile here is hard-coded (instead of downloaded from GCS)
-    with open("test_opsfile", "r") as f:
+
+
+def download_from_bucket(blob_name: str, local_file_path: str):
+    """
+    Download the given blob from GCS.
+    """
+    # Hard-coded, for now.
+    bucket_name = "channable-opsqueue-experimentation"
+
+    # Note: This will infer the project and the credentials from the environment.
+    storage_client = storage.Client()
+
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    blob.download_to_filename(local_file_path)
+
+    return blob.public_url
+
+
+def ops_generator(blob_name: str):
+    """
+    Each line in the file must be one operation.
+    """
+    with open(blob_name, "r") as f:
         for line in f:
             yield line.strip()
 
@@ -31,14 +54,23 @@ def main():
     """
     while True:
         # Get the next chunk from the queue
-        _chunks = requests.get("http://localhost:8000/chunks")
+        chunks = requests.get("http://localhost:8000/chunks")
 
-        # Download the chunk file from GCS
-        # TODO: We currently skip this part and just use a local test file with operations
+        # We simply pick the first chunk, for now. TODO: Pick a chunk according to a strategy.
+        chunk = chunks[0]
+
+        # One chunk looks like this:
+        # {"submission_directory":"gs://channable-opsqueue-experimentation/urls_to_download/cc364963-d9ca-406d-8ee5-be71daf415fe","chunk_id":2}
+        
+        # HACK: It's ugly that we need to modify the URL here. Does the google.cloud library have no option to download a gs:// URL directly?
+        blob_name = chunk['submission_directory'].replace("gs://channable-opsqueue-experimentation/", "") + '/' + str(chunk['chunk_id'])
+
+        # We keep the same file name locally
+        _public_url = download_from_bucket(blob_name, local_file_path=blob_name)
 
         # Process all operations in the chunk
         failed_ops = []
-        for op in ops_generator():
+        for op in ops_generator(blob_name):
             try:
                 process(op)
             except Exception as e:

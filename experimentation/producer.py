@@ -13,7 +13,7 @@ import uuid
 from google.cloud import storage
 
 
-def upload_to_bucket(path_to_file, bucket_name, blob_name):
+def upload_to_bucket(path_to_file: str, bucket_name: str, blob_name: str):
     """
     Upload the given file to the given bucket (using the blob_name).
     """
