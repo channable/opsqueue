@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sqlite3
 
+from contextlib import contextmanager
 from datetime import datetime
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -8,12 +9,35 @@ from fastapi.testclient import TestClient
 
 app = FastAPI()
 client = TestClient(app)
+DB_NAME = "opsqueue.db"
+
+
+@contextmanager
+def db(db_name):
+    """
+    Use like this:
+
+    with db(db_name) as cursor:
+        cursor.execute('select * from bla')
+    """
+    conn = sqlite3.connect(db_name)
+    try:
+        cur = conn.cursor()
+        yield cur
+    except Exception as e:
+        # do something with exception
+        conn.rollback()
+        raise e
+    else:
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class Chunk(BaseModel):
     # Note: (submission_directory, chunk_id) must be unique
-    id: int
     submission_directory: str
+    chunk_id: int
     # created_at: datetime
 
 
@@ -23,7 +47,7 @@ class Submission(BaseModel):
     submission_directory: str
     chunk_count: int
     # Metadata can be any JSON
-    metadata: dict
+    # metadata: dict
 
     # This field should be created by the database
     # created_at: datetime
@@ -46,12 +70,21 @@ async def get_submissions():
 @app.post("/submissions")
 async def post_submissions(submission: Submission):
     # TODO: Insert the submission into the DB here
+
+    with db(DB_NAME) as cursor:
+        cursor.execute(
+            "INSERT INTO submissions VALUES (?, ?)",
+            (submission.submission_directory, submission.chunk_count),
+        )
+
     return submission
 
 
 def create_db(filename: str) -> None:
     """
     Create a SQLite database for Opsqueue.
+
+    We create one table for submissions and one table for chunks.
 
     Does nothing if the file already exists.
     """
