@@ -34,7 +34,7 @@ def main():
         _chunks = requests.get("http://localhost:8000/chunks")
 
         # Download the chunk file from GCS
-        # TODO: We skip this part and just us a local test file with operations
+        # TODO: We currently skip this part and just use a local test file with operations
 
         # Process all operations in the chunk
         failed_ops = []

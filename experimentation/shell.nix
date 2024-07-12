@@ -8,6 +8,9 @@
       ps.httpx
       ps.pytest
       ps.requests
+      ps.google-cloud-storage
+      ps.ipython
+      ps.types-requests
     ]);
     buildInputs = with pkgs; [
       sqlite
