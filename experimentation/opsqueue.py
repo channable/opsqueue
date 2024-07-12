@@ -99,6 +99,16 @@ async def post_submissions(submission: Submission) -> Submission:
     return submission
 
 
+def chunk_generator(submission: Submission):
+    """
+    Return a generator that generates all chunk URLs of the given submission.
+    """
+    # Let's start counting chunks at 1, it's more natural
+    for i in range(1, submission.chunk_count + 1):
+        # We assume that the submission_directory does not have a trailing /
+        yield submission.submission_directory + "/" + str(i)
+
+
 def create_db(filename: str) -> None:
     """
     Create a SQLite database for Opsqueue.
@@ -125,7 +135,12 @@ PRIMARY KEY (submission_directory, chunk_id)
 
 def main() -> None:
     print("Starting up Opsqueue...")
-    create_db("opsqueue.db")
+    # create_db("opsqueue.db")
+    TEST_SUBMISSION = Submission(
+        submission_directory="gs://opsqueue_test_bucket/send_rockets/c0585cb3-b25f-4f57-a9ce-f34e6503b72a",
+        chunk_count=5,
+    )
+    print(list(chunk_generator(TEST_SUBMISSION)))
 
 
 if __name__ == "__main__":
