@@ -2,16 +2,27 @@
 import sqlite3
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 from fastapi.testclient import TestClient
 
 app = FastAPI()
 client = TestClient(app)
 
 
+class Submission(BaseModel):
+    name: str
+    description: str | None = None
+    price: float
+    tax: float | None = None
+
+
 @app.get("/")
 async def root():
     return {"msg": "Hello World"}
 
+@app.post("/submissions")
+async def submissions(submission: Submission):
+    return submission
 
 
 def create_db(filename: str) -> None:
