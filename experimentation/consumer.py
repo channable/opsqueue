@@ -3,6 +3,7 @@
 This file implements a super simple consumer for Opsqueue.
 """
 import os
+import random
 import requests
 import time
 
@@ -57,11 +58,15 @@ def main():
     Run an infinite loop that gets a chunk from the queue, processes it, and then gets the next one.
     """
     while True:
-        # Get the next chunk from the queue
+        # Get all chunks from the queue (in reality, we would only want to get one chunk according to some strategy)
         chunks = requests.get("http://localhost:8000/chunks")
 
-        # We simply pick the first chunk, for now. TODO: Pick a chunk according to a strategy.
-        chunk = chunks.json()["chunks"][0]
+        chunk_list = chunks.json()["chunks"]
+
+        # We simply pick a random chunk, for now. TODO: Let Opsqueue pick a chunk according to a strategy.
+        random_chunk_index = random.randint(1, len(chunk_list))
+
+        chunk = chunk_list[random_chunk_index - 1]
 
         # One chunk looks like this:
         # {"submission_directory":"gs://channable-opsqueue-experimentation/urls_to_download/cc364963-d9ca-406d-8ee5-be71daf415fe","chunk_id":2}
@@ -80,7 +85,7 @@ def main():
             chunk["submission_directory"].split("/")[-1] + "-" + str(chunk["chunk_id"])
         )
 
-        # We keep the same file name locally
+        # We keep the same file name locally and put it in the chunks/ directory
         _public_url = download_from_bucket(blob_name, local_file_path=local_file_path)
 
         # Process all operations in the chunk
