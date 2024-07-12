@@ -5,6 +5,8 @@
       ps.sqlite-utils
       ps.fastapi
       ps.uvicorn
+      ps.httpx
+      ps.pytest
     ]);
     buildInputs = with pkgs; [
       sqlite

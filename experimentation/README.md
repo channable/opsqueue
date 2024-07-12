@@ -2,4 +2,4 @@
 
 Run the webserver with: `uvicorn opsqueue:main`.
 
-Run the tests with: ...
+Run the tests with: `pytest opsqueue.py`
