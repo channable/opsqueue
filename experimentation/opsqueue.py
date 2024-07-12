@@ -13,11 +13,20 @@ async def root():
     return {"msg": "Hello World"}
 
 
-def main() -> None:
-    print("Starting up Opsqueue...")
-    con = sqlite3.connect("opsqueue.db")
+
+def create_db(filename: str) -> None:
+    """
+    Create a SQLite database for Opsqueue.
+
+    Does nothing if the file already exists.
+    """
+    con = sqlite3.connect(filename)
     cur = con.cursor()
     cur.execute("CREATE TABLE chunks(id, url)")
+
+
+def main() -> None:
+    print("Starting up Opsqueue...")
 
 
 if __name__ == "main":
