@@ -66,6 +66,22 @@ def submission_factory(cursor, row):
     return Submission(**{k: v for k, v in zip(fields, row)})
 
 
+@app.get("/chunks")
+async def get_submissions():
+    """
+    Return a random chunk that is available to be executed.
+    """
+    connection = sqlite3.connect(DB_NAME)
+
+    # Returns every row as a dict (for nicer ergonomics)
+    connection.row_factory = submission_factory
+    cursor = connection.cursor()
+
+    rows = cursor.execute("SELECT * FROM submissions")
+
+    return {"submissions": list(rows)}
+
+
 @app.get("/submissions")
 async def get_submissions():
     """
@@ -86,6 +102,9 @@ async def get_submissions():
 async def post_submissions(submission: Submission) -> Submission:
     """
     Insert a new submission into the DB.
+
+    We also insert one row for each chunk, but this is not strictly necessary, we could also generate them
+    on-demand when somebody asks for a chunk. It's not clear yet which trade-off is better at this point in time.
     """
     with db(DB_NAME) as cursor:
         try:
@@ -93,6 +112,14 @@ async def post_submissions(submission: Submission) -> Submission:
                 "INSERT INTO submissions VALUES (?, ?)",
                 (submission.submission_directory, submission.chunk_count),
             )
+
+            # Generate all of the chunks and put them into the DB
+            for chunk in chunk_generator(submission):
+                cursor.execute(
+                    "INSERT INTO chunks VALUES (?, ?)",
+                    (chunk.submission_directory, chunk.chunk_id),
+                )
+
         except sqlite3.IntegrityError as e:
             print(f"Invalid submission: {e}")
 
@@ -106,7 +133,10 @@ def chunk_generator(submission: Submission):
     # Let's start counting chunks at 1, it's more natural
     for i in range(1, submission.chunk_count + 1):
         # We assume that the submission_directory does not have a trailing /
-        yield submission.submission_directory + "/" + str(i)
+        # TODO: Should we store the chunk_path directly in the DB?
+        _chunk_path = submission.submission_directory + "/" + str(i)
+        chunk = Chunk(submission_directory=submission.submission_directory, chunk_id=i)
+        yield chunk
 
 
 def create_db(filename: str) -> None:

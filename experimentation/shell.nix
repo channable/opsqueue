@@ -7,6 +7,7 @@
       ps.uvicorn
       ps.httpx
       ps.pytest
+      ps.requests
     ]);
     buildInputs = with pkgs; [
       sqlite
