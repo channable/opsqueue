@@ -175,7 +175,7 @@ PRIMARY KEY (submission_directory, chunk_id)
 
 def main() -> None:
     print("Starting up Opsqueue...")
-    # create_db("opsqueue.db")
+    create_db("opsqueue.db")
     TEST_SUBMISSION = Submission(
         submission_directory="gs://opsqueue_test_bucket/send_rockets/c0585cb3-b25f-4f57-a9ce-f34e6503b72a",
         chunk_count=5,

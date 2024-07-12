@@ -2,11 +2,13 @@
 """
 This file implements a super simple consumer for Opsqueue.
 """
+import os
 import requests
 import time
 
 from google.cloud import storage
 
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
 
 
 def download_from_bucket(blob_name: str, local_file_path: str):
@@ -22,7 +24,9 @@ def download_from_bucket(blob_name: str, local_file_path: str):
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(blob_name)
 
-    blob.download_to_filename(local_file_path)
+    full_file_path = DIR_PATH + "/chunks/" + local_file_path
+    print(f"Full file path: {full_file_path}")
+    blob.download_to_filename(full_file_path)
 
     return blob.public_url
 
@@ -57,20 +61,32 @@ def main():
         chunks = requests.get("http://localhost:8000/chunks")
 
         # We simply pick the first chunk, for now. TODO: Pick a chunk according to a strategy.
-        chunk = chunks[0]
+        chunk = chunks.json()["chunks"][0]
 
         # One chunk looks like this:
         # {"submission_directory":"gs://channable-opsqueue-experimentation/urls_to_download/cc364963-d9ca-406d-8ee5-be71daf415fe","chunk_id":2}
-        
+
         # HACK: It's ugly that we need to modify the URL here. Does the google.cloud library have no option to download a gs:// URL directly?
-        blob_name = chunk['submission_directory'].replace("gs://channable-opsqueue-experimentation/", "") + '/' + str(chunk['chunk_id'])
+        blob_name = (
+            chunk["submission_directory"].replace(
+                "gs://channable-opsqueue-experimentation/", ""
+            )
+            + "/"
+            + str(chunk["chunk_id"])
+        )
+
+        # TODO: This is ugly
+        local_file_path = (
+            chunk["submission_directory"].split("/")[-1] + "-" + str(chunk["chunk_id"])
+        )
 
         # We keep the same file name locally
-        _public_url = download_from_bucket(blob_name, local_file_path=blob_name)
+        _public_url = download_from_bucket(blob_name, local_file_path=local_file_path)
 
         # Process all operations in the chunk
         failed_ops = []
-        for op in ops_generator(blob_name):
+        full_file_path = DIR_PATH + "/chunks/" + local_file_path
+        for op in ops_generator(full_file_path):
             try:
                 process(op)
             except Exception as e:
