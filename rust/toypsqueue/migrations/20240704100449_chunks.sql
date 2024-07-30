@@ -13,10 +13,10 @@ CREATE TABLE chunks_completed
     submission_id INTEGER NOT NULL,
     id INTEGER NOT NULL,
     output_content BLOB NOT NULL,
-    completed_at REAL NOT NULL, -- Unix Timestamp
+    completed_at DATETIME NOT NULL, -- Unix Timestamp
 
     PRIMARY KEY (submission_id, id)
-) STRICT;
+);
 
 
 CREATE TABLE chunks_failed
@@ -25,7 +25,7 @@ CREATE TABLE chunks_failed
     id INTEGER NOT NULL,
     input_content BLOB NOT NULL,
     failure BLOB NOT NULL,
-    failed_at REAL NOT NULL, -- Unix Timestamp
+    failed_at DATETIME NOT NULL, -- Unix Timestamp
 
     PRIMARY KEY (submission_id, id)
-) STRICT;
+);

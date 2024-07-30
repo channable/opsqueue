@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use chrono::Utc;
+use chrono::{NaiveDateTime};
 use sqlx::{query, Executor, QueryBuilder, Sqlite};
 use sqlx::query_as;
 
@@ -19,7 +19,7 @@ pub struct ChunkCompleted {
     pub submission_id: i64,
     pub id: i64,
     pub output_content: ChunkURI,
-    pub completed_at: f64,
+    pub completed_at: NaiveDateTime,
 }
 
 impl Chunk {
@@ -51,7 +51,7 @@ pub async fn insert_chunk(
 pub async fn complete_chunk(full_chunk_id: (i64, i64), output_content: Vec<u8>, conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!("
-    BEGIN TRANSACTION;
+    SAVEPOINT complete_chunk;
 
     INSERT INTO chunks_completed 
     (submission_id, id, output_content, completed_at) 
@@ -59,7 +59,7 @@ pub async fn complete_chunk(full_chunk_id: (i64, i64), output_content: Vec<u8>, 
 
     DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.id = ? RETURNING *;
 
-    COMMIT;
+    RELEASE SAVEPOINT complete_chunk;
     ",
     output_content, 
     now,
@@ -74,7 +74,7 @@ pub async fn complete_chunk(full_chunk_id: (i64, i64), output_content: Vec<u8>, 
 pub async fn fail_chunk(full_chunk_id: (i64, i64), failure: Vec<u8>, conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!("
-    BEGIN TRANSACTION;
+    SAVEPOINT fail_chunk;
 
     INSERT INTO chunks_failed
     (submission_id, id, input_content, failure, failed_at) 
@@ -82,7 +82,7 @@ pub async fn fail_chunk(full_chunk_id: (i64, i64), failure: Vec<u8>, conn: impl 
 
     DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.id = ? RETURNING *;
 
-    COMMIT;
+    RELEASE SAVEPOINT fail_chunk;
     ", 
     failure, 
     now,
