@@ -14,6 +14,7 @@ path="app/main.rs"
 
 [dependencies]
 anyhow = "1.0.86"
+chrono = "0.4.38"
 futures = "0.3.30"
 http = "1.1.0"
 itertools = "0.13.0"
@@ -22,7 +23,7 @@ rkyv = "0.7.44"
 # rusqlite = {version = "0.31.0", features = ["bundled"]}
 serde = { version = "1.0.203", features = ["derive"] }
 snowflaked = {version = "1.0.3", features = ["sync"] }
-sqlx = { version = "0.7.4", features = ["sqlite", "runtime-tokio"] }
+sqlx = { version = "0.7.4", features = ["sqlite", "runtime-tokio", "chrono"] }
 # surrealdb = { version = "1.5.3", features = ["kv-mem", "kv-rocksdb", "kv-speedb"] }
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 tokio-websockets = { version = "0.8.3", features = ["server", "client", "openssl", "native-tls", "rustls-native-roots", "fastrand", "rustls-webpki-roots"], default-features = false }

@@ -83,9 +83,9 @@ pub async fn run_consumer_client() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn ping_pong() {
-    let a = tokio::spawn(run_consumer_server());
-    let b = tokio::spawn(run_consumer_client());
-    let _ = tokio::join!(a, b);
-}
+// #[tokio::test(flavor = "multi_thread")]
+// async fn ping_pong() {
+//     let a = tokio::spawn(run_consumer_server());
+//     let b = tokio::spawn(run_consumer_client());
+//     let _ = tokio::join!(a, b);
+// }

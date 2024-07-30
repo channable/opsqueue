@@ -9,11 +9,15 @@ use toypsqueue::{
     submission::{self, Submission},
 };
 
+pub const DATABASE_FILENAME: &str = "opsqueue.db";
+
+
 #[tokio::main]
 async fn main() {
-    ensure_db_exists().await;
+    let database_filename = DATABASE_FILENAME;
+    ensure_db_exists(database_filename).await;
 
-    let db = db_connect_pool().await;
+    let db = db_connect_pool(database_filename).await;
     ensure_db_migrated(&db).await;
 
     // Play with the numbers here to see how this affects Sqlite write performance
