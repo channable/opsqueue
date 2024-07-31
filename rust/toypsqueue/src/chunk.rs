@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use chrono::{NaiveDateTime};
-use sqlx::{query, Executor, QueryBuilder, Sqlite};
+use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::query_as;
 
 pub type ChunkURI = Vec<u8>;
@@ -141,6 +141,24 @@ pub async fn select_oldest_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
     .fetch_all(db)
     .await
     .unwrap()
+}
+
+pub async fn skip_remaining_chunks(submission_id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+    let now = chrono::prelude::Utc::now();
+
+    sqlx::query!("
+    SAVEPOINT skip_remaining_chunks;
+
+    INSERT INTO chunks_failed
+    (submission_id, id, input_content, failure, failed_at)
+    SELECT submission_id, id, input_content, 'skip', julianday(?) FROM chunks WHERE submission_id = ?;
+
+    RELEASE SAVEPOINT skip_remaining_chunks;
+    ",
+    submission_id,
+    now,
+    ).execute(conn).await?;
+    Ok(())
 }
 
 pub async fn select_newest_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {

@@ -100,11 +100,11 @@ pub async fn complete_submission(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx
     Ok(())
 }
 
-pub async fn fail_submission(id: i64, failed_chunk_id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+pub async fn fail_submission_raw(id: i64, failed_chunk_id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
 
     query!("
-    SAVEPOINT fail_submission;
+    SAVEPOINT fail_submission_raw;
 
     INSERT INTO submissions_failed
     (id, chunks_total, metadata, failed_at, failed_chunk_id)
@@ -112,15 +112,21 @@ pub async fn fail_submission(id: i64, failed_chunk_id: i64, conn: impl SqliteExe
 
     DELETE FROM submissions WHERE id = ? RETURNING *;
 
-
-
-    RELEASE SAVEPOINT fail_submission;
+    RELEASE SAVEPOINT fail_submission_raw;
     ",
     now,
     failed_chunk_id,
     id,
     id,
     ).fetch_one(conn).await?;
+    Ok(())
+}
+
+pub async fn fail_submission(id: i64, failed_chunk_id: i64, conn: impl SqliteExecutor<'_> + Copy) -> sqlx::Result<()> {
+    query!("SAVEPOINT fail_submission;").execute(conn).await?;
+    fail_submission_raw(id, failed_chunk_id, conn).await?;
+    crate::chunk::skip_remaining_chunks(id, conn).await?;
+    query!("RELEASE SAVEPOINT fail_submission;").execute(conn).await?;
     Ok(())
 }
 
@@ -176,7 +182,7 @@ pub mod test {
     }
 
     #[sqlx::test]
-    pub async fn test_fail_submission(db: sqlx::SqlitePool) {
+    pub async fn test_fail_submission_raw(db: sqlx::SqlitePool) {
         let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
         insert_submission(submission.clone(), &db).await.expect("insertion failed");
 
