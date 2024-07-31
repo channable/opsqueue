@@ -24,8 +24,9 @@ CREATE TABLE chunks_failed
     submission_id INTEGER NOT NULL,
     id INTEGER NOT NULL,
     input_content BLOB NOT NULL,
-    failure BLOB NOT NULL,
+    failure BLOB NOT NULL DEFAULT '',
     failed_at DATETIME NOT NULL, -- Unix Timestamp
+    skipped BOOL NOT NULL DEFAULT false,
 
     PRIMARY KEY (submission_id, id)
 );

@@ -1,4 +1,6 @@
-use sqlx::{query, query_as, Executor, Sqlite, SqliteExecutor};
+use std::borrow::BorrowMut;
+
+use sqlx::{pool::PoolConnection, query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use crate::chunk::{Chunk, ChunkURI};
 
@@ -9,8 +11,8 @@ static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submission {
     pub id: i64,
-    pub chunks_total: i32,
-    pub chunks_done: i32,
+    pub chunks_total: i64,
+    pub chunks_done: i64,
     pub metadata: Option<Metadata>,
 }
 
@@ -59,7 +61,7 @@ impl Submission {
     }
 }
 
-pub async fn insert_submission(
+pub async fn insert_submission_raw(
     submission: Submission,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
@@ -72,6 +74,14 @@ pub async fn insert_submission(
     )
     .execute(conn)
     .await?;
+    Ok(())
+}
+
+pub async fn insert_submission(submission: Submission, chunks: impl IntoIterator<Item = Chunk>, conn: &mut SqliteConnection) -> sqlx::Result<()> {
+    query!("SAVEPOINT insert_submission;").execute(&mut *conn).await?;
+    insert_submission_raw(submission, &mut *conn).await?;
+    crate::chunk::insert_many_chunks(chunks, &mut *conn).await?;
+    query!("RELEASE SAVEPOINT insert_submission;").execute(&mut *conn).await?;
     Ok(())
 }
 
@@ -122,11 +132,12 @@ pub async fn fail_submission_raw(id: i64, failed_chunk_id: i64, conn: impl Sqlit
     Ok(())
 }
 
-pub async fn fail_submission(id: i64, failed_chunk_id: i64, conn: impl SqliteExecutor<'_> + Copy) -> sqlx::Result<()> {
-    query!("SAVEPOINT fail_submission;").execute(conn).await?;
-    fail_submission_raw(id, failed_chunk_id, conn).await?;
-    crate::chunk::skip_remaining_chunks(id, conn).await?;
-    query!("RELEASE SAVEPOINT fail_submission;").execute(conn).await?;
+pub async fn fail_submission(id: i64, failed_chunk_id: i64, failure: Vec<u8>, conn: &mut SqliteConnection) -> sqlx::Result<()> {
+    query!("SAVEPOINT fail_submission;").execute(&mut *conn).await?;
+    fail_submission_raw(id, failed_chunk_id, &mut *conn).await?;
+    crate::chunk::fail_chunk((id, failed_chunk_id), failure, &mut *conn).await?;
+    crate::chunk::skip_remaining_chunks(id, &mut *conn).await?;
+    query!("RELEASE SAVEPOINT fail_submission;").execute(&mut *conn).await?;
     Ok(())
 }
 
@@ -148,47 +159,55 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 
 #[cfg(test)]
 pub mod test {
+    use std::ops::DerefMut;
+
     use super::*;
 
     #[sqlx::test]
     pub async fn test_insert_submission(db: sqlx::SqlitePool) {
-        assert!(count_submissions(&db).await.unwrap() == 0);
+        let mut conn = db.acquire().await.unwrap();
 
-        let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission, &db).await.expect("insertion failed");
+        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
+
+        let (submission, chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
+        insert_submission(submission, chunks, &mut *conn).await.expect("insertion failed");
 
         assert!(count_submissions(&db).await.unwrap() == 1);
     }
 
     #[sqlx::test]
     pub async fn test_get_submission(db: sqlx::SqlitePool) {
-        let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), &db).await.expect("insertion failed");
+        let mut conn = db.acquire().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
+        insert_submission(submission.clone(), chunks, &mut *conn).await.expect("insertion failed");
 
-        let fetched_submission = get_submission(submission.id, &db).await.unwrap();
+        let fetched_submission = get_submission(submission.id, &mut *conn).await.unwrap();
         assert!(fetched_submission == submission);
     }
 
 
     #[sqlx::test]
     pub async fn test_complete_submission(db: sqlx::SqlitePool) {
-        let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), &db).await.expect("insertion failed");
+        let mut conn = db.acquire().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
+        insert_submission(submission.clone(), chunks, &mut *conn).await.expect("insertion failed");
 
-        complete_submission(submission.id, &db).await.unwrap();
-        assert!(count_submissions(&db).await.unwrap() == 0);
-        assert!(count_submissions_completed(&db).await.unwrap() == 1);
-        assert!(count_submissions_failed(&db).await.unwrap() == 0);
+        complete_submission(submission.id, &mut *conn).await.unwrap();
+        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
+        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 1);
+        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 0);
     }
 
     #[sqlx::test]
     pub async fn test_fail_submission_raw(db: sqlx::SqlitePool) {
-        let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), &db).await.expect("insertion failed");
+        let mut conn = db.acquire().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
+        insert_submission(submission.clone(), chunks, &mut *conn).await.expect("insertion failed");
+        let mut conn = db.acquire().await.unwrap();
 
-        fail_submission(submission.id, 42, &db).await.unwrap();
-        assert!(count_submissions(&db).await.unwrap() == 0);
-        assert!(count_submissions_completed(&db).await.unwrap() == 0);
-        assert!(count_submissions_failed(&db).await.unwrap() == 1);
+        fail_submission(submission.id, 1, vec![1,2,3], &mut *conn).await.unwrap();
+        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
+        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 0);
+        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 1);
     }
 }

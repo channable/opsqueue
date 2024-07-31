@@ -46,8 +46,8 @@ async fn create_fake_submissions(
                     .collect();
                 let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
 
-                let _ = chunk::insert_many_chunks(&chunks, &mut *tx).await;
-                let _ = submission::insert_submission(submission, &mut *tx).await;
+                let _ = chunk::insert_many_chunks(chunks, &mut *tx).await;
+                let _ = submission::insert_submission_raw(submission, &mut *tx).await;
 
                 tx.commit().await.unwrap();
                 println!("{i}: Submitted submission {n}");

@@ -103,7 +103,7 @@ pub async fn get_chunk_completed(full_chunk_id: (i64, i64), conn: impl Executor<
 }
 
 pub async fn insert_many_chunks<Tx, Conn>(
-    chunks: impl IntoIterator<Item = &Chunk>,
+    chunks: impl IntoIterator<Item = Chunk>,
     mut conn: Tx,
 ) -> sqlx::Result<()>
 where
@@ -118,7 +118,7 @@ where
         let query_chunks = iter.by_ref().take(chunks_per_query);
 
         let mut query_builder: QueryBuilder<Sqlite> =
-            QueryBuilder::new("INSERT INTO chunks (submission_id, id, uri) ");
+            QueryBuilder::new("INSERT INTO chunks (submission_id, id, input_content) ");
         query_builder.push_values(query_chunks, |mut b, chunk| {
             b.push_bind(chunk.submission_id)
                 .push_bind(chunk.id)
@@ -229,26 +229,29 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_complete_chunk(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
 
-        insert_chunk(chunk.clone(), &db).await.expect("Insert chunk failed");
-        complete_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &db).await.expect("complete chunk failed");
+        insert_chunk(chunk.clone(), &mut *conn).await.expect("Insert chunk failed");
+        complete_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &mut *conn).await.expect("complete chunk failed");
 
-        assert!(count_chunks(&db).await.unwrap() == 0);
-        assert!(count_chunks_completed(&db).await.unwrap() == 1);
-        assert!(count_chunks_failed(&db).await.unwrap() == 0);
+        assert!(count_chunks(&mut *conn).await.unwrap() == 0);
+        assert!(count_chunks_completed(&mut *conn).await.unwrap() == 1);
+        assert!(count_chunks_failed(&mut *conn).await.unwrap() == 0);
     }
 
 
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
 
-        insert_chunk(chunk.clone(), &db).await.expect("Insert chunk failed");
-        fail_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &db).await.expect("Succeed chunk failed");
+        insert_chunk(chunk.clone(), &mut *conn).await.expect("Insert chunk failed");
+        fail_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &mut *conn).await.expect("Succeed chunk failed");
 
-        assert!(count_chunks(&db).await.unwrap() == 0);
-        assert!(count_chunks_completed(&db).await.unwrap() == 0);
-        assert!(count_chunks_failed(&db).await.unwrap() == 1);
+        assert!(count_chunks(&mut *conn).await.unwrap() == 0);
+        assert!(count_chunks_completed(&mut *conn).await.unwrap() == 0);
+        assert!(count_chunks_failed(&mut *conn).await.unwrap() == 1);
     }
 }
