@@ -100,7 +100,6 @@ pub async fn get_chunk(full_chunk_id: (i64, i64), conn: impl Executor<'_, Databa
 
 pub async fn get_chunk_completed(full_chunk_id: (i64, i64), conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<ChunkCompleted> {
     query_as!(ChunkCompleted, "SELECT submission_id, id, output_content, completed_at FROM chunks_completed WHERE submission_id =? AND id =?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
-
 }
 
 pub async fn insert_many_chunks<Tx, Conn>(
@@ -174,17 +173,17 @@ pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
 }
 
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;").fetch_one(db).await.unwrap();
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;").fetch_one(db).await?;
     Ok(count.count)
 }
 
 pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;").fetch_one(db).await.unwrap();
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;").fetch_one(db).await?;
     Ok(count.count)
 }
 
 pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;").fetch_one(db).await.unwrap();
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;").fetch_one(db).await?;
     Ok(count.count)
 }
 
