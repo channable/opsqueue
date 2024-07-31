@@ -74,3 +74,14 @@ pub async fn insert_submission(
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+
+    #[sqlx::test]
+    pub async fn test_insert_submission(db: sqlx::SqlitePool) {
+        let (submission, _chunks) = Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
+        insert_submission(submission, &db).await.expect("insertion failed");
+    }
+}
