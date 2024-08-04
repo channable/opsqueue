@@ -6,6 +6,7 @@ use sqlx::{
 
 pub mod chunk;
 pub mod consumer;
+pub mod reserver;
 pub mod submission;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {

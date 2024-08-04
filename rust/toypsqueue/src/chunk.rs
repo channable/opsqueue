@@ -1,8 +1,8 @@
 use std::ops::{Deref, DerefMut};
 
-use chrono::{NaiveDateTime};
-use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+use chrono::NaiveDateTime;
 use sqlx::query_as;
+use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 
 pub type ChunkURI = Vec<u8>;
 
@@ -13,7 +13,6 @@ pub struct Chunk {
     pub input_content: ChunkURI,
     pub retries: i64,
 }
-
 
 pub struct ChunkCompleted {
     pub submission_id: i64,
@@ -48,7 +47,11 @@ pub async fn insert_chunk(
     Ok(())
 }
 
-pub async fn complete_chunk(full_chunk_id: (i64, i64), output_content: Vec<u8>, conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<()> {
+pub async fn complete_chunk(
+    full_chunk_id: (i64, i64),
+    output_content: Vec<u8>,
+    conn: impl Executor<'_, Database = Sqlite>,
+) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!("
     SAVEPOINT complete_chunk;
@@ -71,7 +74,11 @@ pub async fn complete_chunk(full_chunk_id: (i64, i64), output_content: Vec<u8>, 
     Ok(())
 }
 
-pub async fn fail_chunk(full_chunk_id: (i64, i64), failure: Vec<u8>, conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<()> {
+pub async fn fail_chunk(
+    full_chunk_id: (i64, i64),
+    failure: Vec<u8>,
+    conn: impl Executor<'_, Database = Sqlite>,
+) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!("
     SAVEPOINT fail_chunk;
@@ -89,16 +96,29 @@ pub async fn fail_chunk(full_chunk_id: (i64, i64), failure: Vec<u8>, conn: impl 
     full_chunk_id.0, 
     full_chunk_id.1, 
     full_chunk_id.0, 
-    full_chunk_id.1, 
+    full_chunk_id.1,
     ).fetch_one(conn).await?;
     Ok(())
 }
 
-pub async fn get_chunk(full_chunk_id: (i64, i64), conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<Chunk> {
-    query_as!(Chunk, "SELECT * FROM chunks WHERE submission_id =? AND id =?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
+pub async fn get_chunk(
+    full_chunk_id: (i64, i64),
+    conn: impl Executor<'_, Database = Sqlite>,
+) -> sqlx::Result<Chunk> {
+    query_as!(
+        Chunk,
+        "SELECT * FROM chunks WHERE submission_id =? AND id =?",
+        full_chunk_id.0,
+        full_chunk_id.1
+    )
+    .fetch_one(conn)
+    .await
 }
 
-pub async fn get_chunk_completed(full_chunk_id: (i64, i64), conn: impl Executor<'_, Database = Sqlite>) -> sqlx::Result<ChunkCompleted> {
+pub async fn get_chunk_completed(
+    full_chunk_id: (i64, i64),
+    conn: impl Executor<'_, Database = Sqlite>,
+) -> sqlx::Result<ChunkCompleted> {
     query_as!(ChunkCompleted, "SELECT submission_id, id, output_content, completed_at FROM chunks_completed WHERE submission_id =? AND id =?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
 }
 
@@ -143,7 +163,10 @@ pub async fn select_oldest_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
     .unwrap()
 }
 
-pub async fn skip_remaining_chunks(submission_id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+pub async fn skip_remaining_chunks(
+    submission_id: i64,
+    conn: impl SqliteExecutor<'_>,
+) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
 
     sqlx::query!("
@@ -191,17 +214,23 @@ pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
 }
 
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;").fetch_one(db).await?;
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
+        .fetch_one(db)
+        .await?;
     Ok(count.count)
 }
 
 pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;").fetch_one(db).await?;
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
+        .fetch_one(db)
+        .await?;
     Ok(count.count)
 }
 
 pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;").fetch_one(db).await?;
+    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
+        .fetch_one(db)
+        .await?;
     Ok(count.count)
 }
 
@@ -214,16 +243,22 @@ pub mod test {
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
 
         assert!(count_chunks(&db).await.unwrap() == 0);
-        insert_chunk(chunk.clone(), &db).await.expect("Insert chunk failed");
+        insert_chunk(chunk.clone(), &db)
+            .await
+            .expect("Insert chunk failed");
         assert!(count_chunks(&db).await.unwrap() == 1);
     }
 
     #[sqlx::test]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
-        insert_chunk(chunk.clone(), &db).await.expect("Insert chunk failed");
+        insert_chunk(chunk.clone(), &db)
+            .await
+            .expect("Insert chunk failed");
 
-        let fetched_chunk = get_chunk((chunk.submission_id, chunk.id), &db).await.unwrap();
+        let fetched_chunk = get_chunk((chunk.submission_id, chunk.id), &db)
+            .await
+            .unwrap();
         assert!(chunk == fetched_chunk);
     }
 
@@ -233,22 +268,37 @@ pub mod test {
 
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
 
-        insert_chunk(chunk.clone(), &mut *conn).await.expect("Insert chunk failed");
-        complete_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &mut *conn).await.expect("complete chunk failed");
+        insert_chunk(chunk.clone(), &mut *conn)
+            .await
+            .expect("Insert chunk failed");
+        complete_chunk(
+            (chunk.submission_id, chunk.id),
+            vec![6, 7, 8, 9],
+            &mut *conn,
+        )
+        .await
+        .expect("complete chunk failed");
 
         assert!(count_chunks(&mut *conn).await.unwrap() == 0);
         assert!(count_chunks_completed(&mut *conn).await.unwrap() == 1);
         assert!(count_chunks_failed(&mut *conn).await.unwrap() == 0);
     }
 
-
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
 
-        insert_chunk(chunk.clone(), &mut *conn).await.expect("Insert chunk failed");
-        fail_chunk((chunk.submission_id, chunk.id), vec![6,7,8,9], &mut *conn).await.expect("Succeed chunk failed");
+        insert_chunk(chunk.clone(), &mut *conn)
+            .await
+            .expect("Insert chunk failed");
+        fail_chunk(
+            (chunk.submission_id, chunk.id),
+            vec![6, 7, 8, 9],
+            &mut *conn,
+        )
+        .await
+        .expect("Succeed chunk failed");
 
         assert!(count_chunks(&mut *conn).await.unwrap() == 0);
         assert!(count_chunks_completed(&mut *conn).await.unwrap() == 0);

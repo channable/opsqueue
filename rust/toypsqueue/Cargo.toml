@@ -18,6 +18,7 @@ chrono = "0.4.38"
 futures = "0.3.30"
 http = "1.1.0"
 itertools = "0.13.0"
+moka = { version = "0.12.8", features = ["sync"] }
 openssl = { version = "0.10.64", features = ["vendored"] }
 rkyv = "0.7.44"
 # rusqlite = {version = "0.31.0", features = ["bundled"]}
