@@ -11,7 +11,6 @@ use toypsqueue::{
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
-
 #[tokio::main]
 async fn main() {
     let database_filename = DATABASE_FILENAME;

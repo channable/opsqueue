@@ -35,7 +35,7 @@ impl Submission {
         }
     }
 
-    fn generate_id() -> i64 {
+    pub fn generate_id() -> i64 {
         ID_GENERATOR.generate()
     }
 
@@ -103,6 +103,32 @@ pub async fn get_submission(
     query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
         .fetch_one(conn)
         .await
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum SubmissionStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+pub async fn submission_status(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<SubmissionStatus> {
+    let row = query!("
+        SELECT 0 as status, chunks_done, chunks_total FROM submissions WHERE id = ?
+        UNION ALL
+        SELECT 1 as status, chunks_total as chunks_done, chunks_total FROM submissions_completed WHERE id = ?
+        UNION ALL
+        SELECT 2 as status, chunks_total as chunks_done, chunks_total FROM submissions_failed WHERE id = ?
+    ",
+    id,
+    id,
+    id,
+    ).fetch_one(conn).await?;
+    match row.status {
+        0 => Ok(SubmissionStatus::InProgress),
+        1 => Ok(SubmissionStatus::Completed),
+        2 => Ok(SubmissionStatus::Failed),
+        _ => Err(sqlx::Error::RowNotFound),
+    }
 }
 
 pub async fn complete_submission(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
