@@ -2,6 +2,8 @@ use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use moka::{notification::RemovalCause, sync::Cache};
 
+use crate::chunk::Chunk;
+
 /// An in-memory datastructure that ensures that only one client can reserve a particular key at a time.
 /// 
 /// Internally this is implemented using an (unbounded-size) cache, but the cache is used in the 'opposite' way:
@@ -28,14 +30,14 @@ where
 
 impl<K, V, CleanupFun> Reserver<K, V, CleanupFun>
 where
-    K: Eq + Hash + Send + Sync + 'static,
+    K: Eq + Hash + Send + Sync + 'static + Debug + Copy,
     (V, CleanupFun): Clone + Send + Sync + 'static,
     V: Debug,
     CleanupFun: FnOnce(V),
 {
     pub fn new() -> Self {
         let cache = Cache::builder()
-            .time_to_live(Duration::from_secs(1))
+            .time_to_live(Duration::from_secs(10))
             .eviction_listener(|_key, val: (V, CleanupFun), cause| {
                 if cause == RemovalCause::Expired {
                     val.1(val.0)
@@ -51,13 +53,19 @@ where
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, cleanup: CleanupFun) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, cleanup));
-        if entry.is_fresh() {
+        let res = if entry.is_fresh() {
+            println!("Reservation of {key:?} succeeded!");
             // Reservation succeeded
             Some(entry.into_value().0)
         } else {
+            println!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
-        }
+        };
+
+        assert!(self.0.contains_key(&key));
+
+        res
     }
 
     /// Removes a particular key-val from the reserver.

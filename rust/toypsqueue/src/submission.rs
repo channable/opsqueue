@@ -111,6 +111,8 @@ pub enum SubmissionStatus {
     Completed,
     Failed,
 }
+
+/// TODO: Return exactly the info we have available on completed or failed
 pub async fn submission_status(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<SubmissionStatus> {
     let row = query!("
         SELECT 0 as status, chunks_done, chunks_total FROM submissions WHERE id = ?
