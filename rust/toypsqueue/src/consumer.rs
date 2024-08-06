@@ -1,4 +1,4 @@
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, TryStreamExt};
 use http::Uri;
 use itertools::Itertools;
 use tokio::net::{TcpListener, TcpStream};
@@ -26,6 +26,15 @@ pub async fn foo<T: Fn(Chunk) + Copy + Send + Sync + 'static>(state: &ServerStat
     res
 }
 
+pub async fn foo_stream<T: Fn(Chunk) + Copy + Send + Sync + 'static>(state: &ServerState<T>, cleanup_fun: T, limit: usize) -> Result<Vec<Chunk>, sqlx::Error> {
+    let stream = super::chunk::select_oldest_chunks_stream(&state.pool);
+    // let res = reserve_chunks_stream(iter, cleanup_fun, &state.reserver).await;
+    let res = stream.try_filter_map(|chunk| async move {
+        Ok(state.reserver.try_reserve(chunk.id, chunk, cleanup_fun))
+    }).take(limit).try_collect().await;
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use crate::chunk::Chunk;
@@ -44,10 +53,10 @@ mod tests {
         let chunks = vec![zero.clone(), one.clone(), two.clone(), three.clone()];
         crate::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap()).await.unwrap();
 
-        let out = foo(&state, cleanup_fun).await;
+        let out = foo_stream(&state, cleanup_fun, 3).await.unwrap();
         assert_eq!(out, vec![zero, one, two]);
 
-        let out2 = foo(&state, cleanup_fun).await;
+        let out2 = foo_stream(&state, cleanup_fun, 3).await.unwrap();
         assert_eq!(out2, vec![three]);
     }
 }

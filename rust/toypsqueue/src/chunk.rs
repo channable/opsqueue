@@ -1,6 +1,8 @@
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 
 use chrono::NaiveDateTime;
+use futures::{Stream, TryStream};
 use sqlx::query_as;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 
@@ -161,6 +163,14 @@ pub async fn select_oldest_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
     .fetch_all(db)
     .await
     .unwrap()
+}
+
+pub fn select_oldest_chunks_stream<'a>(db: impl sqlx::SqliteExecutor<'a> + 'a) -> Pin<Box<dyn Stream<Item = Result<Chunk, sqlx::Error>> + 'a>> {
+    sqlx::query_as!(
+        Chunk,
+        "SELECT * FROM chunks ORDER BY submission_id ASC",
+    )
+    .fetch(db)
 }
 
 pub async fn skip_remaining_chunks(
