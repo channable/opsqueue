@@ -7,13 +7,13 @@ use crate::chunk::Chunk;
 pub type CleanupFun<V> = Arc<dyn Fn(V) + Send + Sync>;
 
 /// An in-memory datastructure that ensures that only one client can reserve a particular key at a time.
-/// 
+///
 /// Internally this is implemented using an (unbounded-size) cache, but the cache is used in the 'opposite' way:
 /// Only values which are _not_ in the cache yet are returned (and then added to the cache).
-/// 
+///
 /// This is essentially implements the FOR UPDATE SKIP LOCKED style row selection
 /// that some other databases offer, except it is more flexible.
-/// 
+///
 /// Since this is an in-memory-only structure,
 /// once the program restarts after quitting, any and all reservations are trivially cleared.
 #[derive(Clone)]
@@ -49,7 +49,7 @@ where
     }
 
     /// Attempts to reserve a particular key-val.
-    /// 
+    ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, cleanup: CleanupFun<V>) -> Option<V> {
@@ -71,11 +71,14 @@ where
 
     /// Removes a particular key-val from the reserver.
     /// Afterwards, it is possible to reserve it again.
-    /// 
+    ///
     /// Precondition: key should be reserved first (checked in debug builds)
     pub fn finish_reservation(&self, key: &K) {
         let res = self.0.remove(&key);
-        debug_assert!(res.is_some(), "Attempted to finish non-existent reservation");
+        debug_assert!(
+            res.is_some(),
+            "Attempted to finish non-existent reservation"
+        );
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up
@@ -84,4 +87,3 @@ where
         self.0.run_pending_tasks()
     }
 }
-

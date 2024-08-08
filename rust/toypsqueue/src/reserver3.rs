@@ -7,41 +7,38 @@ use tokio::sync::mpsc::UnboundedSender;
 #[repr(transparent)]
 pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>)>);
 
-impl<K, V> core::fmt::Debug for Reserver<K, V> 
+impl<K, V> core::fmt::Debug for Reserver<K, V>
 where
-K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-V: Send + Sync + Clone + Debug + 'static,
+    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
+    V: Send + Sync + Clone + Debug + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f
-        .debug_tuple("Reserver")
-        .field(&self.0)
-        .finish()
+        f.debug_tuple("Reserver").field(&self.0).finish()
     }
 }
 
 impl<K, V> Reserver<K, V>
 where
-K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-V: Send + Sync + Clone + 'static,
+    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
+    V: Send + Sync + Clone + 'static,
 {
     pub fn new(reservation_expiration: Duration) -> Self {
         let cache = Cache::builder()
-        .time_to_live(reservation_expiration)
-        .eviction_listener(|_key, val: (V, UnboundedSender<V>), cause| {
-            if cause == RemovalCause::Expired {
-                // Only error case is if receiver is no longer listening
-                // In that case, nobody cares about the value being evicted anymore.
-                // So `let _ =` is correct here.
-                let _ = val.1.send(val.0);
-            }
-        })
-        .build();
-    Reserver(cache)
+            .time_to_live(reservation_expiration)
+            .eviction_listener(|_key, val: (V, UnboundedSender<V>), cause| {
+                if cause == RemovalCause::Expired {
+                    // Only error case is if receiver is no longer listening
+                    // In that case, nobody cares about the value being evicted anymore.
+                    // So `let _ =` is correct here.
+                    let _ = val.1.send(val.0);
+                }
+            })
+            .build();
+        Reserver(cache)
     }
 
     /// Attempts to reserve a particular key-val.
-    /// 
+    ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
@@ -63,11 +60,14 @@ V: Send + Sync + Clone + 'static,
 
     /// Removes a particular key-val from the reserver.
     /// Afterwards, it is possible to reserve it again.
-    /// 
+    ///
     /// Precondition: key should be reserved first (checked in debug builds)
     pub fn finish_reservation(&self, key: &K) {
         let res = self.0.remove(&key);
-        debug_assert!(res.is_some(), "Attempted to finish non-existent reservation");
+        debug_assert!(
+            res.is_some(),
+            "Attempted to finish non-existent reservation"
+        );
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up

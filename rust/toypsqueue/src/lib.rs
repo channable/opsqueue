@@ -5,13 +5,13 @@ use sqlx::{
 };
 
 pub mod chunk;
-pub mod submission;
+pub mod consumer;
+pub mod producer;
 pub mod reserver;
 pub mod reserver2;
 pub mod reserver3;
-pub mod consumer;
-pub mod producer;
 pub mod server;
+pub mod submission;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
