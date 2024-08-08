@@ -7,6 +7,8 @@ use sqlx::{
 pub mod chunk;
 pub mod submission;
 pub mod reserver;
+pub mod reserver2;
+pub mod reserver3;
 pub mod consumer;
 pub mod producer;
 pub mod server;

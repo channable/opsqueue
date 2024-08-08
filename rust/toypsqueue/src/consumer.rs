@@ -1,76 +1,97 @@
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use std::{pin::Pin, time::Duration};
+
+use futures::{SinkExt, Stream, StreamExt, TryStream, TryStreamExt};
 use http::Uri;
 use itertools::Itertools;
+use sqlx::SqliteConnection;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
-use crate::{chunk::Chunk, reserver::Reserver};
+use crate::{chunk::Chunk, reserver3::{Reserver}};
 
 #[derive(Debug, Clone)]
-pub struct ServerState<CleanupFun: FnOnce(Chunk) + Clone + Send + Sync + 'static> {
+pub struct ServerState {
     pool: sqlx::SqlitePool,
-    reserver: Reserver<i64, Chunk, CleanupFun>,
+    reservation_expiration: Duration,
+    reserver: Reserver<i64, Chunk>,
 }
 
-impl<CleanupFun: FnOnce(Chunk) + Clone + Send + Sync + 'static> ServerState<CleanupFun> {
-    pub async fn new(pool: sqlx::SqlitePool) -> Self {
-        let reserver = Reserver::new();
-        // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        ServerState{reserver, pool}
+impl ServerState {
+    pub async fn new(pool: sqlx::SqlitePool, reservation_expiration: Duration) -> Self {
+        let reserver = Reserver::new(reservation_expiration);
+        ServerState{pool, reserver, reservation_expiration}
     }
+
+/// Select chunks, and store them in the reserver, to make sure that re-running the same selection returns different results as long as they are reserved.
+/// 
+/// `query_fun` is a 'strategy' function returning a stream of chunks, something like `sqlx::query!("SELECT * FROM chunks WHERE ...").fetch(conn)`
+/// `limit` is the maximum number of chunks to return. The query/stream will be evaluated until that many not-already-reserved chunks can be returned.
+/// `stale_chunks_notifier` is a Tokio channel, which the reserver will automatically invoke when a particular chunk reservation has expired.
+pub async fn reserve_chunks(
+    &self,
+    stream: impl Stream<Item = Result<Chunk, sqlx::Error>>,
+    limit: usize,
+    stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<Chunk>, 
+) -> Result<Vec<Chunk>, sqlx::Error> 
+{
+    stream.try_filter_map(|chunk| async move {
+        Ok(self.reserver.try_reserve(chunk.id, chunk, stale_chunks_notifier))
+    }).take(limit).try_collect().await
 }
 
-pub async fn foo<T: Fn(Chunk) + Copy + Send + Sync + 'static>(state: &ServerState<T>, cleanup_fun: T) -> Vec<Chunk> {
-    let iter = super::chunk::select_oldest_chunks(&state.pool, 3).await;
-    let res = reserve_chunks(iter, cleanup_fun, &state.reserver).await;
-    res
 }
 
-pub async fn foo_stream<T: Fn(Chunk) + Copy + Send + Sync + 'static>(state: &ServerState<T>, cleanup_fun: T, limit: usize) -> Result<Vec<Chunk>, sqlx::Error> {
-    let stream = super::chunk::select_oldest_chunks_stream(&state.pool);
-    // let res = reserve_chunks_stream(iter, cleanup_fun, &state.reserver).await;
-    let res = stream.try_filter_map(|chunk| async move {
-        Ok(state.reserver.try_reserve(chunk.id, chunk, cleanup_fun))
-    }).take(limit).try_collect().await;
-    res
-}
 
 #[cfg(test)]
 mod tests {
+
     use crate::chunk::Chunk;
     use super::*;
 
     #[sqlx::test]
-    pub async fn test_foo(pool: sqlx::SqlitePool) {
-        let cleanup_fun = |chunk| { println!("Cleaning up chunk: {:?}", chunk); };
+    pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
+        // let cleanup_fun = |chunk| { println!("Cleaning up chunk: {:?}", chunk); };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let state = ServerState::new(pool.clone()).await;
+        tokio::task::spawn(async move {
+            while let Some(chunk) = rx.recv().await {
+                println!("Cleaning up chunk: {:?}", chunk)
+            }
+        });
+
+        let state = ServerState::new(pool.clone(), Duration::from_secs(1)).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let zero = Chunk::new(1,0,vec![1,2,3]);
         let one = Chunk::new(1,1,vec![1,2,3]);
         let two = Chunk::new(1,2,vec![1,2,3]);
         let three = Chunk::new(1,3,vec![1,2,3]);
-        let chunks = vec![zero.clone(), one.clone(), two.clone(), three.clone()];
+        let four = Chunk::new(1,4,vec![1,2,3]);
+        let chunks = vec![zero.clone(), one.clone(), two.clone(), three.clone(), four.clone()];
         crate::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap()).await.unwrap();
 
-        let out = foo_stream(&state, cleanup_fun, 3).await.unwrap();
+        // let fun = crate::chunk::select_oldest_chunks_stream2;
+        // let out = state.fetch_and_reserve_chunks(move |conn| {
+        //     // fun(conn)
+        //     crate::chunk::select_oldest_chunks_stream(conn)
+        // }, 3, &tx).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let out = state.reserve_chunks(crate::chunk::select_oldest_chunks_stream(&mut *conn), 3, &tx).await.unwrap();
         assert_eq!(out, vec![zero, one, two]);
 
-        let out2 = foo_stream(&state, cleanup_fun, 3).await.unwrap();
-        assert_eq!(out2, vec![three]);
+        let out2 = state.reserve_chunks(crate::chunk::select_oldest_chunks_stream(&mut *conn), 3, &tx).await.unwrap();
+        assert_eq!(out2, vec![three, four]);
     }
 }
 
 
-pub async fn reserve_chunks<CleanupFun>(desired_chunks: impl IntoIterator<Item = Chunk>, cleanup_fun: CleanupFun, reserver: &Reserver<i64, Chunk, CleanupFun>) -> Vec<Chunk> 
-    where CleanupFun: Fn(Chunk) + Sync + Send + Copy + 'static,
-{
-    let res = desired_chunks.into_iter().map(|chunk| {
-        reserver.try_reserve(chunk.id, chunk, cleanup_fun)
-    }).flatten().collect();
-    reserver.run_pending_tasks();
-    res
-}
+// pub async fn reserve_chunks(desired_chunks: impl IntoIterator<Item = Chunk>, cleanup_fun: CleanupFun<Chunk>, reserver: &Reserver<i64, Chunk>) -> Vec<Chunk> 
+// {
+//     let res = desired_chunks.into_iter().map(|chunk| {
+//         reserver.try_reserve(chunk.id, chunk, cleanup_fun.clone())
+//     }).flatten().collect();
+//     reserver.run_pending_tasks();
+//     res
+// }
 
 pub async fn run_consumer_server() -> anyhow::Result<()> {
     println!("Running server");
