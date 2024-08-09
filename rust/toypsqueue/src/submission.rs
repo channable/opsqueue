@@ -1,9 +1,4 @@
-use std::borrow::BorrowMut;
-
-use sqlx::{
-    pool::PoolConnection, query, query_as, Connection, Executor, Sqlite, SqliteConnection,
-    SqliteExecutor,
-};
+use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use crate::chunk::{Chunk, ChunkURI};
 
@@ -229,7 +224,6 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 
 #[cfg(test)]
 pub mod test {
-    use std::ops::DerefMut;
 
     use super::*;
 
@@ -241,7 +235,7 @@ pub mod test {
 
         let (submission, chunks) =
             Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission, chunks, &mut *conn)
+        insert_submission(submission, chunks, &mut conn)
             .await
             .expect("insertion failed");
 
@@ -253,7 +247,7 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
         let (submission, chunks) =
             Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), chunks, &mut *conn)
+        insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");
 
@@ -266,7 +260,7 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
         let (submission, chunks) =
             Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), chunks, &mut *conn)
+        insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");
 
@@ -283,12 +277,12 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
         let (submission, chunks) =
             Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        insert_submission(submission.clone(), chunks, &mut *conn)
+        insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");
         let mut conn = db.acquire().await.unwrap();
 
-        fail_submission(submission.id, 1, vec![1, 2, 3], &mut *conn)
+        fail_submission(submission.id, 1, vec![1, 2, 3], &mut conn)
             .await
             .unwrap();
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);

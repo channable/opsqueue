@@ -1,17 +1,14 @@
-use std::{pin::Pin, time::Duration};
+use std::time::Duration;
 
-use futures::{SinkExt, Stream, StreamExt, TryStream, TryStreamExt};
+use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
 use itertools::Itertools;
-use sqlx::SqliteConnection;
+
 use tokio::net::{TcpListener, TcpStream};
 use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
-use crate::{
-    chunk::{Chunk},
-    reserver::Reserver,
-};
 use crate::strategy::Strategy;
+use crate::{chunk::Chunk, reserver::Reserver};
 
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
@@ -59,69 +56,9 @@ impl ConsumerServerState {
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<Chunk>,
     ) -> Result<Vec<Chunk>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
-        let stream = strategy.execute(&mut *conn);
-        self.reserve_chunks(stream, limit, stale_chunks_notifier).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::chunk::Chunk;
-
-    #[sqlx::test]
-    pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
-        // let cleanup_fun = |chunk| { println!("Cleaning up chunk: {:?}", chunk); };
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-        tokio::task::spawn(async move {
-            while let Some(chunk) = rx.recv().await {
-                println!("Cleaning up chunk: {:?}", chunk)
-            }
-        });
-
-        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1)).await;
-        // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        let zero = Chunk::new(1, 0, vec![1, 2, 3]);
-        let one = Chunk::new(1, 1, vec![1, 2, 3]);
-        let two = Chunk::new(1, 2, vec![1, 2, 3]);
-        let three = Chunk::new(1, 3, vec![1, 2, 3]);
-        let four = Chunk::new(1, 4, vec![1, 2, 3]);
-        let chunks = vec![
-            zero.clone(),
-            one.clone(),
-            two.clone(),
-            three.clone(),
-            four.clone(),
-        ];
-        crate::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap())
+        let stream = strategy.execute(&mut conn);
+        self.reserve_chunks(stream, limit, stale_chunks_notifier)
             .await
-            .unwrap();
-
-        // let fun = crate::chunk::select_oldest_chunks_stream2;
-        // let out = state.fetch_and_reserve_chunks(move |conn| {
-        //     // fun(conn)
-        //     crate::chunk::select_oldest_chunks_stream(conn)
-        // }, 3, &tx).await.unwrap();
-        let out = state
-            .fetch_and_reserve_chunks(Strategy::Oldest,
-                3,
-                &tx,
-            )
-            .await
-            .unwrap();
-        assert_eq!(out, vec![zero, one, two]);
-
-        let out2 = state
-            .fetch_and_reserve_chunks(
-                Strategy::Oldest,
-                3,
-                &tx,
-            )
-            .await
-            .unwrap();
-        assert_eq!(out2, vec![three, four]);
     }
 }
 
@@ -212,6 +149,60 @@ pub async fn run_consumer_client() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::chunk::Chunk;
+
+    #[sqlx::test]
+    pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
+        // let cleanup_fun = |chunk| { println!("Cleaning up chunk: {:?}", chunk); };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        tokio::task::spawn(async move {
+            while let Some(chunk) = rx.recv().await {
+                println!("Cleaning up chunk: {:?}", chunk)
+            }
+        });
+
+        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1)).await;
+        // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        let zero = Chunk::new(1, 0, vec![1, 2, 3]);
+        let one = Chunk::new(1, 1, vec![1, 2, 3]);
+        let two = Chunk::new(1, 2, vec![1, 2, 3]);
+        let three = Chunk::new(1, 3, vec![1, 2, 3]);
+        let four = Chunk::new(1, 4, vec![1, 2, 3]);
+        let chunks = vec![
+            zero.clone(),
+            one.clone(),
+            two.clone(),
+            three.clone(),
+            four.clone(),
+        ];
+        crate::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap())
+            .await
+            .unwrap();
+
+        // let fun = crate::chunk::select_oldest_chunks_stream2;
+        // let out = state.fetch_and_reserve_chunks(move |conn| {
+        //     // fun(conn)
+        //     crate::chunk::select_oldest_chunks_stream(conn)
+        // }, 3, &tx).await.unwrap();
+        let out = state
+            .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
+            .await
+            .unwrap();
+        assert_eq!(out, vec![zero, one, two]);
+
+        let out2 = state
+            .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
+            .await
+            .unwrap();
+        assert_eq!(out2, vec![three, four]);
+    }
 }
 
 // #[tokio::test(flavor = "multi_thread")]

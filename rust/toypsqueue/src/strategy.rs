@@ -5,7 +5,8 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 
 use crate::chunk::Chunk;
 
-type ChunkStream<'a> = Pin<Box<(dyn Stream<Item = Result<Chunk, sqlx::Error>> + std::marker::Send + 'a)>>;
+type ChunkStream<'a> =
+    Pin<Box<(dyn Stream<Item = Result<Chunk, sqlx::Error>> + std::marker::Send + 'a)>>;
 
 #[derive(Debug, Clone)]
 pub enum Strategy {
@@ -24,16 +25,10 @@ impl Strategy {
     }
 }
 
-pub fn oldest_chunks_stream<'c>(
-    db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkStream<'c> {
+pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
     sqlx::query_as!(Chunk, "SELECT * FROM chunks ORDER BY submission_id ASC",).fetch(db_conn)
 }
 
-
-pub fn newest_chunks_stream<'c>(
-    db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkStream<'c> {
+pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
     sqlx::query_as!(Chunk, "SELECT * FROM chunks ORDER BY submission_id ASC",).fetch(db_conn)
 }
-

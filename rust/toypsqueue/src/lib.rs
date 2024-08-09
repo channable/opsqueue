@@ -9,8 +9,8 @@ pub mod consumer;
 pub mod producer;
 pub mod reserver;
 pub mod server;
-pub mod submission;
 pub mod strategy;
+pub mod submission;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()

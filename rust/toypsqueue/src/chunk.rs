@@ -1,11 +1,9 @@
 use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::sync::Arc;
 
 use chrono::NaiveDateTime;
-use futures::{Stream, TryStream};
+
+use sqlx::query_as;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
-use sqlx::{query_as, SqliteConnection};
 
 pub type ChunkURI = Vec<u8>;
 

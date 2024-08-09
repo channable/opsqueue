@@ -63,7 +63,7 @@ where
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
     pub fn finish_reservation(&self, key: &K) {
-        let res = self.0.remove(&key);
+        let res = self.0.remove(key);
         debug_assert!(
             res.is_some(),
             "Attempted to finish non-existent reservation"
