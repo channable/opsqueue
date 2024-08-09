@@ -1,6 +1,6 @@
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
-use crate::chunk::{Chunk, ChunkURI};
+use super::chunk::{Chunk, ChunkURI};
 
 pub type Metadata = Vec<u8>;
 
@@ -84,7 +84,7 @@ pub async fn insert_submission(
         .execute(&mut *conn)
         .await?;
     insert_submission_raw(submission, &mut *conn).await?;
-    crate::chunk::insert_many_chunks(chunks, &mut *conn).await?;
+    super::chunk::insert_many_chunks(chunks, &mut *conn).await?;
     query!("RELEASE SAVEPOINT insert_submission;")
         .execute(&mut *conn)
         .await?;
@@ -193,8 +193,8 @@ pub async fn fail_submission(
         .execute(&mut *conn)
         .await?;
     fail_submission_raw(id, failed_chunk_id, &mut *conn).await?;
-    crate::chunk::fail_chunk((id, failed_chunk_id), failure, &mut *conn).await?;
-    crate::chunk::skip_remaining_chunks(id, &mut *conn).await?;
+    super::chunk::fail_chunk((id, failed_chunk_id), failure, &mut *conn).await?;
+    super::chunk::skip_remaining_chunks(id, &mut *conn).await?;
     query!("RELEASE SAVEPOINT fail_submission;")
         .execute(&mut *conn)
         .await?;

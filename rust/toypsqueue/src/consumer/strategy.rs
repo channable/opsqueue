@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures::Stream;
 use sqlx::{SqliteConnection, SqliteExecutor};
 
-use crate::chunk::Chunk;
+use crate::common::chunk::Chunk;
 
 type ChunkStream<'a> =
     Pin<Box<(dyn Stream<Item = Result<Chunk, sqlx::Error>> + std::marker::Send + 'a)>>;

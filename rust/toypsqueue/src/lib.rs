@@ -4,13 +4,9 @@ use sqlx::{
     Connection, Sqlite, SqliteConnection, SqlitePool,
 };
 
-pub mod chunk;
+pub mod common;
 pub mod consumer;
 pub mod producer;
-pub mod reserver;
-pub mod server;
-pub mod strategy;
-pub mod submission;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()

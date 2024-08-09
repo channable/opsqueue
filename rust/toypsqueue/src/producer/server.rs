@@ -1,6 +1,5 @@
-use super::chunk::Chunk;
-use super::submission;
-use super::submission::{Metadata, Submission};
+use crate::common::chunk::Chunk;
+use crate::common::submission::{self, Metadata, Submission};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

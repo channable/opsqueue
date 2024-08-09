@@ -1,14 +1,17 @@
+pub mod reserver;
+pub mod strategy;
+
 use std::time::Duration;
 
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
-use itertools::Itertools;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
-use crate::strategy::Strategy;
-use crate::{chunk::Chunk, reserver::Reserver};
+use crate::common::chunk::Chunk;
+use strategy::Strategy;
+use reserver::Reserver;
 
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
@@ -155,7 +158,7 @@ pub async fn run_consumer_client() -> anyhow::Result<()> {
 mod tests {
 
     use super::*;
-    use crate::chunk::Chunk;
+    use crate::common::chunk::Chunk;
 
     #[sqlx::test]
     pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
@@ -182,7 +185,7 @@ mod tests {
             three.clone(),
             four.clone(),
         ];
-        crate::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap())
+        crate::common::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap())
             .await
             .unwrap();
 
