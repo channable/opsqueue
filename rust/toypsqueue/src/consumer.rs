@@ -9,21 +9,21 @@ use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
 use crate::{
     chunk::{Chunk},
-    reserver3::Reserver,
+    reserver::Reserver,
 };
 use crate::strategy::Strategy;
 
 #[derive(Debug, Clone)]
-pub struct ServerState {
+pub struct ConsumerServerState {
     pool: sqlx::SqlitePool,
     // reservation_expiration: Duration,
     reserver: Reserver<i64, Chunk>,
 }
 
-impl ServerState {
+impl ConsumerServerState {
     pub async fn new(pool: sqlx::SqlitePool, reservation_expiration: Duration) -> Self {
         let reserver = Reserver::new(reservation_expiration);
-        ServerState {
+        ConsumerServerState {
             pool,
             reserver,
             // reservation_expiration,
@@ -81,7 +81,7 @@ mod tests {
             }
         });
 
-        let state = ServerState::new(pool.clone(), Duration::from_secs(1)).await;
+        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1)).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let zero = Chunk::new(1, 0, vec![1, 2, 3]);
         let one = Chunk::new(1, 1, vec![1, 2, 3]);
@@ -104,10 +104,8 @@ mod tests {
         //     // fun(conn)
         //     crate::chunk::select_oldest_chunks_stream(conn)
         // }, 3, &tx).await.unwrap();
-        let mut conn = pool.acquire().await.unwrap();
         let out = state
-            .reserve_chunks(
-                crate::chunk::select_oldest_chunks_stream(&mut *conn),
+            .fetch_and_reserve_chunks(Strategy::Oldest,
                 3,
                 &tx,
             )
@@ -116,8 +114,8 @@ mod tests {
         assert_eq!(out, vec![zero, one, two]);
 
         let out2 = state
-            .reserve_chunks(
-                crate::chunk::select_oldest_chunks_stream(&mut *conn),
+            .fetch_and_reserve_chunks(
+                Strategy::Oldest,
                 3,
                 &tx,
             )

@@ -8,8 +8,6 @@ pub mod chunk;
 pub mod consumer;
 pub mod producer;
 pub mod reserver;
-pub mod reserver2;
-pub mod reserver3;
 pub mod server;
 pub mod submission;
 pub mod strategy;
