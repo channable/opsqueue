@@ -8,14 +8,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
 use crate::{
-    chunk::{self, Chunk, Strategy},
+    chunk::{Chunk},
     reserver3::Reserver,
 };
+use crate::strategy::Strategy;
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: sqlx::SqlitePool,
-    reservation_expiration: Duration,
+    // reservation_expiration: Duration,
     reserver: Reserver<i64, Chunk>,
 }
 
@@ -25,7 +26,7 @@ impl ServerState {
         ServerState {
             pool,
             reserver,
-            reservation_expiration,
+            // reservation_expiration,
         }
     }
 
@@ -58,12 +59,8 @@ impl ServerState {
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<Chunk>,
     ) -> Result<Vec<Chunk>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
-        let stream = match strategy {
-            Strategy::Oldest => crate::chunk::select_oldest_chunks_stream(&mut *conn),
-        };
-
-        self.reserve_chunks(stream, limit, stale_chunks_notifier)
-            .await
+        let stream = strategy.execute(&mut *conn);
+        self.reserve_chunks(stream, limit, stale_chunks_notifier).await
     }
 }
 

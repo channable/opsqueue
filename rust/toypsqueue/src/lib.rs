@@ -12,6 +12,7 @@ pub mod reserver2;
 pub mod reserver3;
 pub mod server;
 pub mod submission;
+pub mod strategy;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()

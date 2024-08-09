@@ -1,5 +1,6 @@
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
+use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 use futures::{Stream, TryStream};
@@ -32,11 +33,6 @@ impl Chunk {
             retries: 0,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Strategy {
-    Oldest,
 }
 
 pub async fn insert_chunk(
