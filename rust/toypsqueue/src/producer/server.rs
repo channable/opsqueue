@@ -72,21 +72,30 @@ async fn insert_submission(
     State(state): State<ServerState>,
     Json(request): Json<InsertSubmission>,
 ) -> Result<Json<InsertSubmissionResponse>, ServerError> {
-    let submission_id = Submission::generate_id();
-    let iter = (0..request.chunk_count)
-        .map(|chunk_index| Chunk::new(submission_id, chunk_index, vec![1, 2, 3, 4]));
-    let submission = Submission {
-        id: submission_id,
-        chunks_total: request.chunk_count.into(),
-        chunks_done: 0,
-        metadata: request.metadata,
-    };
-
     let mut conn = state.pool.acquire().await?;
 
-    submission::insert_submission(submission, iter, &mut conn).await?;
+    // TODO
+    let chunks_contents = (0..request.chunk_count)
+        .map(|index| vec![1, 2, 3, 4]).collect();
 
+    let submission_id = submission::insert_submission_from_chunks(request.metadata, chunks_contents, &mut conn).await?;
     Ok(Json(InsertSubmissionResponse { id: submission_id }))
+
+    // let submission_id = Submission::generate_id();
+    // let iter = (0..request.chunk_count)
+    //     .map(|chunk_index| Chunk::new(submission_id, chunk_index, vec![1, 2, 3, 4]));
+    // let submission = Submission {
+    //     id: submission_id,
+    //     chunks_total: request.chunk_count.into(),
+    //     chunks_done: 0,
+    //     metadata: request.metadata,
+    // };
+
+    // let mut conn = state.pool.acquire().await?;
+
+    // submission::insert_submission(submission, iter, &mut conn).await?;
+
+    // Ok(Json(InsertSubmissionResponse { id: submission_id }))
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

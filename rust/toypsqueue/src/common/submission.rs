@@ -91,6 +91,15 @@ pub async fn insert_submission(
     Ok(())
 }
 
+pub async fn insert_submission_from_chunks(metadata: Option<Metadata>, chunks_contents: Vec<ChunkURI>, conn: &mut SqliteConnection) -> sqlx::Result<i64> {
+    let submission_id = Submission::generate_id();
+    let submission = Submission {id: submission_id, chunks_total: chunks_contents.len() as i64, chunks_done: 0, metadata};
+    let iter = chunks_contents.into_iter().enumerate().map(|(chunk_index, uri)| { Chunk::new(submission_id, chunk_index as u32, uri)});
+    insert_submission(submission, iter, conn).await?;
+    Ok(submission_id)
+
+}
+
 pub async fn get_submission(
     id: i64,
     conn: impl Executor<'_, Database = Sqlite>,
