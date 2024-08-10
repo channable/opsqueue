@@ -100,7 +100,7 @@ pub async fn get_submission(
         .await
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress,
     Completed,
