@@ -5,8 +5,8 @@
 use sqlx::{Acquire, SqlitePool};
 use tokio::task::JoinSet;
 use toypsqueue::{
-    chunk, db_connect_pool, ensure_db_exists, ensure_db_migrated,
-    submission::{self, Submission},
+    common::chunk, db_connect_pool, ensure_db_exists, ensure_db_migrated,
+    common::submission::{self, Submission},
 };
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
