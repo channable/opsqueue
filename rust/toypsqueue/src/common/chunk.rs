@@ -2,12 +2,13 @@ use std::ops::{Deref, DerefMut};
 
 use chrono::NaiveDateTime;
 
+use serde::{Deserialize, Serialize};
 use sqlx::query_as;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 
 pub type ChunkURI = Vec<u8>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Chunk {
     pub submission_id: i64,
     pub id: i64,
