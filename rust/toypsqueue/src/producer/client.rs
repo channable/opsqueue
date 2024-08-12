@@ -16,14 +16,14 @@ impl Client {
 
     pub async fn count_submissionns(&self) -> Result<u32, reqwest::Error> {
         let endpoint_url = &self.endpoint_url;
-        let resp = self.http_client.get(format!("http://{endpoint_url}/submissions_count")).send().await?;
+        let resp = self.http_client.get(format!("http://{endpoint_url}/submissions/count")).send().await?;
         let body: u32 = resp.json().await?;
         Ok(body)
     }
 
     pub async fn insert_submission(&self, submission: &InsertSubmission) -> Result<i64, reqwest::Error> {
         let endpoint_url = &self.endpoint_url;
-        let resp = self.http_client.post(format!("http://{endpoint_url}/insert_submission")).json(submission).send().await?;
+        let resp = self.http_client.post(format!("http://{endpoint_url}/submissions")).json(submission).send().await?;
         dbg!(&resp);
         let body: InsertSubmissionResponse = resp.json().await?;
         Ok(body.id)
@@ -31,7 +31,7 @@ impl Client {
 
     pub async fn get_submission(&self, submission_id: i64) -> Result<SubmissionStatus, reqwest::Error> {
         let endpoint_url = &self.endpoint_url;
-        let resp = self.http_client.get(format!("http://{endpoint_url}/submission/{submission_id}")).send().await?;
+        let resp = self.http_client.get(format!("http://{endpoint_url}/submissions/{submission_id}")).send().await?;
         dbg!(&resp);
         let body: SubmissionStatus = resp.json().await?;
         Ok(body)
@@ -61,11 +61,7 @@ mod tests {
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
-        let (submission, chunks) =
-            Submission::from_vec(vec!["foo".into(), "bar".into(), "baz".into()], None).unwrap();
-        submission::insert_submission(submission, chunks, &mut conn)
-            .await
-            .expect("insertion failed");
+        submission::insert_submission_from_chunks(None, vec!["foo".into(), "bar".into(), "baz".into()], &mut conn).await.expect("Insertion failed");
 
         let count = client.count_submissionns().await.expect("Should be OK");
         assert_eq!(count, 1);

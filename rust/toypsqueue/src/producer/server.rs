@@ -23,13 +23,14 @@ impl ServerState {
     pub async fn serve(self, server_addr: Box<str>) {
 
         let app = Router::new()
-            .route("/submissions_count", get(submissions_count))
-            .route(
-                "/submissions_count_completed",
+            .route("/submissions", post(insert_submission))
+            .route( // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
+                "/submissions/count_completed",
                 get(submissions_count_completed),
             )
-            .route("/insert_submission", post(insert_submission))
-            .route("/submission/:submission_id", get(submission_status))
+            .route("/submissions/count", get(submissions_count))
+            .route("/submissions/:submission_id", get(submission_status))
+            // TODO: Cancel a submission from the producer side
             .with_state(self);
 
         let listener = tokio::net::TcpListener::bind(&*server_addr).await.unwrap();
