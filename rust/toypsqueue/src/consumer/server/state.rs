@@ -26,7 +26,7 @@ use crate::consumer::reserver::Reserver;
 pub struct ConsumerServerState {
     pool: sqlx::SqlitePool,
     reserver: Reserver<i64, Chunk>,
-    server_addr: Arc<str>,
+    pub server_addr: Arc<str>,
 }
 
 impl ConsumerServerState {
@@ -73,16 +73,20 @@ impl ConsumerServerState {
             .await
     }
 
+    /// Used for testing
+    pub async fn accept_one_conn(&self, listener: &TcpListener) -> anyhow::Result<super::conn::ClientConn> {
+        let (stream, _addr) = listener.accept().await?;
+        let ws_stream = ServerBuilder::new().accept(stream).await?;
+        Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
+    }
+
     pub async fn run(self) -> anyhow::Result<()> {
         println!("Running server");
         let listener = TcpListener::bind(&*self.server_addr).await?;
         println!("Listener listens");
-        while let Ok((stream, _)) = listener.accept().await {
-            println!("Opening new connection");
-            let ws_stream = ServerBuilder::new().accept(stream).await?;
-            println!("Stream made");
-            let conn = super::conn::ClientConn::new(self.clone(), ws_stream);
+        while let Ok(conn) = self.accept_one_conn(&listener).await {
             tokio::spawn(conn.run());
+
         }
         Ok(())
     }

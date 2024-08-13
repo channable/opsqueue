@@ -19,6 +19,7 @@ use crate::consumer::strategy::Strategy;
 use crate::consumer::reserver::Reserver;
 
 
+#[derive(Debug)]
 pub enum ClientConnError {
   HeartbeatFailure,
   DbError(sqlx::Error),
@@ -138,5 +139,50 @@ impl ClientConn {
             self.heartbeats_missed += 1;
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{common::submission, consumer::server::ConsumerServerState};
+
+    use super::*;
+
+    #[sqlx::test]
+    pub async fn test_handle_incoming_client_msg(pool: sqlx::SqlitePool) {
+        let uri = "127.0.0.1:8081";
+        let ws_uri = "ws://127.0.0.1:8081";
+
+        let input_chunks: Vec<Option<Vec<u8>>> = vec![Some("1".into()), Some("2".into()), Some("3".into()), Some("4".into())];
+        let input_chunks_b = input_chunks.clone();
+
+        let server_state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), uri).await;
+        let listener = TcpListener::bind(&*server_state.server_addr).await.unwrap();
+
+
+        let client_handle = tokio::spawn(async move {
+            let uri = Uri::from_static(ws_uri);
+            let (mut client, _) = tokio_websockets::ClientBuilder::from_uri(uri).connect().await.unwrap();
+
+            let msg = client.next().await.expect("Should not be closed").expect("Should receive a message");
+            let data: ServerToClientMessage = msg.try_into().unwrap();
+            match data {
+                ServerToClientMessage::ChunksReserved(chunks) => {
+                    assert_eq!(chunks.len(), 4);
+                    assert_eq!(chunks.iter().map(|c| c.input_content.clone()).collect::<Vec<_>>(), input_chunks_b);
+                },
+                other => panic!("Unexpected message response: {other:?}"),
+            }
+        });
+
+        let mut conn = server_state.accept_one_conn(&listener).await.unwrap();
+
+        let mut sql_conn = pool.acquire().await.unwrap();
+        submission::insert_submission_from_chunks(None, input_chunks, &mut *sql_conn).await.unwrap();
+
+
+        conn.handle_incoming_client_msg(ClientToServerMessage::WantToReserveChunks{max: 10, strategy: Strategy::Oldest}).await.unwrap();
+
+        tokio::time::timeout(Duration::from_millis(1), client_handle).await.expect("Client ran too long; probably did not receive ws response").unwrap();
     }
 }
