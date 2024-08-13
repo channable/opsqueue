@@ -5,7 +5,9 @@ use http::Uri;
 use tokio::{net::TcpStream, select, sync::{mpsc, oneshot, Mutex}};
 use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
 
-use super::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
+use crate::common::chunk::Chunk;
+
+use super::{common::{ClientToServerMessage, Envelope, ServerToClientMessage}, strategy::Strategy};
 
 pub struct ClientInner {
     // ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -33,7 +35,15 @@ impl Client {
         Ok(Client(Arc::new(ClientInner { rx: Mutex::new(rx), tx, in_flight_requests})))
     }
 
-    pub async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<ServerToClientMessage> {
+    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> anyhow::Result<Vec<Chunk>> {
+        let resp = self.request(ClientToServerMessage::WantToReserveChunks { max, strategy }).await?;
+        match resp {
+            ServerToClientMessage::ChunksReserved(chunks) => Ok(chunks),
+            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+        }
+    }
+
+    async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<ServerToClientMessage> {
         let (tx, mut rx) = oneshot::channel();
         {
             let mut in_flight_requests = self.0.in_flight_requests.lock().await;
@@ -102,5 +112,37 @@ impl WebSocketStreamHandler {
                 },
                 else => anyhow::bail!("WebSocket connection or receiver closed unexpectedly"),
             }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::task::yield_now;
+
+    use crate::consumer::server::ConsumerServerState;
+
+    use super::*;
+
+    #[sqlx::test]
+    pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
+        let uri = "127.0.0.1:8081";
+        let ws_uri = "ws://127.0.0.1:8081";
+
+        let mut conn = pool.acquire().await.unwrap();
+        let input_chunks = vec![Some("a".into()), Some("b".into()), Some("c".into())];
+        crate::common::submission::insert_submission_from_chunks(None, input_chunks.clone(), &mut *conn).await.unwrap();
+
+        let _server_handle = tokio::spawn(ConsumerServerState::new(pool.clone(), Duration::from_secs(60), uri).await.run());
+
+        // yield_now().await;
+
+
+        let client = Client::new(ws_uri).await.unwrap();
+
+        let chunks = client.reserve_chunks(3, Strategy::Oldest).await.unwrap();
+
+        assert_eq!(chunks, vec![]);
     }
 }
