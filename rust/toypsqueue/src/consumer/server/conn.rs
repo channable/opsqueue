@@ -1,31 +1,22 @@
-use std::ops::Deref;
-use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
-use bytes::{Buf, BufMut, BytesMut};
-use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
-use http::Uri;
+use futures::{SinkExt, StreamExt};
 
-use serde::{Deserialize, Serialize};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio_websockets::{ClientBuilder, Message, Payload, ServerBuilder, WebSocketStream};
+use tokio_websockets::{Message, WebSocketStream};
 
 use crate::common::chunk::Chunk;
 use crate::consumer::common::{ClientToServerMessage, ServerToClientMessage};
-use crate::consumer::strategy::Strategy;
-use crate::consumer::reserver::Reserver;
-
 
 #[derive(Debug)]
 pub enum ClientConnError {
-  HeartbeatFailure,
-  DbError(sqlx::Error),
-  UnreadableClientToServerMessage(ciborium::de::Error<std::io::Error>),
-  UnparsableServerToClientMessage(ciborium::ser::Error<std::io::Error>),
-  LowLevelWebsocketError(tokio_websockets::Error),
+    HeartbeatFailure,
+    DbError(sqlx::Error),
+    UnreadableClientToServerMessage(ciborium::de::Error<std::io::Error>),
+    UnparsableServerToClientMessage(ciborium::ser::Error<std::io::Error>),
+    LowLevelWebsocketError(tokio_websockets::Error),
 }
 
 impl From<sqlx::Error> for ClientConnError {
@@ -62,18 +53,23 @@ pub struct ClientConn {
     server_state: super::state::ConsumerServerState,
 }
 
-
 impl ClientConn {
-    pub fn new(server_state: super::state::ConsumerServerState, ws_stream: WebSocketStream<TcpStream>) -> Self {
+    pub fn new(
+        server_state: super::state::ConsumerServerState,
+        ws_stream: WebSocketStream<TcpStream>,
+    ) -> Self {
         // TODO: make interval configurable
         let heartbeat_interval = tokio::time::interval(Duration::from_secs(1));
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let this = Self {
-            ws_stream, heartbeat_interval, heartbeats_missed: 0, tx, rx, server_state
-        };
-
-        this
+        Self {
+            ws_stream,
+            heartbeat_interval,
+            heartbeats_missed: 0,
+            tx,
+            rx,
+            server_state,
+        }
     }
 
     pub async fn run(mut self) -> Result<(), ClientConnError> {
@@ -102,7 +98,7 @@ impl ClientConn {
     async fn handle_incoming_msg(&mut self, msg: Message) -> Result<(), ClientConnError> {
         self.heartbeat_interval.reset();
         self.heartbeats_missed = 0;
-        
+
         // Other side sent a heartbeat, send a heartbeat response
         if msg.is_ping() {
             self.ws_stream.send(Message::pong("heartbeat")).await?
@@ -118,24 +114,32 @@ impl ClientConn {
     }
 
     // Deals with app-specific messages arrived through the Websocket connection.
-    async fn handle_incoming_client_msg(&mut self, msg: ClientToServerMessage) -> Result<(), ClientConnError> {
+    async fn handle_incoming_client_msg(
+        &mut self,
+        msg: ClientToServerMessage,
+    ) -> Result<(), ClientConnError> {
         match msg {
             ClientToServerMessage::WantToReserveChunks { max, strategy } => {
-                let chunks = self.server_state.fetch_and_reserve_chunks(strategy, max, &self.tx).await?;
-                self.ws_stream.send(ServerToClientMessage::ChunksReserved(chunks).try_into()?).await?;
+                let chunks = self
+                    .server_state
+                    .fetch_and_reserve_chunks(strategy, max, &self.tx)
+                    .await?;
+                self.ws_stream
+                    .send(ServerToClientMessage::ChunksReserved(chunks).try_into()?)
+                    .await?;
             }
         }
 
         Ok(())
     }
 
-    // Manages heartbeating: 
+    // Manages heartbeating:
     // Sends the next heartbeat, or exits with an error if too many were already missed.
     async fn beat_heart(&mut self) -> Result<(), ClientConnError> {
         if self.heartbeats_missed > 5 {
             Err(ClientConnError::HeartbeatFailure)
         } else {
-            let _ = self.ws_stream.send(Message::ping("heartbeat") ).await;
+            let _ = self.ws_stream.send(Message::ping("heartbeat")).await;
             self.heartbeats_missed += 1;
             Ok(())
         }
@@ -144,7 +148,13 @@ impl ClientConn {
 
 #[cfg(test)]
 mod tests {
-    use crate::{common::submission, consumer::server::ConsumerServerState};
+    use http::Uri;
+    use tokio::net::TcpListener;
+
+    use crate::{
+        common::submission,
+        consumer::{server::ConsumerServerState, strategy::Strategy},
+    };
 
     use super::*;
 
@@ -153,36 +163,65 @@ mod tests {
         let uri = "127.0.0.1:8081";
         let ws_uri = "ws://127.0.0.1:8081";
 
-        let input_chunks: Vec<Option<Vec<u8>>> = vec![Some("1".into()), Some("2".into()), Some("3".into()), Some("4".into())];
-        let input_chunks_b = input_chunks.clone();
+        let input_chunks: Vec<Option<Vec<u8>>> = vec![
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+            Some("4".into()),
+        ];
 
-        let server_state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), uri).await;
+        let server_state =
+            ConsumerServerState::new(pool.clone(), Duration::from_secs(1), uri).await;
         let listener = TcpListener::bind(&*server_state.server_addr).await.unwrap();
 
+        let client_handle = tokio::spawn({
+            let input_chunks = input_chunks.clone();
+            async move {
+                let uri = Uri::from_static(ws_uri);
+                let (mut client, _) = tokio_websockets::ClientBuilder::from_uri(uri)
+                    .connect()
+                    .await
+                    .unwrap();
 
-        let client_handle = tokio::spawn(async move {
-            let uri = Uri::from_static(ws_uri);
-            let (mut client, _) = tokio_websockets::ClientBuilder::from_uri(uri).connect().await.unwrap();
-
-            let msg = client.next().await.expect("Should not be closed").expect("Should receive a message");
-            let data: ServerToClientMessage = msg.try_into().unwrap();
-            match data {
-                ServerToClientMessage::ChunksReserved(chunks) => {
-                    assert_eq!(chunks.len(), 4);
-                    assert_eq!(chunks.iter().map(|c| c.input_content.clone()).collect::<Vec<_>>(), input_chunks_b);
-                },
-                other => panic!("Unexpected message response: {other:?}"),
+                let msg = client
+                    .next()
+                    .await
+                    .expect("Should not be closed")
+                    .expect("Should receive a message");
+                let data: ServerToClientMessage = msg.try_into().unwrap();
+                match data {
+                    ServerToClientMessage::ChunksReserved(chunks) => {
+                        assert_eq!(chunks.len(), 4);
+                        assert_eq!(
+                            chunks
+                                .iter()
+                                .map(|c| c.input_content.clone())
+                                .collect::<Vec<_>>(),
+                            input_chunks
+                        );
+                    }
+                    other => panic!("Unexpected message response: {other:?}"),
+                }
             }
         });
 
         let mut conn = server_state.accept_one_conn(&listener).await.unwrap();
 
         let mut sql_conn = pool.acquire().await.unwrap();
-        submission::insert_submission_from_chunks(None, input_chunks, &mut *sql_conn).await.unwrap();
+        submission::insert_submission_from_chunks(None, input_chunks, &mut sql_conn)
+            .await
+            .unwrap();
 
+        conn.handle_incoming_client_msg(ClientToServerMessage::WantToReserveChunks {
+            max: 10,
+            strategy: Strategy::Oldest,
+        })
+        .await
+        .unwrap();
 
-        conn.handle_incoming_client_msg(ClientToServerMessage::WantToReserveChunks{max: 10, strategy: Strategy::Oldest}).await.unwrap();
-
-        tokio::time::timeout(Duration::from_millis(1), client_handle).await.expect("Client ran too long; probably did not receive ws response").unwrap();
+        tokio::time::timeout(Duration::from_millis(1), client_handle)
+            .await
+            .expect("Client ran too long; probably did not receive ws response")
+            .unwrap();
     }
 }

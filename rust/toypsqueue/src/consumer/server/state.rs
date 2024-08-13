@@ -1,26 +1,18 @@
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes;
-use bytes::{Buf, BufMut, BytesMut};
-use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
-use http::Uri;
+use futures::{Stream, StreamExt, TryStreamExt};
 
-use serde::{Deserialize, Serialize};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio_websockets::{ClientBuilder, Message, Payload, ServerBuilder, WebSocketStream};
+use tokio::net::TcpListener;
+
+use tokio_websockets::ServerBuilder;
 
 use crate::common::chunk::Chunk;
-use crate::consumer::strategy::Strategy;
 use crate::consumer::reserver::Reserver;
-
-
+use crate::consumer::strategy::Strategy;
 
 /// State for the consumer-side of the server.
-/// Cloning this structure is cheap, as its contents are Arc-like, 
+/// Cloning this structure is cheap, as its contents are Arc-like,
 /// with its internal (mutable, thread-safe) state being shared between clones.
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
@@ -30,12 +22,16 @@ pub struct ConsumerServerState {
 }
 
 impl ConsumerServerState {
-    pub async fn new(pool: sqlx::SqlitePool, reservation_expiration: Duration, server_addr: &str) -> Self {
+    pub async fn new(
+        pool: sqlx::SqlitePool,
+        reservation_expiration: Duration,
+        server_addr: &str,
+    ) -> Self {
         let reserver = Reserver::new(reservation_expiration);
         ConsumerServerState {
             pool,
             reserver,
-            server_addr: Arc::from(server_addr)
+            server_addr: Arc::from(server_addr),
         }
     }
 
@@ -74,7 +70,10 @@ impl ConsumerServerState {
     }
 
     /// Used for testing
-    pub async fn accept_one_conn(&self, listener: &TcpListener) -> anyhow::Result<super::conn::ClientConn> {
+    pub async fn accept_one_conn(
+        &self,
+        listener: &TcpListener,
+    ) -> anyhow::Result<super::conn::ClientConn> {
         let (stream, _addr) = listener.accept().await?;
         let ws_stream = ServerBuilder::new().accept(stream).await?;
         Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
@@ -86,12 +85,10 @@ impl ConsumerServerState {
         println!("Listener listens");
         while let Ok(conn) = self.accept_one_conn(&listener).await {
             tokio::spawn(conn.run());
-
         }
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

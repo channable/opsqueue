@@ -1,32 +1,26 @@
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
-
 use axum::body::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
-use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
-use http::Uri;
 
 use serde::{Deserialize, Serialize};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio_websockets::{ClientBuilder, Message, Payload, ServerBuilder, WebSocketStream};
+
+use tokio_websockets::Message;
 
 use crate::common::chunk::Chunk;
+
 use crate::consumer::strategy::Strategy;
-use crate::consumer::reserver::Reserver;
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
-  WantToReserveChunks{max: usize, strategy: Strategy},
+    WantToReserveChunks { max: usize, strategy: Strategy },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ServerToClientMessage {
-  ChunksReserved(Vec<Chunk>),
-  ChunkReservationExpired{submission_id: i64, chunk_index: u32},
+    ChunksReserved(Vec<Chunk>),
+    ChunkReservationExpired {
+        submission_id: i64,
+        chunk_index: u32,
+    },
 }
-
 
 impl TryFrom<Message> for ClientToServerMessage {
     type Error = ciborium::de::Error<std::io::Error>;

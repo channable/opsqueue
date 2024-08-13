@@ -1,8 +1,8 @@
 use chrono::NaiveDateTime;
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
-use super::chunk::Chunk;
 use super::chunk;
+use super::chunk::Chunk;
 
 pub type Metadata = Vec<u8>;
 
@@ -110,13 +110,24 @@ pub async fn insert_submission(
     Ok(())
 }
 
-pub async fn insert_submission_from_chunks(metadata: Option<Metadata>, chunks_contents: Vec<chunk::Content>, conn: &mut SqliteConnection) -> sqlx::Result<i64> {
+pub async fn insert_submission_from_chunks(
+    metadata: Option<Metadata>,
+    chunks_contents: Vec<chunk::Content>,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<i64> {
     let submission_id = Submission::generate_id();
-    let submission = Submission {id: submission_id, chunks_total: chunks_contents.len() as i64, chunks_done: 0, metadata};
-    let iter = chunks_contents.into_iter().enumerate().map(|(chunk_index, uri)| { Chunk::new(submission_id, chunk_index as u32, uri)});
+    let submission = Submission {
+        id: submission_id,
+        chunks_total: chunks_contents.len() as i64,
+        chunks_done: 0,
+        metadata,
+    };
+    let iter = chunks_contents
+        .into_iter()
+        .enumerate()
+        .map(|(chunk_index, uri)| Chunk::new(submission_id, chunk_index as u32, uri));
     insert_submission(submission, iter, conn).await?;
     Ok(submission_id)
-
 }
 
 pub async fn get_submission(
@@ -139,7 +150,7 @@ pub enum SubmissionStatusTag {
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
-    Failed(SubmissionFailed)
+    Failed(SubmissionFailed),
 }
 
 /// TODO: Return exactly the info we have available on completed or failed
@@ -160,9 +171,25 @@ pub async fn submission_status(
     ).fetch_one(conn).await?;
     match row.status {
         // TODO: Cleaner error handling than unwrap_or_default
-        0 => Ok(SubmissionStatus::InProgress(Submission{id: row.id, chunks_total: row.chunks_total, chunks_done: row.chunks_done.unwrap_or_default(), metadata: row.metadata})),
-        1 => Ok(SubmissionStatus::Completed(SubmissionCompleted{id: row.id, chunks_done: row.chunks_done.unwrap_or_default(), metadata: row.metadata, completed_at: row.completed_at.unwrap_or_default() })),
-        2 => Ok(SubmissionStatus::Failed(SubmissionFailed{id: row.id, chunks_total: row.chunks_total, metadata: row.metadata, failed_chunk_id: row.failed_chunk_id.unwrap_or_default(), failed_at: row.failed_at.unwrap_or_default()})),
+        0 => Ok(SubmissionStatus::InProgress(Submission {
+            id: row.id,
+            chunks_total: row.chunks_total,
+            chunks_done: row.chunks_done.unwrap_or_default(),
+            metadata: row.metadata,
+        })),
+        1 => Ok(SubmissionStatus::Completed(SubmissionCompleted {
+            id: row.id,
+            chunks_done: row.chunks_done.unwrap_or_default(),
+            metadata: row.metadata,
+            completed_at: row.completed_at.unwrap_or_default(),
+        })),
+        2 => Ok(SubmissionStatus::Failed(SubmissionFailed {
+            id: row.id,
+            chunks_total: row.chunks_total,
+            metadata: row.metadata,
+            failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
+            failed_at: row.failed_at.unwrap_or_default(),
+        })),
         _ => Err(sqlx::Error::RowNotFound),
     }
 }
@@ -269,8 +296,11 @@ pub mod test {
 
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);
 
-        let (submission, chunks) =
-            Submission::from_vec(vec![Some("foo".into()), Some("bar".into()), Some("baz".into())], None).unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+        )
+        .unwrap();
         insert_submission(submission, chunks, &mut conn)
             .await
             .expect("insertion failed");
@@ -281,8 +311,11 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_get_submission(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let (submission, chunks) =
-            Submission::from_vec(vec![Some("foo".into()), Some("bar".into()), Some("baz".into())], None).unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+        )
+        .unwrap();
         insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");
@@ -294,8 +327,11 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_submission(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let (submission, chunks) =
-            Submission::from_vec(vec![Some("foo".into()), Some("bar".into()), Some("baz".into())], None).unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+        )
+        .unwrap();
         insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");
@@ -311,8 +347,11 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_fail_submission_raw(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let (submission, chunks) =
-            Submission::from_vec(vec![Some("foo".into()), Some("bar".into()), Some("baz".into())], None).unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+        )
+        .unwrap();
         insert_submission(submission.clone(), chunks, &mut conn)
             .await
             .expect("insertion failed");

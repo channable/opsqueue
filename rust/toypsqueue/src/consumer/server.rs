@@ -1,5 +1,5 @@
-pub mod state;
 pub mod conn;
+pub mod state;
 
-pub use state::ConsumerServerState;
 pub use conn::ClientConn;
+pub use state::ConsumerServerState;

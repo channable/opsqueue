@@ -1,20 +1,15 @@
+pub mod client;
 pub mod common;
 pub mod reserver;
-pub mod strategy;
 pub mod server;
-pub mod client;
+pub mod strategy;
 
-use std::time::Duration;
-
-use futures::{SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{SinkExt, StreamExt};
 use http::Uri;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio_websockets::{ClientBuilder, Message, ServerBuilder, WebSocketStream};
 
-use crate::common::chunk::Chunk;
-use strategy::Strategy;
-use reserver::Reserver;
 // pub async fn reserve_chunks(desired_chunks: impl IntoIterator<Item = Chunk>, cleanup_fun: CleanupFun<Chunk>, reserver: &Reserver<i64, Chunk>) -> Vec<Chunk>
 // {
 //     let res = desired_chunks.into_iter().map(|chunk| {
@@ -103,7 +98,6 @@ pub async fn run_consumer_client() -> anyhow::Result<()> {
 
     Ok(())
 }
-
 
 // #[tokio::test(flavor = "multi_thread")]
 // async fn ping_pong() {

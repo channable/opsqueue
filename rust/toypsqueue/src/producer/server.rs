@@ -1,5 +1,4 @@
-use crate::common::chunk::Chunk;
-use crate::common::submission::{self, Metadata, Submission};
+use crate::common::submission::{self, Metadata};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -21,10 +20,10 @@ impl ServerState {
         ServerState { pool }
     }
     pub async fn serve(self, server_addr: Box<str>) {
-
         let app = Router::new()
             .route("/submissions", post(insert_submission))
-            .route( // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
+            .route(
+                // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
                 "/submissions/count_completed",
                 get(submissions_count_completed),
             )
@@ -41,7 +40,10 @@ impl ServerState {
 }
 
 pub async fn serve(database_filename: &str, server_addr: Box<str>) {
-  ServerState::new(database_filename).await.serve(server_addr).await;
+    ServerState::new(database_filename)
+        .await
+        .serve(server_addr)
+        .await;
 }
 // Make our own error that wraps `anyhow::Error`.
 struct ServerError(anyhow::Error);
@@ -75,10 +77,11 @@ async fn insert_submission(
 ) -> Result<Json<InsertSubmissionResponse>, ServerError> {
     let mut conn = state.pool.acquire().await?;
 
-    let chunks_contents = (0..request.chunk_count)
-        .map(|_index| None).collect();
+    let chunks_contents = (0..request.chunk_count).map(|_index| None).collect();
 
-    let submission_id = submission::insert_submission_from_chunks(request.metadata, chunks_contents, &mut conn).await?;
+    let submission_id =
+        submission::insert_submission_from_chunks(request.metadata, chunks_contents, &mut conn)
+            .await?;
     Ok(Json(InsertSubmissionResponse { id: submission_id }))
 }
 

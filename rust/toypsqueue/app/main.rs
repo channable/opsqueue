@@ -5,8 +5,9 @@
 use sqlx::{Acquire, SqlitePool};
 use tokio::task::JoinSet;
 use toypsqueue::{
-    common::chunk, db_connect_pool, ensure_db_exists, ensure_db_migrated,
+    common::chunk,
     common::submission::{self, Submission},
+    db_connect_pool, ensure_db_exists, ensure_db_migrated,
 };
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
@@ -40,9 +41,7 @@ async fn create_fake_submissions(
                     n, submission_size
                 );
                 let mut tx = conn.begin().await.unwrap();
-                let vec = (0..submission_size)
-                    .map(|_num| None)
-                    .collect();
+                let vec = (0..submission_size).map(|_num| None).collect();
                 let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
 
                 let _ = chunk::insert_many_chunks(chunks, &mut *tx).await;
