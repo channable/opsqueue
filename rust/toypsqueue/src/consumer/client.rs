@@ -9,6 +9,8 @@ use crate::common::chunk::Chunk;
 
 use super::{common::{ClientToServerMessage, Envelope, ServerToClientMessage}, strategy::Strategy};
 
+
+#[derive(Debug)]
 pub struct ClientInner {
     // ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     // web_socket_stream_handler: Mutex<WebSocketStreamHandler>,
@@ -20,19 +22,26 @@ pub struct ClientInner {
     in_flight_requests: Mutex<HashMap<usize, (ClientToServerMessage, oneshot::Sender<ServerToClientMessage>)>>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Client(Arc<ClientInner>);
 
 impl Client {
-    pub async fn new(url: &str) -> anyhow::Result<Self> {
+    pub async fn build_and_run(url: &str) -> anyhow::Result<Self> {
         let uri = Uri::from_str(url)?;
         let in_flight_requests = Mutex::new(HashMap::new());
 
         let (ws_stream, _resp) = ClientBuilder::from_uri(uri).connect().await?;
         let (web_socket_stream_handler, rx, tx) = WebSocketStreamHandler::new(ws_stream).await;
 
-        tokio::spawn(web_socket_stream_handler.run());
 
-        Ok(Client(Arc::new(ClientInner { rx: Mutex::new(rx), tx, in_flight_requests})))
+        let me = Client(Arc::new(ClientInner { rx: Mutex::new(rx), tx, in_flight_requests}));
+        tokio::spawn(web_socket_stream_handler.run());
+        tokio::spawn({
+            let me = me.clone();
+            async move { me.run_in_background().await }
+        });
+
+        Ok(me)
     }
 
     pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> anyhow::Result<Vec<Chunk>> {
@@ -53,7 +62,7 @@ impl Client {
             let _ = self.0.tx.send(envelope.try_into()?);
         }
 
-        let resp = rx.try_recv()?;
+        let resp = rx.await?;
 
         Ok(resp)
     }
@@ -64,8 +73,11 @@ impl Client {
     pub async fn run_in_background(&self) -> anyhow::Result<()> {
 
         loop {
+            println!("Waiting for resp");
             let resp = self.0.rx.lock().await.recv().await;
+            dbg!(&resp);
             let mut in_flight_requests = self.0.in_flight_requests.lock().await;
+            dbg!(&in_flight_requests);
             match resp {
                 // Connection closed correctly
                 None if in_flight_requests.is_empty() => return Ok(()),
@@ -74,10 +86,9 @@ impl Client {
                 // Returning malformed data:
                 Some(Err(problem)) => return Err(problem.into()),
                 Some(Ok(msg)) => {
-                    let request_id = 42;
                     let val: Envelope<ServerToClientMessage> = msg.try_into()?;
-                    let (_request, response_channel) = in_flight_requests.remove(&val.nonce).ok_or(anyhow::anyhow!("No request found in in-flight requests; ID: {request_id:?}"))?;
-                    response_channel.send(val.contents).map_err(|err| anyhow::anyhow!("Cannot handle response {err:?}. Response receiver was already dropped; ID: {request_id:?}"))?;
+                    let (_request, response_channel) = in_flight_requests.remove(&val.nonce).ok_or(anyhow::anyhow!("No request found in in-flight requests; ID: {val:?}"))?;
+                    response_channel.send(val.contents).map_err(|err| anyhow::anyhow!("Cannot handle response {err:?}. Response receiver was already dropped"))?;
                 }
             }
         }
@@ -102,16 +113,19 @@ impl WebSocketStreamHandler {
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
+        println!("Websocket StreamHandler started");
+        loop {
+            println!("Iteration");
             select! {
                 Some(msg) = self.ws_stream.next() => {
-                    self.sender.send(msg).map_err(|_| anyhow::anyhow!("Sender closed unexpectedly"))
+                    self.sender.send(msg).map_err(|_| anyhow::anyhow!("Sender closed unexpectedly"))?
                 },
                 Some(msg) = self.receiver.recv() => {
-                    self.ws_stream.send(msg).await?;
-                    Ok(())
+                    self.ws_stream.send(msg).await?
                 },
-                else => anyhow::bail!("WebSocket connection or receiver closed unexpectedly"),
+                // else => anyhow::bail!("WebSocket connection or receiver closed unexpectedly"),
             }
+        }
     }
 }
 
@@ -127,8 +141,8 @@ mod tests {
 
     #[sqlx::test]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
-        let uri = "127.0.0.1:8081";
-        let ws_uri = "ws://127.0.0.1:8081";
+        let uri = "127.0.0.1:10082";
+        let ws_uri = "ws://127.0.0.1:10082";
 
         let mut conn = pool.acquire().await.unwrap();
         let input_chunks = vec![Some("a".into()), Some("b".into()), Some("c".into())];
@@ -136,13 +150,15 @@ mod tests {
 
         let _server_handle = tokio::spawn(ConsumerServerState::new(pool.clone(), Duration::from_secs(60), uri).await.run());
 
-        // yield_now().await;
+        yield_now().await;
 
 
-        let client = Client::new(ws_uri).await.unwrap();
+        let client = Client::build_and_run(ws_uri).await.unwrap();
+        println!("A");
 
         let chunks = client.reserve_chunks(3, Strategy::Oldest).await.unwrap();
+        println!("Hello");
 
-        assert_eq!(chunks, vec![]);
+        assert_eq!(chunks.iter().map(|c| c.input_content.clone()).collect::<Vec<Option<Vec<u8>>>>(), input_chunks);
     }
 }
