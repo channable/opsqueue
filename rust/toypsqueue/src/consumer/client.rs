@@ -7,7 +7,7 @@ use tokio_websockets::{ClientBuilder, MaybeTlsStream, WebSocketStream};
 
 use crate::common::chunk::Chunk;
 
-use super::{server::{ClientToServerMessage, ServerToClientMessage}, strategy::Strategy};
+use super::{common::{ClientToServerMessage, ServerToClientMessage}, strategy::Strategy};
 
 // TODO: Proper multiplexing of requests/responses
 // And with that, proper handling of expired reservations
