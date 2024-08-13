@@ -101,7 +101,15 @@ mod tests {
         let submission_id = client.insert_submission(&submission).await.expect("Should be OK");
 
         let status: SubmissionStatus = client.get_submission(submission_id).await.expect("Should be OK");
-
-        assert_eq!(status, SubmissionStatus::InProgress);
+        match status {
+            SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_) => {
+                panic!("Expected a SubmissionStatus that is still Inprogress, got: {:?}", status);
+            },
+            SubmissionStatus::InProgress(submission) => {
+                assert_eq!(submission.chunks_done, 0);
+                assert_eq!(submission.chunks_total, 3);
+                assert_eq!(submission.id, submission_id);
+            }
+        }
     }
 }

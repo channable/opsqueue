@@ -12,7 +12,7 @@ CREATE TABLE submissions_completed
     id BIGINT PRIMARY KEY NOT NULL,
     chunks_total INTEGER NOT NULL DEFAULT 0,
     metadata BLOB,
-    completed_at INTEGER NOT NULL -- Unix Timestamp
+    completed_at DATETIME NOT NULL -- Unix Timestamp
 );
 
 CREATE TABLE submissions_failed
@@ -21,5 +21,5 @@ CREATE TABLE submissions_failed
     chunks_total INTEGER NOT NULL DEFAULT 0,
     metadata BLOB,
     failed_chunk_id INTEGER NOT NULL, -- NOTE: There might in rare cases be multiple concurrent failures, but only one of them will be 'first' (ordered by who gets write access to the submissions table lock first), which is the one stored here.
-    failed_at INTEGER NOT NULL -- Unix Timestamp
+    failed_at DATETIME NOT NULL -- Unix Timestamp
 );

@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use super::chunk::{Chunk, ChunkURI};
@@ -6,12 +7,29 @@ pub type Metadata = Vec<u8>;
 
 static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
     pub id: i64,
     pub chunks_total: i64,
     pub chunks_done: i64,
     pub metadata: Option<Metadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionCompleted {
+    pub id: i64,
+    pub chunks_done: i64,
+    pub metadata: Option<Metadata>,
+    pub completed_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionFailed {
+    pub id: i64,
+    pub chunks_total: i64,
+    pub metadata: Option<Metadata>,
+    pub failed_at: NaiveDateTime,
+    pub failed_chunk_id: i64,
 }
 
 impl Default for Submission {
@@ -110,10 +128,17 @@ pub async fn get_submission(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SubmissionStatus {
+pub enum SubmissionStatusTag {
     InProgress,
     Completed,
     Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SubmissionStatus {
+    InProgress(Submission),
+    Completed(SubmissionCompleted),
+    Failed(SubmissionFailed)
 }
 
 /// TODO: Return exactly the info we have available on completed or failed
@@ -122,20 +147,21 @@ pub async fn submission_status(
     conn: impl SqliteExecutor<'_>,
 ) -> sqlx::Result<SubmissionStatus> {
     let row = query!("
-        SELECT 0 as status, chunks_done, chunks_total FROM submissions WHERE id = ?
+        SELECT 0 as status, id, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
         UNION ALL
-        SELECT 1 as status, chunks_total as chunks_done, chunks_total FROM submissions_completed WHERE id = ?
+        SELECT 1 as status, id, NULL as chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, completed_at FROM submissions_completed WHERE id = ?
         UNION ALL
-        SELECT 2 as status, chunks_total as chunks_done, chunks_total FROM submissions_failed WHERE id = ?
+        SELECT 2 as status, id, NULL as chunks_done, chunks_total, metadata, failed_chunk_id, failed_at, NULL as completed_at FROM submissions_failed WHERE id = ?
     ",
     id,
     id,
     id,
     ).fetch_one(conn).await?;
     match row.status {
-        0 => Ok(SubmissionStatus::InProgress),
-        1 => Ok(SubmissionStatus::Completed),
-        2 => Ok(SubmissionStatus::Failed),
+        // TODO: Cleaner error handling than unwrap_or_default
+        0 => Ok(SubmissionStatus::InProgress(Submission{id: row.id, chunks_total: row.chunks_total, chunks_done: row.chunks_done.unwrap_or_default(), metadata: row.metadata})),
+        1 => Ok(SubmissionStatus::Completed(SubmissionCompleted{id: row.id, chunks_done: row.chunks_done.unwrap_or_default(), metadata: row.metadata, completed_at: row.completed_at.unwrap_or_default() })),
+        2 => Ok(SubmissionStatus::Failed(SubmissionFailed{id: row.id, chunks_total: row.chunks_total, metadata: row.metadata, failed_chunk_id: row.failed_chunk_id.unwrap_or_default(), failed_at: row.failed_at.unwrap_or_default()})),
         _ => Err(sqlx::Error::RowNotFound),
     }
 }
