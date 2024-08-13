@@ -41,7 +41,7 @@ async fn create_fake_submissions(
                 );
                 let mut tx = conn.begin().await.unwrap();
                 let vec = (0..submission_size)
-                    .map(|num| format!("{}", num).into())
+                    .map(|_num| None)
                     .collect();
                 let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
 

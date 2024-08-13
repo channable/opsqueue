@@ -61,7 +61,7 @@ mod tests {
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
-        submission::insert_submission_from_chunks(None, vec!["foo".into(), "bar".into(), "baz".into()], &mut conn).await.expect("Insertion failed");
+        submission::insert_submission_from_chunks(None, vec![None, None, None], &mut conn).await.expect("Insertion failed");
 
         let count = client.count_submissionns().await.expect("Should be OK");
         assert_eq!(count, 1);

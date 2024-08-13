@@ -6,25 +6,25 @@ use serde::{Deserialize, Serialize};
 use sqlx::query_as;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 
-pub type ChunkURI = Vec<u8>;
+pub type Content = Option<Vec<u8>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Chunk {
     pub submission_id: i64,
     pub id: i64,
-    pub input_content: ChunkURI,
+    pub input_content: Content,
     pub retries: i64,
 }
 
 pub struct ChunkCompleted {
     pub submission_id: i64,
     pub id: i64,
-    pub output_content: ChunkURI,
+    pub output_content: Content,
     pub completed_at: NaiveDateTime,
 }
 
 impl Chunk {
-    pub fn new(submission_id: i64, chunk_index: u32, uri: ChunkURI) -> Self {
+    pub fn new(submission_id: i64, chunk_index: u32, uri: Content) -> Self {
         Chunk {
             submission_id,
             id: chunk_index as i64,
@@ -220,7 +220,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
+        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
 
         assert!(count_chunks(&db).await.unwrap() == 0);
         insert_chunk(chunk.clone(), &db)
@@ -231,7 +231,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
+        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
         insert_chunk(chunk.clone(), &db)
             .await
             .expect("Insert chunk failed");
@@ -246,7 +246,7 @@ pub mod test {
     pub async fn test_complete_chunk(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
 
-        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
+        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await
@@ -267,7 +267,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5]);
+        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await
