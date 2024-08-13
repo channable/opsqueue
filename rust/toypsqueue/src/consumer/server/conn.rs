@@ -8,7 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_websockets::{Message, WebSocketStream};
 
 use crate::common::chunk::Chunk;
-use crate::consumer::common::{ClientToServerMessage, ServerToClientMessage};
+use crate::consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
 
 #[derive(Debug)]
 pub enum ClientConnError {
@@ -116,16 +116,18 @@ impl ClientConn {
     // Deals with app-specific messages arrived through the Websocket connection.
     async fn handle_incoming_client_msg(
         &mut self,
-        msg: ClientToServerMessage,
+        msg: Envelope<ClientToServerMessage>,
     ) -> Result<(), ClientConnError> {
-        match msg {
+        match msg.contents {
             ClientToServerMessage::WantToReserveChunks { max, strategy } => {
                 let chunks = self
                     .server_state
                     .fetch_and_reserve_chunks(strategy, max, &self.tx)
                     .await?;
+
+                let response = Envelope{nonce: msg.nonce, contents: ServerToClientMessage::ChunksReserved(chunks)  };
                 self.ws_stream
-                    .send(ServerToClientMessage::ChunksReserved(chunks).try_into()?)
+                    .send(response.try_into()?)
                     .await?;
             }
         }
@@ -188,8 +190,8 @@ mod tests {
                     .await
                     .expect("Should not be closed")
                     .expect("Should receive a message");
-                let data: ServerToClientMessage = msg.try_into().unwrap();
-                match data {
+                let data: Envelope<ServerToClientMessage> = msg.try_into().unwrap();
+                match data.contents {
                     ServerToClientMessage::ChunksReserved(chunks) => {
                         assert_eq!(chunks.len(), 4);
                         assert_eq!(
@@ -212,10 +214,10 @@ mod tests {
             .await
             .unwrap();
 
-        conn.handle_incoming_client_msg(ClientToServerMessage::WantToReserveChunks {
+        conn.handle_incoming_client_msg(Envelope{nonce: 0, contents: ClientToServerMessage::WantToReserveChunks {
             max: 10,
             strategy: Strategy::Oldest,
-        })
+        }})
         .await
         .unwrap();
 

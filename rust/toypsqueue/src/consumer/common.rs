@@ -22,25 +22,31 @@ pub enum ServerToClientMessage {
     },
 }
 
-impl TryFrom<Message> for ClientToServerMessage {
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct Envelope<T> {
+    pub nonce: usize,
+    pub contents: T,
+}
+
+impl TryFrom<Message> for Envelope<ClientToServerMessage> {
     type Error = ciborium::de::Error<std::io::Error>;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         let msg: Bytes = value.into_payload().into();
-        let me: ClientToServerMessage = ciborium::from_reader(msg.reader())?;
+        let me: Envelope<ClientToServerMessage> = ciborium::from_reader(msg.reader())?;
         Ok(me)
     }
 }
 
-impl TryFrom<Message> for ServerToClientMessage {
+impl TryFrom<Message> for Envelope<ServerToClientMessage> {
     type Error = ciborium::de::Error<std::io::Error>;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         let msg: Bytes = value.into_payload().into();
-        let me: ServerToClientMessage = ciborium::from_reader(msg.reader())?;
+        let me: Envelope<ServerToClientMessage> = ciborium::from_reader(msg.reader())?;
         Ok(me)
     }
 }
 
-impl TryInto<Message> for ServerToClientMessage {
+impl TryInto<Message> for Envelope<ServerToClientMessage> {
     type Error = ciborium::ser::Error<std::io::Error>;
     fn try_into(self) -> Result<Message, Self::Error> {
         let mut writer = BytesMut::new().writer();
@@ -50,7 +56,7 @@ impl TryInto<Message> for ServerToClientMessage {
     }
 }
 
-impl TryInto<Message> for ClientToServerMessage {
+impl TryInto<Message> for Envelope<ClientToServerMessage> {
     type Error = ciborium::ser::Error<std::io::Error>;
     fn try_into(self) -> Result<Message, Self::Error> {
         let mut writer = BytesMut::new().writer();
