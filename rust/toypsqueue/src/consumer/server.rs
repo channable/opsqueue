@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -23,17 +24,17 @@ use super::reserver::Reserver;
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
     pool: sqlx::SqlitePool,
-    // reservation_expiration: Duration,
     reserver: Reserver<i64, Chunk>,
+    server_addr: Arc<str>,
 }
 
 impl ConsumerServerState {
-    pub async fn new(pool: sqlx::SqlitePool, reservation_expiration: Duration) -> Self {
+    pub async fn new(pool: sqlx::SqlitePool, reservation_expiration: Duration, server_addr: &str) -> Self {
         let reserver = Reserver::new(reservation_expiration);
         ConsumerServerState {
             pool,
             reserver,
-            // reservation_expiration,
+            server_addr: Arc::from(server_addr)
         }
     }
 
@@ -73,56 +74,16 @@ impl ConsumerServerState {
 
     pub async fn run(self) -> anyhow::Result<()> {
         println!("Running server");
-        let listener = TcpListener::bind("127.0.0.1:3333").await?;
+        let listener = TcpListener::bind(&*self.server_addr).await?;
         println!("Listener listens");
         while let Ok((stream, _)) = listener.accept().await {
             println!("Opening new connection");
             let ws_stream = ServerBuilder::new().accept(stream).await?;
             println!("Stream made");
-            let (tx, rx) = tokio::sync::mpsc::channel(8);
-            tokio::spawn(self.run_conn(ws_stream, rx));
-            tx.send(42).await?;
-            tx.send(69).await?;
-            todo!()
-            // store tx for later use
+            let conn = ClientConn::new(self.clone(), ws_stream);
+            tokio::spawn(conn.run());
         }
         Ok(())
-    }
-
-    pub async fn run_conn(
-        self,
-        mut consumer_conn: WebSocketStream<TcpStream>,
-        mut receiver: tokio::sync::mpsc::Receiver<usize>,
-    ) -> anyhow::Result<()> {
-        println!("Server runs consumer conn");
-        let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(5));
-
-        loop {
-            tokio::select! {
-                val = consumer_conn.next() => {
-                    match val {
-                        None => break,
-                        Some(Err(_)) => break,
-                        Some(Ok(msg)) => {
-                            if msg.is_text() {
-                                let x: &str = msg.as_text().unwrap();
-                                println!("Server received: {x:?}");
-                                consumer_conn.send(Message::text(format!("{x}!"))).await?;
-                            }
-                        }
-                    }
-                },
-                Some(val) = receiver.recv() => {
-                    println!("Received message from app: {val:?}");
-                    consumer_conn.send(Message::text(format!("{val}!"))).await?;
-                }
-                _ = heartbeat_interval.tick() => {
-                    println!("Tick");
-                }
-            }
-        }
-        Ok(())
-
     }
 }
 
@@ -141,6 +102,44 @@ pub struct ClientConn {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
   WantToReserveChunks{max: usize, strategy: Strategy},
+}
+
+impl TryFrom<Message> for ClientToServerMessage {
+    type Error = ciborium::de::Error<std::io::Error>;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        let msg: Bytes = value.into_payload().into();
+        let me: ClientToServerMessage = ciborium::from_reader(msg.reader())?;
+        Ok(me)
+    }
+}
+
+impl TryFrom<Message> for ServerToClientMessage {
+    type Error = ciborium::de::Error<std::io::Error>;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        let msg: Bytes = value.into_payload().into();
+        let me: ServerToClientMessage = ciborium::from_reader(msg.reader())?;
+        Ok(me)
+    }
+}
+
+impl TryInto<Message> for ServerToClientMessage {
+    type Error = ciborium::ser::Error<std::io::Error>;
+    fn try_into(self) -> Result<Message, Self::Error> {
+        let mut writer = BytesMut::new().writer();
+        ciborium::into_writer(&self, &mut writer)?;
+        let msg = Message::binary(writer.into_inner());
+        Ok(msg)
+    }
+}
+
+impl TryInto<Message> for ClientToServerMessage {
+    type Error = ciborium::ser::Error<std::io::Error>;
+    fn try_into(self) -> Result<Message, Self::Error> {
+        let mut writer = BytesMut::new().writer();
+        ciborium::into_writer(&self, &mut writer)?;
+        let msg = Message::binary(writer.into_inner());
+        Ok(msg)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -228,9 +227,7 @@ impl ClientConn {
         // App-specific messages:
         // TODO extract deserializing to helper function on ClientToServerMessage
         if msg.is_binary() {
-            let msg: Bytes = msg.into_payload().into();
-            let msg: ClientToServerMessage = ciborium::from_reader(msg.reader())?;
-            self.handle_incoming_client_msg(msg).await?;
+            self.handle_incoming_client_msg(msg.try_into()?).await?;
         }
 
         Ok(())
@@ -241,12 +238,7 @@ impl ClientConn {
         match msg {
             ClientToServerMessage::WantToReserveChunks { max, strategy } => {
                 let chunks = self.server_state.fetch_and_reserve_chunks(strategy, max, &self.tx).await?;
-
-                // TODO extract serializing to helper function on ServerToClientMessage
-                let mut writer = BytesMut::new().writer();
-                ciborium::into_writer(&ServerToClientMessage::ChunksReserved(chunks), &mut writer)?;
-                let msg = Message::binary(writer.into_inner());
-                self.ws_stream.send(msg).await?;
+                self.ws_stream.send(ServerToClientMessage::ChunksReserved(chunks).try_into()?).await?;
             }
         }
 
@@ -284,7 +276,9 @@ mod tests {
             }
         });
 
-        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1)).await;
+        let url = "http://localhost:3333";
+
+        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), url).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let zero = Chunk::new(1, 0, vec![1, 2, 3]);
         let one = Chunk::new(1, 1, vec![1, 2, 3]);
