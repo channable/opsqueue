@@ -42,6 +42,7 @@ impl From<ciborium::ser::Error<std::io::Error>> for ClientConnError {
     }
 }
 
+#[derive(Debug)]
 pub struct ClientConn {
     // Websocket stream with which we communicate with the client
     ws_stream: WebSocketStream<TcpStream>,
@@ -59,7 +60,7 @@ impl ClientConn {
         ws_stream: WebSocketStream<TcpStream>,
     ) -> Self {
         // TODO: make interval configurable
-        let heartbeat_interval = tokio::time::interval(Duration::from_secs(1));
+        let heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
@@ -73,10 +74,12 @@ impl ClientConn {
     }
 
     pub async fn run(mut self) -> Result<(), ClientConnError> {
+        println!("Run!");
         loop {
+            println!("Loop iter");
             select! {
                 msg = self.ws_stream.next() => {
-                    match msg {
+                    match dbg!(msg) {
                         // Socket closed (normal connection close)
                         None => return Ok(()),
                         // Socket had a problem (protocol violation, sending too much data, closed, etc.)
@@ -89,13 +92,15 @@ impl ClientConn {
                     // TODO
                     todo!("Server wants to send someting to client: {msg:?}");
                 },
-                _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
+                // _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
         }
     }
 
     // Deals with any message arrived through the Websocket connection.
     async fn handle_incoming_msg(&mut self, msg: Message) -> Result<(), ClientConnError> {
+        dbg!(&msg);
+        dbg!(&self);
         self.heartbeat_interval.reset();
         self.heartbeats_missed = 0;
 
