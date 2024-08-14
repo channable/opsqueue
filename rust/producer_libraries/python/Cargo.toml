@@ -9,7 +9,8 @@ name = "opsqueue_producer"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.22.0"
+pyo3 = { version = "0.22.0", features = ["chrono"] }
 # pyo3-asyncio = { version = "0.22", features = ["attributes", "tokio-runtime"] }
 tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
+chrono = { version = "0.4.38"}
 toypsqueue = { path = "../../toypsqueue/"}
