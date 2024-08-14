@@ -50,7 +50,7 @@ struct ServerError(anyhow::Error);
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(self.0.to_string())).into_response()
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(format!("{:?}", self.0))).into_response()
     }
 }
 
@@ -66,9 +66,13 @@ where
 async fn submission_status(
     State(state): State<ServerState>,
     Path(submission_id): Path<i64>,
-) -> Result<Json<submission::SubmissionStatus>, ServerError> {
-    let status = submission::submission_status(submission_id, &state.pool).await?;
-    Ok(Json(status))
+) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
+    let status = submission::submission_status(submission_id, &state.pool).await;
+    match status {
+        Ok(status) => Ok(Json(Some(status))),
+        Err(sqlx::Error::RowNotFound) => Ok(Json(None)),
+        Err(other) => Err(ServerError::from(other)),
+    }
 }
 
 async fn insert_submission(

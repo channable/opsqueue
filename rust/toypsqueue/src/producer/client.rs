@@ -2,16 +2,17 @@ use crate::common::submission::SubmissionStatus;
 
 use super::server::{InsertSubmission, InsertSubmissionResponse};
 
+#[derive(Debug, Clone)]
 pub struct Client {
     endpoint_url: Box<str>,
     http_client: reqwest::Client,
 }
 
 impl Client {
-    pub fn new(endpoint_url: Box<str>) -> Self {
+    pub fn new(endpoint_url: &str) -> Self {
         let http_client = reqwest::Client::new();
         Client {
-            endpoint_url,
+            endpoint_url: endpoint_url.into(),
             http_client,
         }
     }
@@ -38,7 +39,7 @@ impl Client {
             .json(submission)
             .send()
             .await?;
-        dbg!(&resp);
+        // dbg!(&resp);
         let body: InsertSubmissionResponse = resp.json().await?;
         Ok(body.id)
     }
@@ -46,16 +47,22 @@ impl Client {
     pub async fn get_submission(
         &self,
         submission_id: i64,
-    ) -> Result<SubmissionStatus, reqwest::Error> {
+    ) -> Result<Option<SubmissionStatus>, anyhow::Error> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
             .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
             .send()
             .await?;
-        dbg!(&resp);
-        let body: SubmissionStatus = resp.json().await?;
-        Ok(body)
+        // dbg!(&resp);
+        if resp.status().is_success() {
+            let body: Option<SubmissionStatus> = resp.json().await.map_err(|err| {dbg!(err) })?;
+            Ok(body)
+        } else {
+            let body: String = resp.text().await?;
+            dbg!(&body);
+            anyhow::bail!(body)
+        }
     }
 }
 
@@ -76,7 +83,7 @@ mod tests {
     #[sqlx::test]
     async fn test_count_submissions(pool: sqlx::SqlitePool) {
         // TODO: Instead of hard-coded ports, it would be nice if the server could run on a Unix domain socket when testing
-        let url: Box<str> = Box::from("0.0.0.0:3999");
+        let url = "0.0.0.0:3999";
         start_server_in_background(&pool, &url).await;
         let client = Client::new(url);
 
@@ -94,7 +101,7 @@ mod tests {
 
     #[sqlx::test]
     async fn test_insert_submission(pool: sqlx::SqlitePool) {
-        let url: Box<str> = Box::from("0.0.0.0:4000");
+        let url = "0.0.0.0:4000";
         start_server_in_background(&pool, &url).await;
         let client = Client::new(url);
 
@@ -139,7 +146,7 @@ mod tests {
 
     #[sqlx::test]
     async fn test_get_submission(pool: sqlx::SqlitePool) {
-        let url: Box<str> = Box::from("0.0.0.0:4001");
+        let url = "0.0.0.0:4001";
         start_server_in_background(&pool, &url).await;
         let client = Client::new(url);
 
@@ -156,7 +163,8 @@ mod tests {
         let status: SubmissionStatus = client
             .get_submission(submission_id)
             .await
-            .expect("Should be OK");
+            .expect("Should be OK")
+            .expect("Should be Some");
         match status {
             SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_) => {
                 panic!(

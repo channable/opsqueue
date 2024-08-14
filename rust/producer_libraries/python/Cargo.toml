@@ -1,12 +1,15 @@
 [package]
-name = "python"
+name = "opsqueue_producer"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "python"
+name = "opsqueue_producer"
 crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.22.0"
+# pyo3-asyncio = { version = "0.22", features = ["attributes", "tokio-runtime"] }
+tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
+toypsqueue = { path = "../../toypsqueue/"}
