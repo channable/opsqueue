@@ -92,7 +92,7 @@ impl ClientConn {
                     // TODO
                     todo!("Server wants to send someting to client: {msg:?}");
                 },
-                // _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
+                _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
         }
     }

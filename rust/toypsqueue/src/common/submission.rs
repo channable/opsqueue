@@ -153,12 +153,11 @@ pub enum SubmissionStatus {
     Failed(SubmissionFailed),
 }
 
-/// TODO: Return exactly the info we have available on completed or failed
 pub async fn submission_status(
     id: i64,
     conn: impl SqliteExecutor<'_>,
-) -> sqlx::Result<SubmissionStatus> {
-    let row = query!("
+) -> sqlx::Result<Option<SubmissionStatus>> {
+    let maybe_row = query!("
         SELECT 0 as status, id, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
         UNION ALL
         SELECT 1 as status, id, NULL as chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, completed_at FROM submissions_completed WHERE id = ?
@@ -168,30 +167,35 @@ pub async fn submission_status(
     id,
     id,
     id,
-    ).fetch_one(conn).await?;
-    match row.status {
-        // TODO: Cleaner error handling than unwrap_or_default
-        0 => Ok(SubmissionStatus::InProgress(Submission {
-            id: row.id,
-            chunks_total: row.chunks_total,
-            chunks_done: row.chunks_done.unwrap_or_default(),
-            metadata: row.metadata,
-        })),
-        1 => Ok(SubmissionStatus::Completed(SubmissionCompleted {
-            id: row.id,
-            chunks_done: row.chunks_done.unwrap_or_default(),
-            metadata: row.metadata,
-            completed_at: row.completed_at.unwrap_or_default(),
-        })),
-        2 => Ok(SubmissionStatus::Failed(SubmissionFailed {
-            id: row.id,
-            chunks_total: row.chunks_total,
-            metadata: row.metadata,
-            failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
-            failed_at: row.failed_at.unwrap_or_default(),
-        })),
-        _ => Err(sqlx::Error::RowNotFound),
-    }
+    ).fetch_one(conn).await;
+    match maybe_row {
+        Err(sqlx::Error::RowNotFound) => Ok(None),
+        Err(other) => Err(other),
+        Ok(row) =>
+            match row.status {
+                // TODO: Cleaner error handling than unwrap_or_default
+                0 => Ok(Some(SubmissionStatus::InProgress(Submission {
+                    id: row.id,
+                    chunks_total: row.chunks_total,
+                    chunks_done: row.chunks_done.unwrap_or_default(),
+                    metadata: row.metadata,
+                }))),
+                1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
+                    id: row.id,
+                    chunks_done: row.chunks_done.unwrap_or_default(),
+                    metadata: row.metadata,
+                    completed_at: row.completed_at.unwrap_or_default(),
+                }))),
+                2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
+                    id: row.id,
+                    chunks_total: row.chunks_total,
+                    metadata: row.metadata,
+                    failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
+                    failed_at: row.failed_at.unwrap_or_default(),
+                }))),
+                idx => Err(sqlx::Error::ColumnIndexOutOfBounds { index: 0, len: idx as usize }),
+            }
+        }
 }
 
 pub async fn complete_submission(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
@@ -285,8 +289,25 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
     Ok(count.count)
 }
 
+/// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
+/// 
+/// Submissions/chunks that are neither failed nor completed are not touched.
+pub async fn cleanup_old(conn: &mut SqliteConnection, older_than: NaiveDateTime) -> sqlx::Result<()> {
+    query!("SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
+    query!("DELETE FROM submissions_completed WHERE completed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+    query!("DELETE FROM submissions_failed WHERE failed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+
+    query!("DELETE FROM chunks_completed WHERE completed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+    query!("DELETE FROM chunks_failed WHERE failed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+
+    query!("RELEASE SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub mod test {
+
+    use chrono::Utc;
 
     use super::*;
 
@@ -363,5 +384,39 @@ pub mod test {
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);
         assert!(count_submissions_completed(&mut *conn).await.unwrap() == 0);
         assert!(count_submissions_failed(&mut *conn).await.unwrap() == 1);
+    }
+
+    #[sqlx::test]
+    pub async fn test_cleanup_old(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+
+        let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
+        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let old_four_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+
+        fail_submission(old_one, 0, "Broken one".into(), &mut conn).await.unwrap();
+        fail_submission(old_two, 0, "Broken two".into(), &mut conn).await.unwrap();
+        fail_submission(old_three, 0, "Broken three".into(), &mut conn).await.unwrap();
+
+        let cutoff_timestamp = Utc::now().naive_utc();
+
+        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let too_new_two_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+
+        fail_submission(too_new_one, 0, "Broken new one".into(), &mut conn).await.unwrap();
+        fail_submission(too_new_three, 0, "Broken new three".into(), &mut conn).await.unwrap();
+
+        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(),  5);
+
+        cleanup_old(&mut conn, cutoff_timestamp).await.unwrap();
+
+        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
+
+        let sub1 = submission_status(old_four_unfailed, &mut *conn).await;
+        let sub2 = submission_status(old_four_unfailed, &mut *conn).await;
+
     }
 }
