@@ -5,15 +5,19 @@
 use sqlx::{Acquire, SqlitePool};
 use tokio::task::JoinSet;
 use toypsqueue::{
-    chunk, db_connect_pool, ensure_db_exists, ensure_db_migrated,
-    submission::{self, Submission},
+    common::chunk,
+    common::submission::{self, Submission},
+    db_connect_pool, ensure_db_exists, ensure_db_migrated,
 };
+
+pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
 #[tokio::main]
 async fn main() {
-    ensure_db_exists().await;
+    let database_filename = DATABASE_FILENAME;
+    ensure_db_exists(database_filename).await;
 
-    let db = db_connect_pool().await;
+    let db = db_connect_pool(database_filename).await;
     ensure_db_migrated(&db).await;
 
     // Play with the numbers here to see how this affects Sqlite write performance
@@ -37,13 +41,11 @@ async fn create_fake_submissions(
                     n, submission_size
                 );
                 let mut tx = conn.begin().await.unwrap();
-                let vec = (0..submission_size)
-                    .map(|num| format!("{}", num).into())
-                    .collect();
+                let vec = (0..submission_size).map(|_num| None).collect();
                 let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
 
-                let _ = chunk::insert_many_chunks(&chunks, &mut *tx).await;
-                let _ = submission::insert_submission(submission, &mut *tx).await;
+                let _ = chunk::insert_many_chunks(chunks, &mut *tx).await;
+                let _ = submission::insert_submission_raw(submission, &mut *tx).await;
 
                 tx.commit().await.unwrap();
                 println!("{i}: Submitted submission {n}");
