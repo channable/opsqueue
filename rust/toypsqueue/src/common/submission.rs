@@ -198,11 +198,25 @@ pub async fn submission_status(
         }
 }
 
-pub async fn complete_submission(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+pub async fn maybe_complete_submission(id: i64, conn: &mut SqliteConnection) -> sqlx::Result<bool> {
+    query!("SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
+    let submission = get_submission(id, &mut *conn).await?;
+    let res = if submission.chunks_done == submission.chunks_total {
+        complete_submission_raw(id, &mut *conn).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    };
+    query!("RELEASE SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
+    res
+}
+
+/// TODO: Should only do the actual work iff chunks_done === chunks_total.
+pub async fn complete_submission_raw(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!(
         "
-    SAVEPOINT complete_submission;
+    SAVEPOINT complete_submission_raw;
 
     INSERT INTO submissions_completed
     (id, chunks_total, metadata, completed_at)
@@ -210,7 +224,7 @@ pub async fn complete_submission(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx
 
     DELETE FROM submissions WHERE id = ? RETURNING *;
 
-    RELEASE SAVEPOINT complete_submission;
+    RELEASE SAVEPOINT complete_submission_raw;
     ",
         now,
         id,
@@ -346,7 +360,7 @@ pub mod test {
     }
 
     #[sqlx::test]
-    pub async fn test_complete_submission(db: sqlx::SqlitePool) {
+    pub async fn test_complete_submission_raw(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -357,7 +371,7 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        complete_submission(submission.id, &mut *conn)
+        complete_submission_raw(submission.id, &mut *conn)
             .await
             .unwrap();
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);

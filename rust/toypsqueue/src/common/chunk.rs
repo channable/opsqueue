@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use chrono::NaiveDateTime;
 
 use serde::{Deserialize, Serialize};
-use sqlx::query_as;
+use sqlx::{query_as, SqliteConnection};
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 
 pub type Content = Option<Vec<u8>>;
@@ -52,20 +52,39 @@ pub async fn insert_chunk(
 pub async fn complete_chunk(
     full_chunk_id: (i64, i64),
     output_content: Vec<u8>,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<()> {
+    query!("SAVEPOINT complete_chunk;").execute(&mut *conn).await?;
+
+    complete_chunk_raw(full_chunk_id, output_content, &mut *conn).await?;
+    super::submission::maybe_complete_submission(full_chunk_id.0, &mut *conn).await?;
+    query!("RELEASE SAVEPOINT complete_chunk;").execute(&mut *conn).await?;
+
+    Ok(())
+}
+
+/// TODO: Complete submission automatically when all chunks are completed
+pub async fn complete_chunk_raw(
+    full_chunk_id: (i64, i64),
+    output_content: Vec<u8>,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!("
-    SAVEPOINT complete_chunk;
+    SAVEPOINT complete_chunk_raw;
+
+    UPDATE submissions SET chunks_done = chunks_done + 1 WHERE id = ?;
 
     INSERT INTO chunks_completed 
     (submission_id, id, output_content, completed_at) 
     SELECT submission_id, id, ?, julianday(?) FROM chunks WHERE chunks.submission_id = ? AND chunks.id = ?;
 
-    DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.id = ? RETURNING *;
+    DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.id = ?;
 
-    RELEASE SAVEPOINT complete_chunk;
+
+    RELEASE SAVEPOINT complete_chunk_raw;
     ",
+    full_chunk_id.0,
     output_content, 
     now,
     full_chunk_id.0, 
@@ -216,6 +235,8 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 
 #[cfg(test)]
 pub mod test {
+    use crate::common::submission::SubmissionStatus;
+
     use super::*;
 
     #[sqlx::test]
@@ -243,7 +264,7 @@ pub mod test {
     }
 
     #[sqlx::test]
-    pub async fn test_complete_chunk(db: sqlx::SqlitePool) {
+    pub async fn test_complete_chunk_raw(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
 
         let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
@@ -251,7 +272,7 @@ pub mod test {
         insert_chunk(chunk.clone(), &mut *conn)
             .await
             .expect("Insert chunk failed");
-        complete_chunk(
+        complete_chunk_raw(
             (chunk.submission_id, chunk.id),
             vec![6, 7, 8, 9],
             &mut *conn,
@@ -262,6 +283,31 @@ pub mod test {
         assert!(count_chunks(&mut *conn).await.unwrap() == 0);
         assert!(count_chunks_completed(&mut *conn).await.unwrap() == 1);
         assert!(count_chunks_failed(&mut *conn).await.unwrap() == 0);
+    }
+
+    #[sqlx::test]
+    pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        let submission_id = crate::common::submission::insert_submission_from_chunks(None, vec![Some("first".into())], &mut *conn).await.unwrap();
+
+        assert!(count_chunks(&mut *conn).await.unwrap() == 1);
+
+        complete_chunk_raw(
+            (submission_id, 0),
+            vec![6, 7, 8, 9],
+            &mut *conn,
+        )
+        .await
+        .expect("complete chunk failed");
+
+        let submission_status = crate::common::submission::submission_status(submission_id, &mut *conn).await.unwrap().unwrap();
+        match dbg!(submission_status) {
+            SubmissionStatus::InProgress(submission) =>  {
+                assert_eq!(submission.chunks_done, 1);
+            }
+            _ => panic!("Expected InProgress"),
+
+        }
     }
 
     #[sqlx::test]
