@@ -198,6 +198,7 @@ pub async fn submission_status(
         }
 }
 
+/// Completes the submission, iff all chunks have been completed.
 pub async fn maybe_complete_submission(id: i64, conn: &mut SqliteConnection) -> sqlx::Result<bool> {
     query!("SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
     let submission = get_submission(id, &mut *conn).await?;

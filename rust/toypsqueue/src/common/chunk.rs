@@ -91,7 +91,7 @@ pub async fn complete_chunk_raw(
     full_chunk_id.1,
     full_chunk_id.0, 
     full_chunk_id.1,
-    ).fetch_one(conn).await?;
+    ).execute(conn).await?;
     Ok(())
 }
 
@@ -235,7 +235,7 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 
 #[cfg(test)]
 pub mod test {
-    use crate::common::submission::SubmissionStatus;
+    use crate::common::submission::{insert_submission_raw, Submission, SubmissionStatus};
 
     use super::*;
 
@@ -267,11 +267,17 @@ pub mod test {
     pub async fn test_complete_chunk_raw(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
 
-        let chunk = Chunk::new(1, 0, vec![1, 2, 3, 4, 5].into());
+        let mut submission = Submission::new();
+        submission.chunks_total = 1;
+        submission.id = Submission::generate_id();
+        let chunk = Chunk::new(submission.id, 0, vec![1, 2, 3, 4, 5].into());
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await
             .expect("Insert chunk failed");
+
+        insert_submission_raw(submission, &mut *conn).await.unwrap();
+
         complete_chunk_raw(
             (chunk.submission_id, chunk.id),
             vec![6, 7, 8, 9],
