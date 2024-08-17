@@ -111,11 +111,12 @@ mod tests {
 
         let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), url).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        let zero = Chunk::new(1, 0, None);
-        let one = Chunk::new(1, 1, None);
-        let two = Chunk::new(1, 2, None);
-        let three = Chunk::new(1, 3, None);
-        let four = Chunk::new(1, 4, None);
+        let submission_id = 1.into();
+        let zero = Chunk::new(submission_id, 0, None);
+        let one = Chunk::new(submission_id, 1, None);
+        let two = Chunk::new(submission_id, 2, None);
+        let three = Chunk::new(submission_id, 3, None);
+        let four = Chunk::new(submission_id, 4, None);
         let chunks = vec![
             zero.clone(),
             one.clone(),

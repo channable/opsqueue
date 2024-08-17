@@ -1,4 +1,4 @@
-use crate::common::submission::SubmissionStatus;
+use crate::common::submission::{SubmissionId, SubmissionStatus};
 
 use super::server::{InsertSubmission, InsertSubmissionResponse};
 
@@ -31,7 +31,7 @@ impl Client {
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
-    ) -> Result<i64, reqwest::Error> {
+    ) -> Result<SubmissionId, reqwest::Error> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -46,7 +46,7 @@ impl Client {
 
     pub async fn get_submission(
         &self,
-        submission_id: i64,
+        submission_id: SubmissionId,
     ) -> Result<Option<SubmissionStatus>, anyhow::Error> {
         let endpoint_url = &self.endpoint_url;
         let resp = self

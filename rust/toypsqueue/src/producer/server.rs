@@ -1,4 +1,4 @@
-use crate::common::submission::{self, Metadata};
+use crate::common::submission::{self, Metadata, SubmissionId};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -65,7 +65,7 @@ where
 
 async fn submission_status(
     State(state): State<ServerState>,
-    Path(submission_id): Path<i64>,
+    Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
     let status = submission::submission_status(submission_id, &state.pool).await?;
     Ok(Json(status))
@@ -94,7 +94,7 @@ pub struct InsertSubmission {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InsertSubmissionResponse {
-    pub id: i64,
+    pub id: SubmissionId,
 }
 
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {

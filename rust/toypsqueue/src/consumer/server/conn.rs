@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -52,6 +53,7 @@ pub struct ClientConn {
     tx: UnboundedSender<Chunk>,
     rx: UnboundedReceiver<Chunk>,
     server_state: super::state::ConsumerServerState,
+    // reservations: HashSet<(i64, i64)>,
 }
 
 impl ClientConn {
@@ -70,6 +72,7 @@ impl ClientConn {
             tx,
             rx,
             server_state,
+            // reservations: HashSet::new(),
         }
     }
 

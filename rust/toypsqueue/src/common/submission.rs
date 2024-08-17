@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::NaiveDateTime;
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
@@ -8,9 +10,51 @@ pub type Metadata = Vec<u8>;
 
 static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[repr(transparent)]
+pub struct SubmissionId(i64);
+
+impl Display for SubmissionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
+    fn encode(self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull
+        where
+            Self: Sized, {
+                <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+    }
+    fn encode_by_ref(&self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
+                <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+    }
+}
+
+impl From<i64> for SubmissionId {
+    fn from(value: i64) -> Self {
+        SubmissionId(value)
+    }
+}
+
+impl From<SubmissionId> for i64 {
+    fn from(value: SubmissionId) -> Self {
+        value.0
+    }
+}
+
+impl sqlx::Type<Sqlite> for SubmissionId {
+    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        <i64 as sqlx::Type<Sqlite>>::compatible(ty)
+    }
+    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+        <i64 as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
-    pub id: i64,
+    pub id: SubmissionId,
     pub chunks_total: i64,
     pub chunks_done: i64,
     pub metadata: Option<Metadata>,
@@ -42,15 +86,15 @@ impl Default for Submission {
 impl Submission {
     pub fn new() -> Self {
         Submission {
-            id: 0,
+            id: SubmissionId(0),
             chunks_total: 0,
             chunks_done: 0,
             metadata: None,
         }
     }
 
-    pub fn generate_id() -> i64 {
-        ID_GENERATOR.generate()
+    pub fn generate_id() -> SubmissionId {
+        SubmissionId(ID_GENERATOR.generate())
     }
 
     pub fn from_vec(
@@ -114,7 +158,7 @@ pub async fn insert_submission_from_chunks(
     metadata: Option<Metadata>,
     chunks_contents: Vec<chunk::Content>,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<i64> {
+) -> sqlx::Result<SubmissionId> {
     let submission_id = Submission::generate_id();
     let submission = Submission {
         id: submission_id,
@@ -131,7 +175,7 @@ pub async fn insert_submission_from_chunks(
 }
 
 pub async fn get_submission(
-    id: i64,
+    id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<Submission> {
     query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
@@ -154,7 +198,7 @@ pub enum SubmissionStatus {
 }
 
 pub async fn submission_status(
-    id: i64,
+    id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
 ) -> sqlx::Result<Option<SubmissionStatus>> {
     let maybe_row = query!("
@@ -175,7 +219,7 @@ pub async fn submission_status(
             match row.status {
                 // TODO: Cleaner error handling than unwrap_or_default
                 0 => Ok(Some(SubmissionStatus::InProgress(Submission {
-                    id: row.id,
+                    id: row.id.into(),
                     chunks_total: row.chunks_total,
                     chunks_done: row.chunks_done.unwrap_or_default(),
                     metadata: row.metadata,
@@ -199,7 +243,7 @@ pub async fn submission_status(
 }
 
 /// Completes the submission, iff all chunks have been completed.
-pub async fn maybe_complete_submission(id: i64, conn: &mut SqliteConnection) -> sqlx::Result<bool> {
+pub async fn maybe_complete_submission(id: SubmissionId, conn: &mut SqliteConnection) -> sqlx::Result<bool> {
     query!("SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
     let submission = get_submission(id, &mut *conn).await?;
     let res = if submission.chunks_done == submission.chunks_total {
@@ -213,7 +257,7 @@ pub async fn maybe_complete_submission(id: i64, conn: &mut SqliteConnection) -> 
 }
 
 /// TODO: Should only do the actual work iff chunks_done === chunks_total.
-pub async fn complete_submission_raw(id: i64, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+pub async fn complete_submission_raw(id: SubmissionId, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -237,7 +281,7 @@ pub async fn complete_submission_raw(id: i64, conn: impl SqliteExecutor<'_>) -> 
 }
 
 pub async fn fail_submission_raw(
-    id: i64,
+    id: SubmissionId,
     failed_chunk_id: i64,
     conn: impl SqliteExecutor<'_>,
 ) -> sqlx::Result<()> {
@@ -266,7 +310,7 @@ pub async fn fail_submission_raw(
 }
 
 pub async fn fail_submission(
-    id: i64,
+    id: SubmissionId,
     failed_chunk_id: i64,
     failure: Vec<u8>,
     conn: &mut SqliteConnection,
