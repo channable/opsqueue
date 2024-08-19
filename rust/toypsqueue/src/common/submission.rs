@@ -3,7 +3,7 @@ use std::fmt::Display;
 use chrono::NaiveDateTime;
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
-use super::chunk;
+use super::chunk::{self, ChunkIndex};
 use super::chunk::Chunk;
 
 pub type Metadata = Vec<u8>;
@@ -113,8 +113,8 @@ impl Submission {
             .into_iter()
             .enumerate()
             .map(|(chunk_index, uri)| {
-                // NOTE: we know that `len` fits in a u32 and therefore that the index fits in a u32 as well.
-                let chunk_index = chunk_index as u32;
+                // NOTE: we know that `len` fits in the unsigned 63-bit part of a i64 and therefore that the index fits it as well.
+                let chunk_index = (chunk_index as i64).into();
                 Chunk::new(submission_id, chunk_index, uri)
             })
             .collect();
@@ -169,7 +169,7 @@ pub async fn insert_submission_from_chunks(
     let iter = chunks_contents
         .into_iter()
         .enumerate()
-        .map(|(chunk_index, uri)| Chunk::new(submission_id, chunk_index as u32, uri));
+        .map(|(chunk_index, uri)| Chunk::new(submission_id, (chunk_index as i64).into(), uri));
     insert_submission(submission, iter, conn).await?;
     Ok(submission_id)
 }
@@ -282,7 +282,7 @@ pub async fn complete_submission_raw(id: SubmissionId, conn: impl SqliteExecutor
 
 pub async fn fail_submission_raw(
     id: SubmissionId,
-    failed_chunk_id: i64,
+    failed_chunk_id: ChunkIndex,
     conn: impl SqliteExecutor<'_>,
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
@@ -311,15 +311,15 @@ pub async fn fail_submission_raw(
 
 pub async fn fail_submission(
     id: SubmissionId,
-    failed_chunk_id: i64,
+    failed_chunk_index: ChunkIndex,
     failure: Vec<u8>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
     query!("SAVEPOINT fail_submission;")
         .execute(&mut *conn)
         .await?;
-    fail_submission_raw(id, failed_chunk_id, &mut *conn).await?;
-    super::chunk::fail_chunk((id, failed_chunk_id), failure, &mut *conn).await?;
+    fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
+    super::chunk::fail_chunk((id, failed_chunk_index), failure, &mut *conn).await?;
     super::chunk::skip_remaining_chunks(id, &mut *conn).await?;
     query!("RELEASE SAVEPOINT fail_submission;")
         .execute(&mut *conn)
@@ -437,7 +437,7 @@ pub mod test {
             .expect("insertion failed");
         let mut conn = db.acquire().await.unwrap();
 
-        fail_submission(submission.id, 1, vec![1, 2, 3], &mut conn)
+        fail_submission(submission.id, 1.into(), vec![1, 2, 3], &mut conn)
             .await
             .unwrap();
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);
@@ -455,18 +455,18 @@ pub mod test {
         let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
         let old_four_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
 
-        fail_submission(old_one, 0, "Broken one".into(), &mut conn).await.unwrap();
-        fail_submission(old_two, 0, "Broken two".into(), &mut conn).await.unwrap();
-        fail_submission(old_three, 0, "Broken three".into(), &mut conn).await.unwrap();
+        fail_submission(old_one, 0.into(), "Broken one".into(), &mut conn).await.unwrap();
+        fail_submission(old_two, 0.into(), "Broken two".into(), &mut conn).await.unwrap();
+        fail_submission(old_three, 0.into(), "Broken three".into(), &mut conn).await.unwrap();
 
         let cutoff_timestamp = Utc::now().naive_utc();
 
         let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let too_new_two_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let _too_new_two_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
         let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
 
-        fail_submission(too_new_one, 0, "Broken new one".into(), &mut conn).await.unwrap();
-        fail_submission(too_new_three, 0, "Broken new three".into(), &mut conn).await.unwrap();
+        fail_submission(too_new_one, 0.into(), "Broken new one".into(), &mut conn).await.unwrap();
+        fail_submission(too_new_three, 0.into(), "Broken new three".into(), &mut conn).await.unwrap();
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(),  5);
 
@@ -474,8 +474,8 @@ pub mod test {
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
 
-        let sub1 = submission_status(old_four_unfailed, &mut *conn).await;
-        let sub2 = submission_status(old_four_unfailed, &mut *conn).await;
+        let _sub1 = submission_status(old_four_unfailed, &mut *conn).await;
+        let _sub2 = submission_status(old_four_unfailed, &mut *conn).await;
 
     }
 }

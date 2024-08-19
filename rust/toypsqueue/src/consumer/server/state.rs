@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 
 use tokio_websockets::ServerBuilder;
 
-use crate::common::chunk::Chunk;
+use crate::common::chunk::{Chunk, ChunkId, ChunkIndex};
 use crate::consumer::reserver::Reserver;
 use crate::consumer::strategy::Strategy;
 
@@ -17,7 +17,7 @@ use crate::consumer::strategy::Strategy;
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
     pool: sqlx::SqlitePool,
-    reserver: Reserver<i64, Chunk>,
+    reserver: Reserver<ChunkId, Chunk>,
     pub server_addr: Arc<str>,
 }
 
@@ -48,9 +48,10 @@ impl ConsumerServerState {
     ) -> Result<Vec<Chunk>, sqlx::Error> {
         stream
             .try_filter_map(|chunk| async move {
+                let chunk_id = (chunk.submission_id, chunk.chunk_index);
                 Ok(self
                     .reserver
-                    .try_reserve(chunk.id, chunk, stale_chunks_notifier))
+                    .try_reserve(chunk_id, chunk, stale_chunks_notifier))
             })
             .take(limit)
             .try_collect()
@@ -112,11 +113,11 @@ mod tests {
         let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), url).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let submission_id = 1.into();
-        let zero = Chunk::new(submission_id, 0, None);
-        let one = Chunk::new(submission_id, 1, None);
-        let two = Chunk::new(submission_id, 2, None);
-        let three = Chunk::new(submission_id, 3, None);
-        let four = Chunk::new(submission_id, 4, None);
+        let zero = Chunk::new(submission_id, 0.into(), None);
+        let one = Chunk::new(submission_id, 1.into(), None);
+        let two = Chunk::new(submission_id, 2.into(), None);
+        let three = Chunk::new(submission_id, 3.into(), None);
+        let four = Chunk::new(submission_id, 4.into(), None);
         let chunks = vec![
             zero.clone(),
             one.clone(),
