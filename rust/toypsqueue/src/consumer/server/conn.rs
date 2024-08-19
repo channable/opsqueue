@@ -8,7 +8,7 @@ use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_websockets::{Message, WebSocketStream};
 
-use crate::common::chunk::Chunk;
+use crate::common::chunk::{Chunk, ChunkId};
 use crate::consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
 
 #[derive(Debug)]
@@ -50,10 +50,18 @@ pub struct ClientConn {
     heartbeat_interval: tokio::time::Interval,
     heartbeats_missed: usize,
     // Channel with which the rest of the server can send messages to this particular client
-    tx: UnboundedSender<Chunk>,
-    rx: UnboundedReceiver<Chunk>,
+    tx: UnboundedSender<ChunkId>,
+    rx: UnboundedReceiver<ChunkId>,
     server_state: super::state::ConsumerServerState,
-    // reservations: HashSet<(i64, i64)>,
+    reservations: HashSet<ChunkId>,
+}
+
+impl Drop for ClientConn {
+    fn drop(&mut self) {
+        for reservation in &self.reservations {
+            self.server_state.finish_reservation(reservation);
+        }
+    }
 }
 
 impl ClientConn {
@@ -72,7 +80,7 @@ impl ClientConn {
             tx,
             rx,
             server_state,
-            // reservations: HashSet::new(),
+            reservations: HashSet::new(),
         }
     }
 
@@ -132,6 +140,8 @@ impl ClientConn {
                     .server_state
                     .fetch_and_reserve_chunks(strategy, max, &self.tx)
                     .await?;
+
+                self.reservations.extend(chunks.iter().map(|c| (c.submission_id, c.chunk_index)));
 
                 let response = Envelope{nonce: msg.nonce, contents: ServerToClientMessage::ChunksReserved(chunks)  };
                 self.ws_stream

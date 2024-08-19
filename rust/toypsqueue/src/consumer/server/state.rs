@@ -17,7 +17,7 @@ use crate::consumer::strategy::Strategy;
 #[derive(Debug, Clone)]
 pub struct ConsumerServerState {
     pool: sqlx::SqlitePool,
-    reserver: Reserver<ChunkId, Chunk>,
+    reserver: Reserver<ChunkId, ChunkId>,
     pub server_addr: Arc<str>,
 }
 
@@ -44,14 +44,15 @@ impl ConsumerServerState {
         &self,
         stream: impl Stream<Item = Result<Chunk, sqlx::Error>>,
         limit: usize,
-        stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<Chunk>,
+        stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<Chunk>, sqlx::Error> {
         stream
             .try_filter_map(|chunk| async move {
                 let chunk_id = (chunk.submission_id, chunk.chunk_index);
                 Ok(self
                     .reserver
-                    .try_reserve(chunk_id, chunk, stale_chunks_notifier))
+                    .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
+                    .map(|_| chunk))
             })
             .take(limit)
             .try_collect()
@@ -62,7 +63,7 @@ impl ConsumerServerState {
         &self,
         strategy: Strategy,
         limit: usize,
-        stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<Chunk>,
+        stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<Chunk>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
@@ -88,6 +89,10 @@ impl ConsumerServerState {
             tokio::spawn(conn.run());
         }
         Ok(())
+    }
+
+    pub fn finish_reservation(&self, chunk_id: &ChunkId) {
+        self.reserver.finish_reservation(chunk_id);
     }
 }
 
