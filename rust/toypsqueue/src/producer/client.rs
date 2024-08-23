@@ -84,7 +84,7 @@ mod tests {
     async fn test_count_submissions(pool: sqlx::SqlitePool) {
         // TODO: Instead of hard-coded ports, it would be nice if the server could run on a Unix domain socket when testing
         let url = "0.0.0.0:3999";
-        start_server_in_background(&pool, &url).await;
+        start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
         let count = client.count_submissionns().await.expect("Should be OK");
@@ -102,7 +102,7 @@ mod tests {
     #[sqlx::test]
     async fn test_insert_submission(pool: sqlx::SqlitePool) {
         let url = "0.0.0.0:4000";
-        start_server_in_background(&pool, &url).await;
+        start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
         let count = submission::count_submissions(&pool)
@@ -147,7 +147,7 @@ mod tests {
     #[sqlx::test]
     async fn test_get_submission(pool: sqlx::SqlitePool) {
         let url = "0.0.0.0:4001";
-        start_server_in_background(&pool, &url).await;
+        start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
         let submission = InsertSubmission {

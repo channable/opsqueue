@@ -8,7 +8,7 @@ use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_websockets::{Message, WebSocketStream};
 
-use crate::common::chunk::{Chunk, ChunkId};
+use crate::common::chunk::{ChunkId};
 use crate::consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
 
 #[derive(Debug)]

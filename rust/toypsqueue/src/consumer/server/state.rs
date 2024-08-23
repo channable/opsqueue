@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 
 use tokio_websockets::ServerBuilder;
 
-use crate::common::chunk::{Chunk, ChunkId, ChunkIndex};
+use crate::common::chunk::{Chunk, ChunkId};
 use crate::consumer::reserver::Reserver;
 use crate::consumer::strategy::Strategy;
 

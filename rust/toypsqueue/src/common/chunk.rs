@@ -341,7 +341,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let submission_id = crate::common::submission::insert_submission_from_chunks(None, vec![Some("first".into())], &mut *conn).await.unwrap();
+        let submission_id = crate::common::submission::insert_submission_from_chunks(None, vec![Some("first".into())], &mut conn).await.unwrap();
 
         assert!(count_chunks(&mut *conn).await.unwrap() == 1);
 

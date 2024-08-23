@@ -96,7 +96,7 @@ mod tests {
 
         let mut conn = pool.acquire().await.unwrap();
         let input_chunks = vec![Some("a".into()), Some("b".into()), Some("c".into()), Some("d".into()), Some("e".into())];
-        crate::common::submission::insert_submission_from_chunks(None, input_chunks.clone(), &mut *conn).await.unwrap();
+        crate::common::submission::insert_submission_from_chunks(None, input_chunks.clone(), &mut conn).await.unwrap();
 
         let _server_handle = tokio::spawn(ConsumerServerState::new(pool.clone(), Duration::from_secs(60), uri).await.run());
 

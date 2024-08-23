@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use chrono::NaiveDateTime;
-use pyo3::{create_exception, exceptions::{PyConnectionError, PyException, PyTypeError, PyValueError}, prelude::*};
+use pyo3::{create_exception, exceptions::{PyException, PyTypeError}, prelude::*};
 
-use toypsqueue::{common::submission::Metadata, producer::client::Client as ActualClient};
+use toypsqueue::common::submission;
+use toypsqueue::producer::client::Client as ActualClient;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
 
@@ -26,17 +27,17 @@ impl Client {
     }
 
     pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
-        self.runtime.block_on(self.client.get_submission(id.id))
+        self.runtime.block_on(self.client.get_submission(id.into()))
         // .map(|opt| opt.map(|submission_status| format!("{submission_status:?}")))
         .map(|opt| opt.map(Into::into))
         .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 
     #[pyo3(signature = (directory_uri, chunk_count, metadata=None))]
-    pub fn insert_submission(&self, directory_uri: String, chunk_count: u32, metadata: Option<Metadata>) -> PyResult<SubmissionId> {
+    pub fn insert_submission(&self, directory_uri: String, chunk_count: u32, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
         let submission = toypsqueue::producer::server::InsertSubmission {directory_uri, chunk_count, metadata};
         self.runtime.block_on(self.client.insert_submission(&submission))
-        .map(SubmissionId::new)
+        .map(Into::into)
         .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 }
@@ -55,6 +56,18 @@ impl SubmissionId {
 
     fn __repr__(&self) -> String {
         format!("SubmissionId(id={})", self.id)
+    }
+}
+
+impl Into<submission::SubmissionId> for SubmissionId {
+    fn into(self) -> submission::SubmissionId {
+        submission::SubmissionId::from(self.id)
+    }
+}
+
+impl Into<SubmissionId> for submission::SubmissionId {
+    fn into(self) -> SubmissionId {
+        SubmissionId { id: self.into() }
     }
 }
 
@@ -83,12 +96,12 @@ pub struct Submission {
     pub id: SubmissionId,
     pub chunks_total: i64,
     pub chunks_done: i64,
-    pub metadata: Option<Metadata>,
+    pub metadata: Option<submission::Metadata>,
 }
 
 impl From<toypsqueue::common::submission::Submission> for Submission {
     fn from(value: toypsqueue::common::submission::Submission) -> Self {
-        Self {id: SubmissionId{id: value.id}, chunks_total: value.chunks_total, chunks_done: value.chunks_done, metadata: value.metadata}
+        Self {id: value.id.into(), chunks_total: value.chunks_total, chunks_done: value.chunks_done, metadata: value.metadata}
     }
 }
 
@@ -138,7 +151,7 @@ impl From<toypsqueue::common::submission::SubmissionFailed> for SubmissionFailed
 pub struct SubmissionCompleted {
     pub id: i64,
     pub chunks_done: i64,
-    pub metadata: Option<Metadata>,
+    pub metadata: Option<submission::Metadata>,
     pub completed_at: NaiveDateTime,
 }
 
@@ -147,7 +160,7 @@ pub struct SubmissionCompleted {
 pub struct SubmissionFailed {
     pub id: i64,
     pub chunks_total: i64,
-    pub metadata: Option<Metadata>,
+    pub metadata: Option<submission::Metadata>,
     pub failed_at: NaiveDateTime,
     pub failed_chunk_id: i64,
 }
