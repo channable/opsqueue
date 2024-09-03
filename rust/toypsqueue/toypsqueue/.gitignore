@@ -2,3 +2,7 @@
 *.db3-shm
 *.db3-wal
 *.db3-litestream
+*.db
+*.db-shm
+*.db-wal
+*.db-litestream
