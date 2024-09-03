@@ -97,7 +97,7 @@ pub async fn insert_chunk(
 
 pub async fn complete_chunk(
     full_chunk_id: ChunkId,
-    output_content: Vec<u8>,
+    output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
     query!("SAVEPOINT complete_chunk;").execute(&mut *conn).await?;
@@ -112,7 +112,7 @@ pub async fn complete_chunk(
 /// TODO: Complete submission automatically when all chunks are completed
 pub async fn complete_chunk_raw(
     full_chunk_id: ChunkId,
-    output_content: Vec<u8>,
+    output_content: Option<Vec<u8>>,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
@@ -327,7 +327,7 @@ pub mod test {
 
         complete_chunk_raw(
             (chunk.submission_id, chunk.chunk_index),
-            vec![6, 7, 8, 9],
+            Some(vec![6, 7, 8, 9]),
             &mut *conn,
         )
         .await
@@ -347,7 +347,7 @@ pub mod test {
 
         complete_chunk_raw(
             (submission_id, 0.into()),
-            vec![6, 7, 8, 9],
+            Some(vec![6, 7, 8, 9]),
             &mut *conn,
         )
         .await

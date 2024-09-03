@@ -5,17 +5,20 @@ use serde::{Deserialize, Serialize};
 
 use tokio_websockets::Message;
 
-use crate::common::chunk::Chunk;
+use crate::common::chunk;
+use crate::common::chunk::{Chunk, ChunkId};
 
 use crate::consumer::strategy::Strategy;
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
     WantToReserveChunks { max: usize, strategy: Strategy },
+    CompleteChunk { id: ChunkId, output_content: chunk::Content }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ServerToClientMessage {
     ChunksReserved(Vec<Chunk>),
+    ChunkCompleted,
     ChunkReservationExpired {
         submission_id: i64,
         chunk_index: u32,

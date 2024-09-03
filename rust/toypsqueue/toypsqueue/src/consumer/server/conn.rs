@@ -8,7 +8,7 @@ use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_websockets::{Message, WebSocketStream};
 
-use crate::common::chunk::{ChunkId};
+use crate::common::chunk::ChunkId;
 use crate::consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
 
 #[derive(Debug)]
@@ -134,7 +134,7 @@ impl ClientConn {
         &mut self,
         msg: Envelope<ClientToServerMessage>,
     ) -> Result<(), ClientConnError> {
-        match msg.contents {
+        let response = match msg.contents {
             ClientToServerMessage::WantToReserveChunks { max, strategy } => {
                 let chunks = self
                     .server_state
@@ -143,11 +143,16 @@ impl ClientConn {
 
                 self.reservations.extend(chunks.iter().map(|c| (c.submission_id, c.chunk_index)));
 
-                let response = Envelope{nonce: msg.nonce, contents: ServerToClientMessage::ChunksReserved(chunks)  };
-                self.ws_stream
-                    .send(response.try_into()?)
-                    .await?;
+                Some(ServerToClientMessage::ChunksReserved(chunks))
+            },
+            ClientToServerMessage::CompleteChunk {id, output_content} => {
+                self.server_state.complete_chunk(id, output_content).await?;
+                Some(ServerToClientMessage::ChunkCompleted)
             }
+        };
+        if let Some(response) = response {
+            let enveloped_response = Envelope {nonce: msg.nonce, contents: response};
+            self.ws_stream.send(enveloped_response.try_into()?).await?
         }
 
         Ok(())

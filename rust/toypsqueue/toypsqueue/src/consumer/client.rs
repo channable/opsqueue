@@ -8,7 +8,7 @@ use tokio::{select, sync::{oneshot, Mutex}, task::yield_now};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
-use crate::{common::chunk::Chunk, consumer::common::Envelope};
+use crate::{common::chunk::{self, Chunk, ChunkId}, consumer::common::Envelope};
 
 use super::{common::{ClientToServerMessage, ServerToClientMessage}, strategy::Strategy};
 
@@ -74,6 +74,14 @@ impl Client {
         let resp = self.request(ClientToServerMessage::WantToReserveChunks { max, strategy }).await?;
         match resp {
             ServerToClientMessage::ChunksReserved(chunks) => Ok(chunks),
+            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+        }
+    }
+
+    pub async fn complete_chunk(&self, id: ChunkId, output_content: chunk::Content) -> anyhow::Result<()> {
+        let resp = self.request(ClientToServerMessage::CompleteChunk { id, output_content }).await?;
+        match resp {
+            ServerToClientMessage::ChunkCompleted => Ok(()),
             _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
         }
     }
