@@ -8,11 +8,11 @@ use tokio::{select, sync::{oneshot, Mutex}, task::yield_now};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
-use crate::{common::chunk::{self, Chunk, ChunkId}, consumer::common::Envelope};
+use crate::{common::chunk::{self, Chunk, ChunkId}, consumer::common::{AsyncServerToClientMessage, Envelope}};
 
-use super::{common::{ClientToServerMessage, ServerToClientMessage}, strategy::Strategy};
+use super::{common::{ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse}, strategy::Strategy};
 
-type InFlightRequests = Arc<Mutex<HashMap<usize, oneshot::Sender<ServerToClientMessage>>>>;
+type InFlightRequests = Arc<Mutex<(usize, HashMap<usize, oneshot::Sender<SyncServerToClientResponse>>)>>;
 type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -24,7 +24,7 @@ pub struct Client {
 impl Client {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
         let uri = Uri::from_str(url)?;
-        let in_flight_requests: InFlightRequests = Arc::new(Mutex::new(HashMap::new()));
+        let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
         let (websocket_conn, _resp) = tokio_websockets::ClientBuilder::from_uri(uri).connect().await?;
         let (ws_sink, ws_stream) = websocket_conn.split();
@@ -46,24 +46,37 @@ impl Client {
                     if msg.is_ping() {
                         println!("Received Heartbeat. (TODO: Handle)");
                     } else {
-                        let envelope: Envelope<ServerToClientMessage> = dbg!(msg).try_into().expect("TODO");
-                        println!("Foo");
-                        let mut in_flight_requests = in_flight_requests.lock().await;
-                        let oneshot_receiver = in_flight_requests.remove(&envelope.nonce).expect("TODO");
-                        let _ = oneshot_receiver.send(dbg!(envelope.contents));
+                        let msg: ServerToClientMessage = dbg!(msg).try_into().expect("TODO");
+                        match msg {
+                            ServerToClientMessage::Sync(envelope) => {
+                                let mut in_flight_requests = in_flight_requests.lock().await;
+                                // Handle the response to some earlier request
+                                let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("TODO");
+                                let _ = oneshot_receiver.send(dbg!(envelope.contents));
+
+                            },
+                            ServerToClientMessage::Async(msg) => {
+                                // Handle a message from the server that was not associated with an earlier request
+                                match msg {
+                                    AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
+                                        println!("TODO: Client should cancel execution of current work if possible");
+                                    },
+                                }
+                            }
+                        }
                     }
                 },
             }
         }
     }
 
-    pub async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<ServerToClientMessage> {
+    pub async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<SyncServerToClientResponse> {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
         {
             let mut in_flight_requests = self.in_flight_requests.lock().await;
-            let nonce = in_flight_requests.len();
-            let envelope = Envelope { nonce, contents: request };
-            in_flight_requests.insert(nonce, oneshot_sender);
+            let nonce = in_flight_requests.0.wrapping_add(1);
+            let envelope = Envelope { nonce: nonce, contents: request };
+            in_flight_requests.1.insert(nonce, oneshot_sender);
             let _ = self.ws_sink.lock().await.send(dbg!(envelope.try_into().expect("TODO"))).await;
         }
         let resp = oneshot_receiver.await?;
@@ -73,7 +86,7 @@ impl Client {
     pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> anyhow::Result<Vec<Chunk>> {
         let resp = self.request(ClientToServerMessage::WantToReserveChunks { max, strategy }).await?;
         match resp {
-            ServerToClientMessage::ChunksReserved(chunks) => Ok(chunks),
+            SyncServerToClientResponse::ChunksReserved(chunks) => Ok(chunks),
             _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
         }
     }
@@ -81,7 +94,7 @@ impl Client {
     pub async fn complete_chunk(&self, id: ChunkId, output_content: chunk::Content) -> anyhow::Result<()> {
         let resp = self.request(ClientToServerMessage::CompleteChunk { id, output_content }).await?;
         match resp {
-            ServerToClientMessage::ChunkCompleted => Ok(()),
+            SyncServerToClientResponse::ChunkCompleted => Ok(()),
             _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
         }
     }

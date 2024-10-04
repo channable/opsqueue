@@ -17,12 +17,21 @@ pub enum ClientToServerMessage {
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ServerToClientMessage {
+    Sync(Envelope<SyncServerToClientResponse>),
+    Async(AsyncServerToClientMessage),
+}
+
+/// Responses to earlier ClientToServerMessages
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum SyncServerToClientResponse {
     ChunksReserved(Vec<Chunk>),
     ChunkCompleted,
-    ChunkReservationExpired {
-        submission_id: i64,
-        chunk_index: u32,
-    },
+}
+
+/// Messages the server sends on its own
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub enum AsyncServerToClientMessage {
+    ChunkReservationExpired(ChunkId),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -40,16 +49,16 @@ impl TryFrom<Message> for Envelope<ClientToServerMessage> {
     }
 }
 
-impl TryFrom<Message> for Envelope<ServerToClientMessage> {
+impl TryFrom<Message> for ServerToClientMessage {
     type Error = ciborium::de::Error<std::io::Error>;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         let msg: Bytes = value.into_payload().into();
-        let me: Envelope<ServerToClientMessage> = ciborium::from_reader(msg.reader())?;
+        let me: ServerToClientMessage = ciborium::from_reader(msg.reader())?;
         Ok(me)
     }
 }
 
-impl TryInto<Message> for Envelope<ServerToClientMessage> {
+impl TryInto<Message> for ServerToClientMessage {
     type Error = ciborium::ser::Error<std::io::Error>;
     fn try_into(self) -> Result<Message, Self::Error> {
         let mut writer = BytesMut::new().writer();

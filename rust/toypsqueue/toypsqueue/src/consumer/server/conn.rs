@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_websockets::{Message, WebSocketStream};
 
 use crate::common::chunk::ChunkId;
-use crate::consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage};
+use crate::consumer::common::{AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage, SyncServerToClientResponse};
 
 #[derive(Debug)]
 pub enum ClientConnError {
@@ -99,9 +99,9 @@ impl ClientConn {
                         Some(Ok(msg)) => self.handle_incoming_msg(msg).await?,
                     }
                 },
-                Some(msg) = self.rx.recv() => {
-                    // TODO
-                    todo!("Server wants to send someting to client: {msg:?}");
+                Some((submission_id, chunk_index)) = self.rx.recv() => {
+                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired((submission_id, chunk_index)));
+                    self.ws_stream.send(msg.try_into()?).await?;
                 },
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
@@ -143,16 +143,16 @@ impl ClientConn {
 
                 self.reservations.extend(chunks.iter().map(|c| (c.submission_id, c.chunk_index)));
 
-                Some(ServerToClientMessage::ChunksReserved(chunks))
+                Some(SyncServerToClientResponse::ChunksReserved(chunks))
             },
             ClientToServerMessage::CompleteChunk {id, output_content} => {
                 self.server_state.complete_chunk(id, output_content).await?;
-                Some(ServerToClientMessage::ChunkCompleted)
+                Some(SyncServerToClientResponse::ChunkCompleted)
             }
         };
         if let Some(response) = response {
             let enveloped_response = Envelope {nonce: msg.nonce, contents: response};
-            self.ws_stream.send(enveloped_response.try_into()?).await?
+            self.ws_stream.send(ServerToClientMessage::Sync(enveloped_response).try_into()?).await?
         }
 
         Ok(())
@@ -213,9 +213,9 @@ mod tests {
                     .await
                     .expect("Should not be closed")
                     .expect("Should receive a message");
-                let data: Envelope<ServerToClientMessage> = msg.try_into().unwrap();
-                match data.contents {
-                    ServerToClientMessage::ChunksReserved(chunks) => {
+                let data: ServerToClientMessage = msg.try_into().unwrap();
+                match data {
+                    ServerToClientMessage::Sync(Envelope {contents: SyncServerToClientResponse::ChunksReserved(chunks), ..}) => {
                         assert_eq!(chunks.len(), 4);
                         assert_eq!(
                             chunks
