@@ -70,7 +70,7 @@ impl Client {
         }
     }
 
-    pub async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<SyncServerToClientResponse> {
+    async fn request(&self, request: ClientToServerMessage) -> anyhow::Result<SyncServerToClientResponse> {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
         {
             let mut in_flight_requests = self.in_flight_requests.lock().await;

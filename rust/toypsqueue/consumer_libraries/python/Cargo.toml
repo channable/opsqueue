@@ -1,0 +1,16 @@
+[package]
+name = "opsqueue_consumer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "opsqueue_consumer"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22.0", features = ["chrono"] }
+# pyo3-asyncio = { version = "0.22", features = ["attributes", "tokio-runtime"] }
+tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
+chrono = { version = "0.4.38"}
+toypsqueue = { path = "../../toypsqueue/"}
