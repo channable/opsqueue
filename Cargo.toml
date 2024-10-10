@@ -4,9 +4,9 @@
 resolver = "2"
 
 members = [
-    "toypsqueue/toypsqueue",
-    "toypsqueue/producer_libraries/python",
-    "toypsqueue/consumer_libraries/python",
+    "opsqueue/",
+    "producer_libs/python",
+    "consumer_libs/python",
 ]
 
 
