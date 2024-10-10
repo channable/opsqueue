@@ -80,8 +80,7 @@ impl ConsumerServerState {
         Ok(res)
     }
 
-    /// Used for testing
-    pub async fn accept_one_conn(
+    pub (crate) async fn accept_one_conn(
         &self,
         listener: &TcpListener,
     ) -> anyhow::Result<super::conn::ClientConn> {

@@ -39,9 +39,8 @@ impl ServerState {
     }
 }
 
-pub async fn serve(database_filename: &str, server_addr: Box<str>) {
-    ServerState::new(database_filename)
-        .await
+pub async fn serve(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
+    ServerState::new_from_pool(database_pool)
         .serve(server_addr)
         .await;
 }
