@@ -34,7 +34,7 @@ impl ServerState {
 
         let listener = tokio::net::TcpListener::bind(&*server_addr).await.unwrap();
 
-        println!("Server running at {server_addr}...");
+        println!("Producer HTTP server listening at {server_addr}...");
         axum::serve(listener, app).await.unwrap();
     }
 }

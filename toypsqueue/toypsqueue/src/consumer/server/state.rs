@@ -90,9 +90,8 @@ impl ConsumerServerState {
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
-        println!("Running server");
         let listener = TcpListener::bind(&*self.server_addr).await?;
-        println!("Listener listens");
+        println!("Consumer Websocket server listening at {}", self.server_addr);
         while let Ok(conn) = self.accept_one_conn(&listener).await {
             tokio::spawn(conn.run());
         }
