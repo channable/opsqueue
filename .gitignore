@@ -12,3 +12,14 @@ Cargo.lock
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+
+# Do not commit SQLite database files
+# that are created while playing with the binary.
+*.db3
+*.db3-shm
+*.db3-wal
+*.db3-litestream
+*.db
+*.db-shm
+*.db-wal
+*.db-litestream

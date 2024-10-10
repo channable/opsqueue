@@ -6,3 +6,10 @@
 *.db-shm
 *.db-wal
 *.db-litestream
+
+# Intentionally commit the Sqlite database file
+# that SqlX uses for compile-time schema checks.
+#
+# This way, normal devs don't need to run the sqlx command line tool;
+# it only needs to be invoked when a new DB migration is added
+!opsqueue_example_database_schema.db
