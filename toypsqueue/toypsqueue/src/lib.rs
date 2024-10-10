@@ -36,7 +36,7 @@ pub async fn ensure_db_exists(database_filename: &str) {
         Sqlite::create_database(database_filename)
             .await
             .expect("Could not create backing sqlite DB");
-        println!("Finished creating backing sqlite DB");
+        println!("Finished creating backing sqlite DB {}", database_filename);
     } else {
         println!("Starting up using existing sqlite DB {}", database_filename);
     }
