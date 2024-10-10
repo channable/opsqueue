@@ -11,10 +11,6 @@ path="src/lib.rs"
 name="toypsqueue"
 path="app/main.rs"
 
-[[bin]]
-name="server"
-path="app/server.rs"
-
 # Enable optimizations for dependencies even in dev builds, but not for our code:
 [profile.dev.package."*"]
 opt-level = 3

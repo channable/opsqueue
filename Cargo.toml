@@ -1,0 +1,33 @@
+[workspace]
+
+# Resolver 2 is default in the 2021 Edition, but the workspace doesn't know that
+resolver = "2"
+
+members = [
+    "toypsqueue/toypsqueue",
+    "toypsqueue/producer_libraries/python",
+    "toypsqueue/consumer_libraries/python",
+]
+
+
+[workspace.lints.clippy]
+cargo =  { level = "warn", priority = -1 }
+cargo_common_metadata = "allow"
+
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+# nursery, new untested lints
+nursery = { level = "allow", priority = -1 }
+
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+# restriction, lints that can enforce a coherent code style
+restriction = { level = "allow", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+[profile.release]
+# Full fat LTO makes a big difference in performance, at the cost of a large
+# compile time hit. You should only use release builds when performance matters.
+# Prefer debug builds during regular development.
+lto = 'fat'

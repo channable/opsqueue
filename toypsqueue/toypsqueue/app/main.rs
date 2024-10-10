@@ -1,60 +1,27 @@
-// use toypsqueue::chunk::Chunk;
-// use toypsqueue::persistence::Persistence;
-// use toypsqueue::submission::Submission;
-
-use sqlx::{Acquire, SqlitePool};
-use tokio::task::JoinSet;
-use toypsqueue::{
-    common::chunk,
-    common::submission::{self, Submission},
-    db_connect_pool, ensure_db_exists, ensure_db_migrated,
-};
+use toypsqueue;
+use std::time::Duration;
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
 #[tokio::main]
 async fn main() {
+    println!("Starting Opsqueue");
+
     let database_filename = DATABASE_FILENAME;
-    ensure_db_exists(database_filename).await;
+    let producer_server_addr = Box::from("0.0.0.0:3999");
+    let consumer_server_addr = Box::from("0.0.0.0:3998");
+    let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
 
-    let db = db_connect_pool(database_filename).await;
-    ensure_db_migrated(&db).await;
+    let db_pool = toypsqueue::db_connect_pool(database_filename).await;
 
-    // Play with the numbers here to see how this affects Sqlite write performance
-    // or the characteristics of Litestream:
-    create_fake_submissions(&db, 100_000, 1000, 1).await;
-}
+    let consumer_server = toypsqueue::consumer::server::serve(db_pool.clone(), consumer_server_addr, reservation_expiration);
+    let producer_server = toypsqueue::producer::server::serve(db_pool, producer_server_addr);
 
-async fn create_fake_submissions(
-    db: &SqlitePool,
-    submission_size: u32,
-    n_submissions_per_writer: u32,
-    n_writers: u32,
-) {
-    let mut set: JoinSet<()> = JoinSet::new();
-    for i in 0..n_writers {
-        let mut conn = db.acquire().await.unwrap();
-        set.spawn(async move {
-            for n in 0..n_submissions_per_writer {
-                println!(
-                    "{i}: Starting on submission {} ({} chunks)",
-                    n, submission_size
-                );
-                let mut tx = conn.begin().await.unwrap();
-                let vec = (0..submission_size).map(|_num| None).collect();
-                let (submission, chunks) = Submission::from_vec(vec, None).unwrap();
+    tokio::spawn(async move { consumer_server.await });
+    tokio::spawn(async move { producer_server.await });
 
-                let _ = chunk::insert_many_chunks(chunks, &mut *tx).await;
-                let _ = submission::insert_submission_raw(submission, &mut *tx).await;
+    tokio::signal::ctrl_c().await.expect("Failed to set up Ctrl+C signal handler");
 
-                tx.commit().await.unwrap();
-                println!("{i}: Submitted submission {n}");
-                tokio::task::yield_now().await;
-            }
-        });
-    }
-
-    while let Some(res) = set.join_next().await {
-        println!("Thread result: {:?}", res);
-    }
+    println!("");
+    println!("Stopping Opsqueue");
 }
