@@ -21,7 +21,7 @@ python
 
 # Structure
 
-All logic happens inside the main `toypsqueue` crate.
+All logic happens inside the main `opsqueue` crate.
 Only the Python-specific parts live inside this library.
 
 You will notice that some structs/enums are defined which seem to be 1:1 copies of definitions inside the main crate.

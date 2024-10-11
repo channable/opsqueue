@@ -3,7 +3,7 @@ use criterion::{
     PlotConfiguration, Throughput,
 };
 use sqlx::{Connection, SqliteConnection};
-use toypsqueue::{
+use opsqueue::{
     chunk::{self, Chunk},
     submission::{self, Submission},
 };
@@ -93,7 +93,7 @@ pub fn bench_insert_submission(c: &mut Criterion) {
         // });
         group.bench_with_input(BenchmarkId::new("multi_chunk", size), &size, |b, size| {
             b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut db = toypsqueue::db_connect_single().await;
+                let mut db = opsqueue::db_connect_single().await;
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
@@ -115,7 +115,7 @@ pub fn bench_insert_submission(c: &mut Criterion) {
             &size,
             |b, size| {
                 b.to_async(&runtime).iter_custom(|iters| async move {
-                    let mut db = toypsqueue::db_connect_single().await;
+                    let mut db = opsqueue::db_connect_single().await;
 
                     let start = std::time::Instant::now();
                     for _i in 0..iters {

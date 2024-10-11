@@ -2,7 +2,7 @@ use criterion::{
     black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
     PlotConfiguration, Throughput,
 };
-use toypsqueue::chunk;
+use opsqueue::chunk;
 
 const SIZES: [u64; 8] = [1, 10, 20, 50, 100, 200, 500, 1000];
 
@@ -17,7 +17,7 @@ pub fn select_newest(c: &mut Criterion) {
         group.throughput(Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut db = toypsqueue::db_connect_single().await;
+                let mut db = opsqueue::db_connect_single().await;
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
@@ -43,7 +43,7 @@ pub fn select_oldest(c: &mut Criterion) {
         group.throughput(Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut db = toypsqueue::db_connect_single().await;
+                let mut db = opsqueue::db_connect_single().await;
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {
@@ -71,7 +71,7 @@ pub fn select_random(c: &mut Criterion) {
         group.throughput(Throughput::Elements(size));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut db = toypsqueue::db_connect_single().await;
+                let mut db = opsqueue::db_connect_single().await;
 
                 let start = std::time::Instant::now();
                 for _i in 0..iters {

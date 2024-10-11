@@ -3,9 +3,9 @@ use std::sync::Arc;
 use chrono::NaiveDateTime;
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
-use toypsqueue::common::{chunk, submission};
-use toypsqueue::consumer::client::Client as ActualClient;
-use toypsqueue::consumer::strategy;
+use opsqueue::common::{chunk, submission};
+use opsqueue::consumer::client::Client as ActualClient;
+use opsqueue::consumer::strategy;
 
 create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
 
@@ -162,8 +162,8 @@ impl SubmissionCompleted {
     }
 }
 
-impl From<toypsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
-    fn from(value: toypsqueue::common::submission::SubmissionCompleted) -> Self {
+impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
+    fn from(value: opsqueue::common::submission::SubmissionCompleted) -> Self {
         Self {id: value.id, completed_at: value.completed_at, chunks_done: value.chunks_done, metadata: value.metadata}
     }
 }
@@ -175,8 +175,8 @@ impl SubmissionFailed {
     }
 }
 
-impl From<toypsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
-    fn from(value: toypsqueue::common::submission::SubmissionFailed) -> Self {
+impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
+    fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
         Self {id: value.id, failed_at: value.failed_at, chunks_total: value.chunks_total, metadata: value.metadata, failed_chunk_id: value.failed_chunk_id}
     }
 }
@@ -218,14 +218,14 @@ pub struct SubmissionFailed {
 //     }
 // }
 
-// impl Into<toypsqueue::producer::server::InsertSubmission> for InsertSubmission {
-//     fn into(self) -> toypsqueue::producer::server::InsertSubmission {
-//         toypsqueue::producer::server::InsertSubmission {directory_uri: self.directory_uri, chunk_count: self.chunk_count, metadata: self.metadata}
+// impl Into<opsqueue::producer::server::InsertSubmission> for InsertSubmission {
+//     fn into(self) -> opsqueue::producer::server::InsertSubmission {
+//         opsqueue::producer::server::InsertSubmission {directory_uri: self.directory_uri, chunk_count: self.chunk_count, metadata: self.metadata}
 //     }
 // }
 
 fn start_runtime() -> Arc<tokio::runtime::Runtime> {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed to create Tokio runtime in Toypsqueue Consumer client");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed to create Tokio runtime in opsqueue Consumer client");
     Arc::new(runtime)
 }
 

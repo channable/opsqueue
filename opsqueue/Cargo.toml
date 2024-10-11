@@ -1,14 +1,14 @@
 [package]
-name = "toypsqueue"
+name = "opsqueue"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name="toypsqueue"
+name="opsqueue"
 path="src/lib.rs"
 
 [[bin]]
-name="toypsqueue"
+name="opsqueue"
 path="app/main.rs"
 
 # Enable optimizations for dependencies even in dev builds, but not for our code:
