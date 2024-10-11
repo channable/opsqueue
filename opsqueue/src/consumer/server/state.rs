@@ -84,8 +84,11 @@ impl ConsumerServerState {
         &self,
         listener: &TcpListener,
     ) -> anyhow::Result<super::conn::ClientConn> {
-        let (stream, _addr) = listener.accept().await?;
+        println!("Waitning for a WS connection...");
+        let (stream, addr) = listener.accept().await?;
+        println!("Incoming consumer client HTTP connection from {}", &addr);
         let ws_stream = ServerBuilder::new().accept(stream).await?;
+        println!("HTTP-> WS upgrade succeeded for {}", &addr);
         Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
     }
 
