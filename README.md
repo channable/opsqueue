@@ -96,3 +96,19 @@ ipython
 If building a full Python wheel, use `maturin build` instead.
 
 [Maturin usage guide](https://www.maturin.rs/tutorial).
+
+
+
+## Running Litestream
+
+To locally test Litestream DB-replication:  
+- open a first shell and run Minio, [following the 'setting up Minio step' from the Litestream getting started page](https://litestream.io/getting-started/#setting-up-minio). (NOTE: In the future we'll be able to use the [testing GCS bucket](https://github.com/channable/devops/issues/10948))
+- open a second shell and run `nix-shell -p litestream`.
+- In this shell, run
+```bash
+export LITESTREAM_ACCESS_KEY_ID=minioadmin
+export LITESTREAM_SECRET_ACCESS_KEY=minioadmin
+```
+- Finally, run `litestream replicate opsqueue.db s3://mybkt.localhost:9000/opsqueue.db`
+
+- And now, exercise the DB by running the main opsqueue binary and sending it work. 
