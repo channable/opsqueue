@@ -31,3 +31,16 @@ suspicious = { level = "warn", priority = -1 }
 # compile time hit. You should only use release builds when performance matters.
 # Prefer debug builds during regular development.
 lto = 'fat'
+
+# Enable optimizations for dependencies even in dev builds, but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
+
+# Enable optimizations for proc macros etc.
+# Esp. important for the sqlx macros
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3
+

@@ -11,26 +11,6 @@ path="src/lib.rs"
 name="opsqueue"
 path="app/main.rs"
 
-# Enable optimizations for dependencies even in dev builds, but not for our code:
-[profile.dev.package."*"]
-opt-level = 3
-
-# Enable optimizations for proc macros etc.
-[profile.dev.build-override]
-opt-level = 3
-
-[profile.release.build-override]
-opt-level = 3
-
-[profile.release]
-# For now _do not_ enable debug info for profiling release builds (even though that would allow for better profiling)
-# debug = true
-# Full fat LTO makes a big difference in performance, at the cost of a large
-# compile time hit. You should only use release builds when performance matters.
-# Prefer debug builds during regular development.
-lto = "fat"
-
-
 
 [dependencies]
 anyhow = "1.0.86"
@@ -57,17 +37,14 @@ tokio-util = { version = "0.7.11", features = ["io", "rt", "time"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[profile.dev.package.sqlx-macros]
-opt-level = 3
-
 [dev-dependencies]
 criterion = {version = "0.3", features = ["async_tokio"]}
 
-[[bench]]
-name = "chunks_select"
-harness = false
+# [[bench]]
+# name = "chunks_select"
+# harness = false
 
-[[bench]]
-name = "submissions_insert"
-harness = false
+# [[bench]]
+# name = "submissions_insert"
+# harness = false
 
