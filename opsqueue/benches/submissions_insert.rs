@@ -2,11 +2,11 @@ use criterion::{
     black_box, criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
     PlotConfiguration, Throughput,
 };
-use sqlx::{Connection, SqliteConnection};
 use opsqueue::{
     chunk::{self, Chunk},
     submission::{self, Submission},
 };
+use sqlx::{Connection, SqliteConnection};
 
 const SIZES: [u64; 4] = [100, 1000, 10_000, 100_000];
 

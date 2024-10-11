@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use chrono::NaiveDateTime;
-use pyo3::{create_exception, exceptions::{PyException, PyTypeError}, prelude::*};
+use pyo3::{
+    create_exception,
+    exceptions::{PyException, PyTypeError},
+    prelude::*,
+};
 
 use opsqueue::common::submission;
 use opsqueue::producer::client::Client as ActualClient;
@@ -10,7 +14,10 @@ create_exception!(opsqueue_producer, ProducerClientError, PyException);
 
 #[pyclass]
 #[derive(Debug, Clone)]
-struct Client{client: ActualClient, runtime: Arc<tokio::runtime::Runtime>}
+struct Client {
+    client: ActualClient,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
 
 #[pymethods]
 impl Client {
@@ -18,40 +25,54 @@ impl Client {
     pub fn new(address: &str) -> Self {
         let runtime = start_runtime();
         let client = ActualClient::new(address);
-        Client{client, runtime}
+        Client { client, runtime }
     }
 
-
     pub fn count_submissions(&self) -> PyResult<u32> {
-        self.runtime.block_on(self.client.count_submissionns()).map_err(|e| PyTypeError::new_err(e.to_string()))
+        self.runtime
+            .block_on(self.client.count_submissionns())
+            .map_err(|e| PyTypeError::new_err(e.to_string()))
     }
 
     pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
-        self.runtime.block_on(self.client.get_submission(id.into()))
-        // .map(|opt| opt.map(|submission_status| format!("{submission_status:?}")))
-        .map(|opt| opt.map(Into::into))
-        .map_err(|e| ProducerClientError::new_err(e.to_string()))
+        self.runtime
+            .block_on(self.client.get_submission(id.into()))
+            // .map(|opt| opt.map(|submission_status| format!("{submission_status:?}")))
+            .map(|opt| opt.map(Into::into))
+            .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 
     #[pyo3(signature = (directory_uri, chunk_count, metadata=None))]
-    pub fn insert_submission(&self, directory_uri: String, chunk_count: u32, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
-        let submission = opsqueue::producer::server::InsertSubmission {directory_uri, chunk_count, metadata};
-        self.runtime.block_on(self.client.insert_submission(&submission))
-        .map(Into::into)
-        .map_err(|e| ProducerClientError::new_err(e.to_string()))
+    pub fn insert_submission(
+        &self,
+        directory_uri: String,
+        chunk_count: u32,
+        metadata: Option<submission::Metadata>,
+    ) -> PyResult<SubmissionId> {
+        let submission = opsqueue::producer::server::InsertSubmission {
+            directory_uri,
+            chunk_count,
+            metadata,
+        };
+        self.runtime
+            .block_on(self.client.insert_submission(&submission))
+            .map(Into::into)
+            .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 }
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct SubmissionId{pub id: i64}
+pub struct SubmissionId {
+    pub id: i64,
+}
 
 #[pymethods]
 impl SubmissionId {
     #[new]
     fn new(id: i64) -> Self {
-        Self{id}
+        Self { id }
     }
 
     fn __repr__(&self) -> String {
@@ -74,18 +95,24 @@ impl Into<SubmissionId> for submission::SubmissionId {
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
-    InProgress{submission: Submission},
-    Completed{submission: SubmissionCompleted},
-    Failed{submission: SubmissionFailed},
+    InProgress { submission: Submission },
+    Completed { submission: SubmissionCompleted },
+    Failed { submission: SubmissionFailed },
 }
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
     fn from(value: opsqueue::common::submission::SubmissionStatus) -> Self {
         use opsqueue::common::submission::SubmissionStatus::*;
         match value {
-            InProgress(s) => SubmissionStatus::InProgress{submission: s.into()},
-            Completed(s) => SubmissionStatus::Completed{submission: s.into()},
-            Failed(s) => SubmissionStatus::Failed{submission: s.into()},
+            InProgress(s) => SubmissionStatus::InProgress {
+                submission: s.into(),
+            },
+            Completed(s) => SubmissionStatus::Completed {
+                submission: s.into(),
+            },
+            Failed(s) => SubmissionStatus::Failed {
+                submission: s.into(),
+            },
         }
     }
 }
@@ -101,7 +128,12 @@ pub struct Submission {
 
 impl From<opsqueue::common::submission::Submission> for Submission {
     fn from(value: opsqueue::common::submission::Submission) -> Self {
-        Self {id: value.id.into(), chunks_total: value.chunks_total, chunks_done: value.chunks_done, metadata: value.metadata}
+        Self {
+            id: value.id.into(),
+            chunks_total: value.chunks_total,
+            chunks_done: value.chunks_done,
+            metadata: value.metadata,
+        }
     }
 }
 
@@ -128,7 +160,12 @@ impl SubmissionCompleted {
 
 impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
     fn from(value: opsqueue::common::submission::SubmissionCompleted) -> Self {
-        Self {id: value.id, completed_at: value.completed_at, chunks_done: value.chunks_done, metadata: value.metadata}
+        Self {
+            id: value.id,
+            completed_at: value.completed_at,
+            chunks_done: value.chunks_done,
+            metadata: value.metadata,
+        }
     }
 }
 
@@ -141,10 +178,15 @@ impl SubmissionFailed {
 
 impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
-        Self {id: value.id, failed_at: value.failed_at, chunks_total: value.chunks_total, metadata: value.metadata, failed_chunk_id: value.failed_chunk_id}
+        Self {
+            id: value.id,
+            failed_at: value.failed_at,
+            chunks_total: value.chunks_total,
+            metadata: value.metadata,
+            failed_chunk_id: value.failed_chunk_id,
+        }
     }
 }
-
 
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +231,10 @@ pub struct SubmissionFailed {
 // }
 
 fn start_runtime() -> Arc<tokio::runtime::Runtime> {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed to create Tokio runtime in opsqueue Producer client");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime in opsqueue Producer client");
     Arc::new(runtime)
 }
 
@@ -207,7 +252,10 @@ fn opsqueue_producer(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SubmissionId>()?;
 
     // Exception classes
-    m.add("ProducerClientError", m.py().get_type_bound::<ProducerClientError>())?;
+    m.add(
+        "ProducerClientError",
+        m.py().get_type_bound::<ProducerClientError>(),
+    )?;
 
     // Top-level functions
     // m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;

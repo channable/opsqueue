@@ -3,14 +3,16 @@ use std::fmt::Display;
 use chrono::NaiveDateTime;
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
-use super::chunk::{self, ChunkIndex};
 use super::chunk::Chunk;
+use super::chunk::{self, ChunkIndex};
 
 pub type Metadata = Vec<u8>;
 
 static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[repr(transparent)]
 pub struct SubmissionId(i64);
 
@@ -21,13 +23,20 @@ impl Display for SubmissionId {
 }
 
 impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
-    fn encode(self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull
-        where
-            Self: Sized, {
-                <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+    fn encode(
+        self,
+        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull
+    where
+        Self: Sized,
+    {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
     }
-    fn encode_by_ref(&self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-                <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
     }
 }
 
@@ -215,36 +224,43 @@ pub async fn submission_status(
     match maybe_row {
         Err(sqlx::Error::RowNotFound) => Ok(None),
         Err(other) => Err(other),
-        Ok(row) =>
-            match row.status {
-                // TODO: Cleaner error handling than unwrap_or_default
-                0 => Ok(Some(SubmissionStatus::InProgress(Submission {
-                    id: row.id.into(),
-                    chunks_total: row.chunks_total,
-                    chunks_done: row.chunks_done.unwrap_or_default(),
-                    metadata: row.metadata,
-                }))),
-                1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
-                    id: row.id,
-                    chunks_done: row.chunks_done.unwrap_or_default(),
-                    metadata: row.metadata,
-                    completed_at: row.completed_at.unwrap_or_default(),
-                }))),
-                2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
-                    id: row.id,
-                    chunks_total: row.chunks_total,
-                    metadata: row.metadata,
-                    failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
-                    failed_at: row.failed_at.unwrap_or_default(),
-                }))),
-                idx => Err(sqlx::Error::ColumnIndexOutOfBounds { index: 0, len: idx as usize }),
-            }
-        }
+        Ok(row) => match row.status {
+            // TODO: Cleaner error handling than unwrap_or_default
+            0 => Ok(Some(SubmissionStatus::InProgress(Submission {
+                id: row.id.into(),
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done.unwrap_or_default(),
+                metadata: row.metadata,
+            }))),
+            1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
+                id: row.id,
+                chunks_done: row.chunks_done.unwrap_or_default(),
+                metadata: row.metadata,
+                completed_at: row.completed_at.unwrap_or_default(),
+            }))),
+            2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
+                id: row.id,
+                chunks_total: row.chunks_total,
+                metadata: row.metadata,
+                failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
+                failed_at: row.failed_at.unwrap_or_default(),
+            }))),
+            idx => Err(sqlx::Error::ColumnIndexOutOfBounds {
+                index: 0,
+                len: idx as usize,
+            }),
+        },
+    }
 }
 
 /// Completes the submission, iff all chunks have been completed.
-pub async fn maybe_complete_submission(id: SubmissionId, conn: &mut SqliteConnection) -> sqlx::Result<bool> {
-    query!("SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
+pub async fn maybe_complete_submission(
+    id: SubmissionId,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<bool> {
+    query!("SAVEPOINT maybe_complete_submission;")
+        .execute(&mut *conn)
+        .await?;
     let submission = get_submission(id, &mut *conn).await?;
     let res = if submission.chunks_done == submission.chunks_total {
         complete_submission_raw(id, &mut *conn).await?;
@@ -252,12 +268,17 @@ pub async fn maybe_complete_submission(id: SubmissionId, conn: &mut SqliteConnec
     } else {
         Ok(false)
     };
-    query!("RELEASE SAVEPOINT maybe_complete_submission;").execute(&mut *conn).await?;
+    query!("RELEASE SAVEPOINT maybe_complete_submission;")
+        .execute(&mut *conn)
+        .await?;
     res
 }
 
 /// TODO: Should only do the actual work iff chunks_done === chunks_total.
-pub async fn complete_submission_raw(id: SubmissionId, conn: impl SqliteExecutor<'_>) -> sqlx::Result<()> {
+pub async fn complete_submission_raw(
+    id: SubmissionId,
+    conn: impl SqliteExecutor<'_>,
+) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -349,17 +370,42 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 }
 
 /// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
-/// 
+///
 /// Submissions/chunks that are neither failed nor completed are not touched.
-pub async fn cleanup_old(conn: &mut SqliteConnection, older_than: NaiveDateTime) -> sqlx::Result<()> {
+pub async fn cleanup_old(
+    conn: &mut SqliteConnection,
+    older_than: NaiveDateTime,
+) -> sqlx::Result<()> {
     query!("SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
-    query!("DELETE FROM submissions_completed WHERE completed_at < julianday(?);", older_than).execute(&mut *conn).await?;
-    query!("DELETE FROM submissions_failed WHERE failed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+    query!(
+        "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
+        older_than
+    )
+    .execute(&mut *conn)
+    .await?;
+    query!(
+        "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
+        older_than
+    )
+    .execute(&mut *conn)
+    .await?;
 
-    query!("DELETE FROM chunks_completed WHERE completed_at < julianday(?);", older_than).execute(&mut *conn).await?;
-    query!("DELETE FROM chunks_failed WHERE failed_at < julianday(?);", older_than).execute(&mut *conn).await?;
+    query!(
+        "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
+        older_than
+    )
+    .execute(&mut *conn)
+    .await?;
+    query!(
+        "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
+        older_than
+    )
+    .execute(&mut *conn)
+    .await?;
 
-    query!("RELEASE SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
+    query!("RELEASE SAVEPOINT cleanup_old;")
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -450,25 +496,56 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let old_four_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            .await
+            .unwrap();
+        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            .await
+            .unwrap();
+        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            .await
+            .unwrap();
+        let old_four_unfailed =
+            insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+                .await
+                .unwrap();
 
-        fail_submission(old_one, 0.into(), "Broken one".into(), &mut conn).await.unwrap();
-        fail_submission(old_two, 0.into(), "Broken two".into(), &mut conn).await.unwrap();
-        fail_submission(old_three, 0.into(), "Broken three".into(), &mut conn).await.unwrap();
+        fail_submission(old_one, 0.into(), "Broken one".into(), &mut conn)
+            .await
+            .unwrap();
+        fail_submission(old_two, 0.into(), "Broken two".into(), &mut conn)
+            .await
+            .unwrap();
+        fail_submission(old_three, 0.into(), "Broken three".into(), &mut conn)
+            .await
+            .unwrap();
 
         let cutoff_timestamp = Utc::now().naive_utc();
 
-        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let _too_new_two_unfailed = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
-        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn).await.unwrap();
+        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            .await
+            .unwrap();
+        let _too_new_two_unfailed =
+            insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+                .await
+                .unwrap();
+        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            .await
+            .unwrap();
 
-        fail_submission(too_new_one, 0.into(), "Broken new one".into(), &mut conn).await.unwrap();
-        fail_submission(too_new_three, 0.into(), "Broken new three".into(), &mut conn).await.unwrap();
+        fail_submission(too_new_one, 0.into(), "Broken new one".into(), &mut conn)
+            .await
+            .unwrap();
+        fail_submission(
+            too_new_three,
+            0.into(),
+            "Broken new three".into(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(),  5);
+        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 5);
 
         cleanup_old(&mut conn, cutoff_timestamp).await.unwrap();
 
@@ -476,6 +553,5 @@ pub mod test {
 
         let _sub1 = submission_status(old_four_unfailed, &mut *conn).await;
         let _sub2 = submission_status(old_four_unfailed, &mut *conn).await;
-
     }
 }

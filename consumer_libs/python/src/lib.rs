@@ -11,42 +11,54 @@ create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
 
 #[pyclass]
 #[derive(Debug, Clone)]
-struct Client{client: ActualClient, runtime: Arc<tokio::runtime::Runtime>}
+struct Client {
+    client: ActualClient,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
 
 #[pymethods]
 impl Client {
     #[new]
     pub fn new(address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
-        let client = runtime.block_on({
-            ActualClient::new(address) 
-        }).map_err(|e| ConsumerClientError::new_err(e.to_string()) )?;
-        Ok(Client{client, runtime})
+        let client = runtime
+            .block_on(ActualClient::new(address))
+            .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
+        Ok(Client { client, runtime })
     }
 
     pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
-        self.runtime.block_on(self.client.reserve_chunks(max, strategy.into()))
-        .map(|c| c.into_iter().map(Into::into).collect())
-        .map_err(|e| ConsumerClientError::new_err(e.to_string()))
+        self.runtime
+            .block_on(self.client.reserve_chunks(max, strategy.into()))
+            .map(|c| c.into_iter().map(Into::into).collect())
+            .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
 
-    pub fn complete_chunk(&self, submission_id: SubmissionId, chunk_index: ChunkIndex, output_content: chunk::Content) -> PyResult<()> {
+    pub fn complete_chunk(
+        &self,
+        submission_id: SubmissionId,
+        chunk_index: ChunkIndex,
+        output_content: chunk::Content,
+    ) -> PyResult<()> {
         let chunk_id = (submission_id.into(), chunk_index.into());
-        self.runtime.block_on(self.client.complete_chunk(chunk_id, output_content)).map_err(|e| ConsumerClientError::new_err(e.to_string()))
+        self.runtime
+            .block_on(self.client.complete_chunk(chunk_id, output_content))
+            .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
 }
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct SubmissionId{pub id: i64}
-
+pub struct SubmissionId {
+    pub id: i64,
+}
 
 #[pymethods]
 impl SubmissionId {
     #[new]
     fn new(id: i64) -> Self {
-        Self{id}
+        Self { id }
     }
 
     fn __repr__(&self) -> String {
@@ -69,14 +81,15 @@ impl Into<SubmissionId> for submission::SubmissionId {
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct ChunkIndex{pub id: i64}
-
+pub struct ChunkIndex {
+    pub id: i64,
+}
 
 #[pymethods]
 impl ChunkIndex {
     #[new]
     fn new(id: i64) -> Self {
-        Self{id}
+        Self { id }
     }
 
     fn __repr__(&self) -> String {
@@ -164,7 +177,12 @@ impl SubmissionCompleted {
 
 impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
     fn from(value: opsqueue::common::submission::SubmissionCompleted) -> Self {
-        Self {id: value.id, completed_at: value.completed_at, chunks_done: value.chunks_done, metadata: value.metadata}
+        Self {
+            id: value.id,
+            completed_at: value.completed_at,
+            chunks_done: value.chunks_done,
+            metadata: value.metadata,
+        }
     }
 }
 
@@ -177,10 +195,15 @@ impl SubmissionFailed {
 
 impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
-        Self {id: value.id, failed_at: value.failed_at, chunks_total: value.chunks_total, metadata: value.metadata, failed_chunk_id: value.failed_chunk_id}
+        Self {
+            id: value.id,
+            failed_at: value.failed_at,
+            chunks_total: value.chunks_total,
+            metadata: value.metadata,
+            failed_chunk_id: value.failed_chunk_id,
+        }
     }
 }
-
 
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,7 +248,10 @@ pub struct SubmissionFailed {
 // }
 
 fn start_runtime() -> Arc<tokio::runtime::Runtime> {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Failed to create Tokio runtime in opsqueue Consumer client");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime in opsqueue Consumer client");
     Arc::new(runtime)
 }
 
@@ -239,7 +265,10 @@ fn opsqueue_consumer(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Strategy>()?;
 
     // Exception classes
-    m.add("ConsumerClientError", m.py().get_type_bound::<ConsumerClientError>())?;
+    m.add(
+        "ConsumerClientError",
+        m.py().get_type_bound::<ConsumerClientError>(),
+    )?;
 
     // Top-level functions
     // m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;

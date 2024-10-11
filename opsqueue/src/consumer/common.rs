@@ -11,8 +11,14 @@ use crate::common::chunk::{Chunk, ChunkId};
 use crate::consumer::strategy::Strategy;
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
-    WantToReserveChunks { max: usize, strategy: Strategy },
-    CompleteChunk { id: ChunkId, output_content: chunk::Content }
+    WantToReserveChunks {
+        max: usize,
+        strategy: Strategy,
+    },
+    CompleteChunk {
+        id: ChunkId,
+        output_content: chunk::Content,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]

@@ -71,7 +71,11 @@ impl ConsumerServerState {
             .await
     }
 
-    pub async fn complete_chunk(&self, id: ChunkId, output_content: chunk::Content) -> Result<(), sqlx::Error> {
+    pub async fn complete_chunk(
+        &self,
+        id: ChunkId,
+        output_content: chunk::Content,
+    ) -> Result<(), sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         let res = chunk::complete_chunk(id, output_content, &mut conn).await?;
         // TODO: Double-check if this cleanup logic is correct.
@@ -80,7 +84,7 @@ impl ConsumerServerState {
         Ok(res)
     }
 
-    pub (crate) async fn accept_one_conn(
+    pub(crate) async fn accept_one_conn(
         &self,
         listener: &TcpListener,
     ) -> anyhow::Result<super::conn::ClientConn> {
@@ -94,7 +98,10 @@ impl ConsumerServerState {
 
     pub async fn run(self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(&*self.server_addr).await?;
-        println!("Consumer Websocket server listening at {}", self.server_addr);
+        println!(
+            "Consumer Websocket server listening at {}",
+            self.server_addr
+        );
         while let Ok(conn) = self.accept_one_conn(&listener).await {
             tokio::spawn(conn.run());
         }

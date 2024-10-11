@@ -5,18 +5,20 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
+pub async fn serve(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
+    ServerState::new(database_pool)
+        .serve(server_addr)
+        .await;
+}
+
+
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: sqlx::SqlitePool,
 }
 
 impl ServerState {
-    async fn new(database_filename: &str) -> Self {
-        let pool = crate::db_connect_pool(database_filename).await;
-        ServerState { pool }
-    }
-
-    pub fn new_from_pool(pool: sqlx::SqlitePool) -> Self {
+    pub fn new(pool: sqlx::SqlitePool) -> Self {
         ServerState { pool }
     }
     pub async fn serve(self, server_addr: Box<str>) {
@@ -39,17 +41,16 @@ impl ServerState {
     }
 }
 
-pub async fn serve(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
-    ServerState::new_from_pool(database_pool)
-        .serve(server_addr)
-        .await;
-}
 // Make our own error that wraps `anyhow::Error`.
 struct ServerError(anyhow::Error);
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(format!("{:?}", self.0))).into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(format!("{:?}", self.0)),
+        )
+            .into_response()
     }
 }
 

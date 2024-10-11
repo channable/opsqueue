@@ -3,12 +3,14 @@ use std::ops::{Deref, DerefMut};
 use chrono::NaiveDateTime;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{query_as, SqliteConnection};
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+use sqlx::{query_as, SqliteConnection};
 
 use super::submission::SubmissionId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[repr(transparent)]
 pub struct ChunkIndex(i64);
 
@@ -19,13 +21,20 @@ impl std::fmt::Display for ChunkIndex {
 }
 
 impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
-    fn encode(self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull
-        where
-            Self: Sized, {
-                <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+    fn encode(
+        self,
+        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull
+    where
+        Self: Sized,
+    {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
     }
-    fn encode_by_ref(&self, buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer) -> sqlx::encode::IsNull {
-                <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+    fn encode_by_ref(
+        &self,
+        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+    ) -> sqlx::encode::IsNull {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
     }
 }
 
@@ -100,11 +109,15 @@ pub async fn complete_chunk(
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    query!("SAVEPOINT complete_chunk;").execute(&mut *conn).await?;
+    query!("SAVEPOINT complete_chunk;")
+        .execute(&mut *conn)
+        .await?;
 
     complete_chunk_raw(full_chunk_id, output_content, &mut *conn).await?;
     super::submission::maybe_complete_submission(full_chunk_id.0, &mut *conn).await?;
-    query!("RELEASE SAVEPOINT complete_chunk;").execute(&mut *conn).await?;
+    query!("RELEASE SAVEPOINT complete_chunk;")
+        .execute(&mut *conn)
+        .await?;
 
     Ok(())
 }
@@ -341,7 +354,13 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let submission_id = crate::common::submission::insert_submission_from_chunks(None, vec![Some("first".into())], &mut conn).await.unwrap();
+        let submission_id = crate::common::submission::insert_submission_from_chunks(
+            None,
+            vec![Some("first".into())],
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
         assert!(count_chunks(&mut *conn).await.unwrap() == 1);
 
@@ -353,13 +372,16 @@ pub mod test {
         .await
         .expect("complete chunk failed");
 
-        let submission_status = crate::common::submission::submission_status(submission_id, &mut *conn).await.unwrap().unwrap();
+        let submission_status =
+            crate::common::submission::submission_status(submission_id, &mut *conn)
+                .await
+                .unwrap()
+                .unwrap();
         match dbg!(submission_status) {
-            SubmissionStatus::InProgress(submission) =>  {
+            SubmissionStatus::InProgress(submission) => {
                 assert_eq!(submission.chunks_done, 1);
             }
             _ => panic!("Expected InProgress"),
-
         }
     }
 
