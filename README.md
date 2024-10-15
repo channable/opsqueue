@@ -18,15 +18,15 @@ Specific advantages for opsqueue:
 * One standardized queuing system that can be reused again and again
 * A single way to implement monitoring, alerting, and debugging workflows
 
-# Project structure
+## Project structure
 
 The majority of Opsqueue's code is written in Rust.
 There are four main components:
 
-- The Rust library ('crate') 'opsqueue', found in `./opsqueue/src`. This contains the parts of opsqueue that are shared between the different compilation targets. The majority of the code lives here.
-- The binary executable program `opsqueue`, found in `./opsqueue/app/`.
-- The producer libraries found in `./producer_libs`. These contain thin FFI wrappers around the Opsqueue crate
-- The consumer libraries found in `./consumer_libs`. These contain thin FFI wrappers around the opsqueue crate
+* The Rust library ('crate') 'opsqueue', found in `./opsqueue/src`. This contains the parts of opsqueue that are shared between the different compilation targets. The majority of the code lives here.
+* The binary executable program `opsqueue`, found in `./opsqueue/app/`.
+* The producer libraries found in `./producer_libs`. These contain thin FFI wrappers around the Opsqueue crate
+* The consumer libraries found in `./consumer_libs`. These contain thin FFI wrappers around the opsqueue crate
 
 ## Building, running, testing
 
@@ -56,8 +56,6 @@ cargo build --profile release
 ./target/release/opsqueue
 ```
 
-
-
 ## Database migrations
 
 Opsqueue uses Sqlite as backing data store.
@@ -74,8 +72,9 @@ These checks happen at _compile-time_ for the opsqueue binary.
 The migrations (in the `./opsqueue/migrations` subfolder) will become part of the compiled `opsqueue` binary.
 
 When _running_ the `opsqueue` binary, it will automatically on startup:
-- Create an `opsqueue.db` Sqlite database file in the current working directory if it did not exist,
-- Apply any new migrations to make sure the database file has the most up-to-date format.
+
+* Create an `opsqueue.db` Sqlite database file in the current working directory if it did not exist,
+* Apply any new migrations to make sure the database file has the most up-to-date format.
 
 ## Python producer/consumer libraries
 
@@ -97,18 +96,18 @@ If building a full Python wheel, use `maturin build` instead.
 
 [Maturin usage guide](https://www.maturin.rs/tutorial).
 
-
-
 ## Running Litestream
 
-To locally test Litestream DB-replication:  
-- open a first shell and run Minio, [following the 'setting up Minio step' from the Litestream getting started page](https://litestream.io/getting-started/#setting-up-minio). (NOTE: In the future we'll be able to use the [testing GCS bucket](https://github.com/channable/devops/issues/10948))
-- open a second shell and run `nix-shell -p litestream`.
-- In this shell, run
+To locally test Litestream DB-replication:
+
+* open a first shell and run Minio, [following the 'setting up Minio step' from the Litestream getting started page](https://litestream.io/getting-started/#setting-up-minio). (NOTE: In the future we'll be able to use the [testing GCS bucket](https://github.com/channable/devops/issues/10948))
+* open a second shell and run `nix-shell -p litestream`.
+* In this shell, run
+
 ```bash
 export LITESTREAM_ACCESS_KEY_ID=minioadmin
 export LITESTREAM_SECRET_ACCESS_KEY=minioadmin
 ```
-- Finally, run `litestream replicate opsqueue.db s3://mybkt.localhost:9000/opsqueue.db`
 
-- And now, exercise the DB by running the main opsqueue binary and sending it work. 
+* Finally, run `litestream replicate opsqueue.db s3://mybkt.localhost:9000/opsqueue.db`
+* And now, exercise the DB by running the main opsqueue binary and sending it work.
