@@ -22,9 +22,10 @@ let
       nvd
 
       # Rust build tools
-      pkgs.cargo-audit
-      pkgs.cargo-edit
-      pkgs.cargo-nextest
+      cargo-audit
+      cargo-edit
+      cargo-nextest
+      maturin
     ];
   };
   environments = {

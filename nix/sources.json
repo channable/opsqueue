@@ -2,7 +2,7 @@
     "devops": {
         "branch": "master",
         "repo": "git@github.com:channable/devops.git",
-        "rev": "bb777d03dac7c31324dc081f4ab51770037328c3",
+        "rev": "3c72c99ebfe502c9cce8ddb059804170cd88ec25",
         "type": "git"
     },
     "nixpkgs": {
@@ -11,22 +11,22 @@
         "homepage": "",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "e359d268d8e0c32fa431c1a9df04eff82ef34322",
-        "sha256": "sha256:1w6v4vml8rzxqs3284y7wznbdjnc8099kjhrxhw9j8213xmsdlbk",
+        "rev": "7881fbfd2e3ed1dfa315fca889b2cfd94be39337",
+        "sha256": "0na5zykmva0a6valzrrcigp6g0rzq28mi7dqxqr0s3jbn6fm24hq",
         "type": "tarball",
-        "url": "https://github.com/NixOS/nixpkgs/archive/e359d268d8e0c32fa431c1a9df04eff82ef34322.tar.gz",
+        "url": "https://github.com/NixOS/nixpkgs/archive/7881fbfd2e3ed1dfa315fca889b2cfd94be39337.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs-mozilla": {
-        "branch": "master",
+        "branch": "fp/fix-deprecation-warning",
         "description": "Mozilla overlay for Nixpkgs.",
         "homepage": "",
-        "owner": "mozilla",
+        "owner": "channable",
         "repo": "nixpkgs-mozilla",
-        "rev": "6eabade97bc28d707a8b9d82ad13ef143836736e",
-        "sha256": "1fp637wkji0rhp12hg0hkr0nv50sqrhyf1jd4bpgj58y7wn4yjfl",
+        "rev": "f9a22cbec62d5b2de1684bf192be3f86847cbbec",
+        "sha256": "1cbsalqnswaj0wfvhszhgjypqlaja95z48q3vcvc8gm4q2paddj2",
         "type": "tarball",
-        "url": "https://github.com/mozilla/nixpkgs-mozilla/archive/6eabade97bc28d707a8b9d82ad13ef143836736e.tar.gz",
+        "url": "https://github.com/channable/nixpkgs-mozilla/archive/f9a22cbec62d5b2de1684bf192be3f86847cbbec.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     }
 }

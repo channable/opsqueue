@@ -25,8 +25,8 @@ There are four main components:
 
 * The Rust library ('crate') 'opsqueue', found in `./opsqueue/src`. This contains the parts of opsqueue that are shared between the different compilation targets. The majority of the code lives here.
 * The binary executable program `opsqueue`, found in `./opsqueue/app/`.
-* The producer libraries found in `./producer_libs`. These contain thin FFI wrappers around the Opsqueue crate
-* The consumer libraries found in `./consumer_libs`. These contain thin FFI wrappers around the opsqueue crate
+* The producer libraries found in `./opsqueue_producer`. These contain thin FFI wrappers around the Opsqueue crate
+* The consumer libraries found in `./opsqueue_consumer`. These contain thin FFI wrappers around the opsqueue crate
 
 ## Building, running, testing
 
@@ -82,7 +82,7 @@ Currently, making the Rust FFI library usable from python is done using `maturin
 
 If you want to create a temporary Python environment with the producer library
 or consumer library in scope,
-you can go to the respective `producer_libs/python` or `consumer_libs/python` directory
+you can go to the respective `opsqueue_producer` or `opsqueue_consumer` directory
 and run:
 
 ```bash

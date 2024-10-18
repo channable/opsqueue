@@ -9,18 +9,21 @@ let
     inherit sources;
     pkgs = self;
   };
-
-  rustToolchain = self.rustChannelOf { rustToolchain = ../rust-toolchain; };
-
-  rustPlatform = self.makeRustPlatform {
-    cargo = rustToolchain.rust;
-    rustc = rustToolchain.rust;
-  };
 in
 {
   # Placing the sources in the overlay gives all packages access to the sources,
   # and it makes it possible to override them in new overlays.
   sources = if super ? sources then super.sources // sources else sources;
+
+  # rustToolchain =
+  #   self.rustChannelOf { rustToolchain = ../rust-toolchain; };
+
+  # arustPlatform = self.makeRustPlatform {
+  #   cargo = self.rustToolchain.rust;
+  #   rustc = self.rustToolchain.rust;
+  # };
+
+  opsqueue = self.callPackage ../opsqueue/opsqueue.nix {};
 
   # The explicit choice is made not to override `python312`, as this will cause a rebuild of many
   # packages when nixpkgs uses python 3.12 as default python environment.
