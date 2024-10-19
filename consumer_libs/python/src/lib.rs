@@ -45,6 +45,23 @@ impl Client {
             .block_on(self.client.complete_chunk(chunk_id, output_content))
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
+
+    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
+        if !fun.is_callable() {
+            let ex = pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
+            return Err(ex);
+        }
+        loop {
+            let chunks = self.reserve_chunks(1, strategy.clone())?;
+            for chunk in chunks {
+                let submission_id = chunk.submission_id.clone();
+                let chunk_index = chunk.chunk_index.clone();
+                let res = fun.call1((chunk,))?;
+                let res = res.extract::<Option<Vec<u8>>>()?;
+                self.complete_chunk(submission_id, chunk_index, res)?;
+            }
+        }
+    }
 }
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
@@ -152,6 +169,18 @@ impl From<chunk::Chunk> for Chunk {
             retries: value.retries,
         }
     }
+}
+
+impl Into<chunk::Chunk> for Chunk {
+    fn into(self) -> chunk::Chunk {
+        chunk::Chunk {
+            submission_id: self.submission_id.into(),
+            chunk_index: self.chunk_index.into(),
+            input_content: self.input_content,
+            retries: self.retries,
+        }
+    }
+
 }
 
 #[pymethods]
