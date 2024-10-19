@@ -79,8 +79,10 @@ impl Client {
                         let res = unbound_fun.bind(py).call1((chunk,))?;
                         res.extract()
                     })?;
+                    log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                     self.complete_chunk(submission_id, chunk_index, res)?;
                     log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                    Python::with_gil(|py| {py.check_signals()})?;
                 }
             }
         })
@@ -132,7 +134,6 @@ async fn check_signals_in_background() -> PyErr {
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(transparent)]
 pub struct SubmissionId {
     pub id: i64,
 }
@@ -163,7 +164,6 @@ impl Into<SubmissionId> for submission::SubmissionId {
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(transparent)]
 pub struct ChunkIndex {
     pub id: i64,
 }

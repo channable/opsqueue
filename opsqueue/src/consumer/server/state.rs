@@ -5,6 +5,8 @@ use futures::{Stream, StreamExt, TryStreamExt};
 
 use tokio::net::TcpListener;
 
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tokio_websockets::ServerBuilder;
 
 use crate::common::chunk::{self, Chunk, ChunkId};
@@ -41,6 +43,7 @@ impl ConsumerServerState {
     /// - `limit` is the maximum number of chunks to return. The query/stream will be evaluated until that many not-already-reserved chunks can be returned.
     ///    Of course, we'll return less if the stream is exhausted before `limit` is reached.
     /// - `stale_chunks_notifier` is a Tokio channel, which the reserver will automatically invoke when a particular chunk reservation has expired.
+    #[tracing::instrument(skip(self, stream, limit, stale_chunks_notifier))]
     async fn reserve_chunks(
         &self,
         stream: impl Stream<Item = Result<Chunk, sqlx::Error>>,
@@ -80,11 +83,11 @@ impl ConsumerServerState {
         output_content: chunk::Content,
     ) -> Result<(), sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
-        let res = chunk::complete_chunk(id, output_content, &mut conn).await?;
-        // TODO: Double-check if this cleanup logic is correct.
-        // i.e. if the query fails, we currently keep the reservation but is this correct?
+        // NOTE: Even in the unlikely event the query fails,
+        // we want the chunk to be un-reserved
+        let res = chunk::complete_chunk(id, output_content, &mut conn).await;
         self.reserver.finish_reservation(&id);
-        Ok(res)
+        res
     }
 
     #[tracing::instrument(skip(self, listener))]
@@ -100,16 +103,26 @@ impl ConsumerServerState {
         Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
     }
 
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self, cancellation_token: CancellationToken, task_tracker: TaskTracker) -> anyhow::Result<()> {
         let listener = TcpListener::bind(&*self.server_addr).await?;
         tracing::info!(
             "Consumer Websocket server listening at {}",
             self.server_addr
         );
-        while let Ok(conn) = self.accept_one_conn(&listener).await {
-            tokio::spawn(conn.run());
+
+        // Make sure we run the reserver's cleanup loop every so often:
+        self.reserver.run_pending_tasks_periodically(cancellation_token.clone(), task_tracker.clone());
+
+        loop {
+            tokio::select! {
+                () = cancellation_token.cancelled() => {
+                    return Ok(())
+                }
+                Ok(conn) = self.accept_one_conn(&listener) => {
+                    task_tracker.spawn(conn.run(cancellation_token.clone()));
+                },
+            }
         }
-        Ok(())
     }
 
     #[tracing::instrument(skip(self))]

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::IntoFuture, sync::Arc, time::Duration};
 
 use chrono::NaiveDateTime;
 use pyo3::{
@@ -29,15 +29,12 @@ impl Client {
     }
 
     pub fn count_submissions(&self) -> PyResult<u32> {
-        self.runtime
-            .block_on(self.client.count_submissionns())
+        self.block_unless_interrupted(self.client.count_submissions())
             .map_err(|e| PyTypeError::new_err(e.to_string()))
     }
 
     pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
-        self.runtime
-            .block_on(self.client.get_submission(id.into()))
-            // .map(|opt| opt.map(|submission_status| format!("{submission_status:?}")))
+        self.block_unless_interrupted(self.client.get_submission(id.into()))
             .map(|opt| opt.map(Into::into))
             .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
@@ -54,16 +51,56 @@ impl Client {
             chunk_count,
             metadata,
         };
-        self.runtime
-            .block_on(self.client.insert_submission(&submission))
+        self.block_unless_interrupted(self.client.insert_submission(&submission))
             .map(Into::into)
             .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 }
 
+// What follows are internal helper functions
+// that are not available from Python
+impl Client {
+    fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
+    where
+    E: From<PyErr>,
+    {
+        self.runtime.block_on(run_unless_interrupted(future))
+
+    }
+
+    // fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E> 
+    // where
+    //     E: From<PyErr>
+    // {
+    //     self.block_unless_interrupted(async {
+    //         tokio::time::sleep(duration).await;
+    //         Ok(())
+    //     })
+    // }
+}
+
+async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
+where
+E: From<PyErr>,
+{
+    tokio::select! {
+        res = future => res,
+        py_err = check_signals_in_background() => Err(py_err.into())?,
+    }
+}
+
+async fn check_signals_in_background() -> PyErr {
+    const CHECK_INTERVAL: Duration = Duration::from_millis(100);
+    loop {
+        if let Err(err) = Python::with_gil(|py| {py.check_signals()}) {
+            return err;
+        }
+        tokio::time::sleep(CHECK_INTERVAL).await
+    }
+}
+
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(transparent)]
 pub struct SubmissionId {
     pub id: i64,
 }

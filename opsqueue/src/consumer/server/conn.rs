@@ -6,6 +6,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio_util::sync::CancellationToken;
 use tokio_websockets::{Message, WebSocketStream};
 
 use crate::common::chunk::ChunkId;
@@ -87,9 +88,19 @@ impl ClientConn {
         }
     }
 
-    pub async fn run(mut self) -> Result<(), ClientConnError> {
+    pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientConnError> {
+        const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
+
         loop {
             select! {
+                () = cancellation_token.cancelled() => {
+                    tokio::select! {
+                        _ = self.ws_stream.close() => {},
+                        () = tokio::time::sleep(GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT) => {},
+                    }
+                    // On shutdown, we don't care about any client connection errors anymore.
+                    return Ok(())
+                },
                 msg = self.ws_stream.next() => {
                     match msg {
                         // Socket closed (normal connection close)
@@ -120,7 +131,6 @@ impl ClientConn {
         }
 
         // App-specific messages:
-        // TODO extract deserializing to helper function on ClientToServerMessage
         if msg.is_binary() {
             self.handle_incoming_client_msg(msg.try_into()?).await?;
         }

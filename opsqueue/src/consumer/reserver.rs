@@ -2,9 +2,9 @@ use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use moka::{notification::RemovalCause, sync::Cache};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Clone)]
-#[repr(transparent)]
 pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>)>);
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
@@ -63,15 +63,36 @@ where
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
     pub fn finish_reservation(&self, key: &K) {
-        let res = self.0.remove(key);
-        if !res.is_some() {
-            tracing::error!("Attempted to finish non-existent reservation: {key:?}");
-        }
+        self.0.invalidate(key)
+        // let res = self.0.remove(key);
+        // if !res.is_some() {
+        //     tracing::error!("Attempted to finish non-existent reservation: {key:?}");
+        // }
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up
     /// (have their cleanup handlers called and their memory freed)
+    /// 
+    /// In production code, use `run_pending_tasks_periodically` instead.
+    /// In tests, we call this when we want to make the tests deterministic.
     pub fn run_pending_tasks(&self) {
         self.0.run_pending_tasks()
+    }
+
+    /// Call this _once_ to have the reserver set up a background task
+    /// that will call `run_pending_tasks` periodically.
+    /// 
+    /// Do not call this in tests.
+    pub fn run_pending_tasks_periodically(&self, cancellation_token: CancellationToken, task_tracker: TaskTracker) {
+        let bg_reserver_handle = self.clone();
+        task_tracker.spawn(async move {
+            loop {
+                bg_reserver_handle.run_pending_tasks();
+                tokio::select! {
+                    () = cancellation_token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+            }
+        });
     }
 }

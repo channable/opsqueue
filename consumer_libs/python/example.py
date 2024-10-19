@@ -3,6 +3,8 @@ from opsqueue_consumer import Client, Strategy, Chunk
 
 
 def myfun(chunk: Chunk) -> bytes:
+    import time
+    time.sleep(0.1) # We simulate that this takes a while
     if chunk.input_content is None:
         return b"Hello world!"
     else:

@@ -43,10 +43,10 @@ impl ServerState {
             .with_state(self)
            .layer(tracing_middleware);
 
-        let listener = tokio::net::TcpListener::bind(&*server_addr).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
 
         tracing::info!("Producer HTTP server listening at {server_addr}...");
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await.expect("Failed to start producer server");
     }
 }
 

@@ -17,7 +17,7 @@ impl Client {
         }
     }
 
-    pub async fn count_submissionns(&self) -> Result<u32, reqwest::Error> {
+    pub async fn count_submissions(&self) -> anyhow::Result<u32> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -31,7 +31,7 @@ impl Client {
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
-    ) -> Result<SubmissionId, reqwest::Error> {
+    ) -> anyhow::Result<SubmissionId> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -46,7 +46,7 @@ impl Client {
     pub async fn get_submission(
         &self,
         submission_id: SubmissionId,
-    ) -> Result<Option<SubmissionStatus>, anyhow::Error> {
+    ) -> anyhow::Result<Option<SubmissionStatus>> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -84,7 +84,7 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let count = client.count_submissionns().await.expect("Should be OK");
+        let count = client.count_submissions().await.expect("Should be OK");
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
@@ -92,7 +92,7 @@ mod tests {
             .await
             .expect("Insertion failed");
 
-        let count = client.count_submissionns().await.expect("Should be OK");
+        let count = client.count_submissions().await.expect("Should be OK");
         assert_eq!(count, 1);
     }
 

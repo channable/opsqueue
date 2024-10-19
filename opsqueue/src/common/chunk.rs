@@ -11,7 +11,6 @@ use super::submission::SubmissionId;
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-#[repr(transparent)]
 pub struct ChunkIndex(i64);
 
 impl std::fmt::Display for ChunkIndex {

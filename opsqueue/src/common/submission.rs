@@ -13,7 +13,6 @@ static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-#[repr(transparent)]
 pub struct SubmissionId(i64);
 
 impl Display for SubmissionId {

@@ -72,33 +72,52 @@ impl Client {
             yield_now().await;
             select! {
                 _ = cancellation_token.cancelled() => break,
-                Some(msg) = ws_stream.next() => {
-                    let msg = msg.unwrap();
-                    if msg.is_ping() {
-                        log::warn!("Received Heartbeat. (TODO: Handle)");
-                    } else {
-                        let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
-                        match msg {
-                            ServerToClientMessage::Sync(envelope) => {
-                                let mut in_flight_requests = in_flight_requests.lock().await;
-                                // Handle the response to some earlier request
-                                let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("Received response with nonce that matches none of the open requests");
-                                let _ = oneshot_receiver.send(envelope.contents);
-
-                            },
-                            ServerToClientMessage::Async(msg) => {
-                                // Handle a message from the server that was not associated with an earlier request
+                msg = ws_stream.next() => {
+                    match msg {
+                        None => {
+                            log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            log::error!("Opsqueue consumer client background task closing, reason: {e}");
+                            break;
+                        },
+                        Some(Ok(msg)) => {
+                            if msg.is_close() {
+                                log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
+                                break
+                            } else if msg.is_ping() {
+                                log::warn!("Received Heartbeat. (TODO: Handle)");
+                            } else {
+                                let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
                                 match msg {
-                                    AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                        log::warn!("TODO: Client should cancel execution of current work if possible");
+                                    ServerToClientMessage::Sync(envelope) => {
+                                        let mut in_flight_requests = in_flight_requests.lock().await;
+                                        // Handle the response to some earlier request
+                                        let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("Received response with nonce that matches none of the open requests");
+                                        let _ = oneshot_receiver.send(envelope.contents);
+
                                     },
+                                    ServerToClientMessage::Async(msg) => {
+                                        // Handle a message from the server that was not associated with an earlier request
+                                        match msg {
+                                            AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
+                                                log::warn!("TODO: Client should cancel execution of current work if possible");
+                                            },
+                                        }
+                                    }
                                 }
                             }
-                        }
+                        },
                     }
-                },
+                }
             }
         }
+        // Clear any and all in-flight requests on exit of the background task.
+        // This ensures that any waiting requests immediately return with an error as well.
+        let mut in_flight_requests = in_flight_requests.lock().await;
+        in_flight_requests.1.clear(); 
+
     }
 
     async fn request(
@@ -114,12 +133,12 @@ impl Client {
                 contents: request,
             };
             in_flight_requests.1.insert(nonce, oneshot_sender);
-            let _ = self
+            let () = self
                 .ws_sink
                 .lock()
                 .await
                 .send(envelope.into())
-                .await;
+                .await?;
         }
         let resp = oneshot_receiver.await?;
         Ok(resp)
@@ -159,6 +178,7 @@ mod tests {
     use std::time::Duration;
 
     use tokio::task::yield_now;
+    use tokio_util::task::TaskTracker;
 
     use crate::consumer::server::ConsumerServerState;
 
@@ -168,6 +188,8 @@ mod tests {
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
         let uri = "0.0.0.0:10083";
         let ws_uri = "ws://0.0.0.0:10083";
+        let cancellation_token = CancellationToken::new();
+        let task_tracker = TaskTracker::new();
 
         let mut conn = pool.acquire().await.unwrap();
         let input_chunks = vec![
@@ -185,10 +207,10 @@ mod tests {
         .await
         .unwrap();
 
-        let _server_handle = tokio::spawn(
+        let _server_handle = task_tracker.spawn(
             ConsumerServerState::new(pool.clone(), Duration::from_secs(60), uri)
                 .await
-                .run(),
+                .run(cancellation_token, task_tracker.clone()),
         );
 
         yield_now().await;

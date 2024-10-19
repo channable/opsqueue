@@ -34,10 +34,12 @@ impl Strategy {
     }
 }
 
+#[tracing::instrument]
 pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
     sqlx::query_as!(Chunk, "SELECT * FROM chunks ORDER BY submission_id ASC",).fetch(db_conn)
 }
 
+#[tracing::instrument]
 pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
     sqlx::query_as!(Chunk, "SELECT * FROM chunks ORDER BY submission_id ASC",).fetch(db_conn)
 }
