@@ -1,3 +1,4 @@
+use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ impl Client {
     pub fn new(py: Python<'_>, address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = runtime
-            .block_on(ActualClient::new(address))
+            .block_on(run_unless_interrupted(py, ActualClient::new(address)))
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
         Ok(Client { client, runtime })
     }
@@ -31,36 +32,30 @@ impl Client {
     pub fn reserve_chunks(&self, py: Python<'_>, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
         let strategy: strategy::Strategy = strategy.into();
         loop {
-            let res: Vec<Chunk> = self.runtime
-                .block_on((|| async {
-                    tokio::select! {
-                        res = self.client.reserve_chunks(max, strategy.clone()) => res,
-                        py_err = check_signals_in_background(py) => Err(py_err)?,
-                    }
-                })())
+            let res: Vec<Chunk> = 
+                self.block_unless_interrupted(py, self.client.reserve_chunks(max, strategy.clone()))
                 .map(|c| c.into_iter().map(Into::into).collect())
                 .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
 
             if !res.is_empty() {
                 return Ok(res);
             }
-            py.check_signals()?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            py.check_signals()?;
+            self.sleep_unless_interrupted::<PyErr>(py, POLL_INTERVAL)?;
         }
     }
 
     pub fn complete_chunk(
         &self,
+        py: Python<'_>,
         submission_id: SubmissionId,
         chunk_index: ChunkIndex,
         output_content: chunk::Content,
     ) -> PyResult<()> {
         let chunk_id = (submission_id.into(), chunk_index.into());
-        self.runtime
-            .block_on(self.client.complete_chunk(chunk_id, output_content))
+        self.block_unless_interrupted(py, self.client.complete_chunk(chunk_id, output_content))
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
 
@@ -80,28 +75,54 @@ impl Client {
                 println!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                 let res = fun.call1((chunk,))?;
                 let res = res.extract::<Option<Vec<u8>>>()?;
-                self.complete_chunk(submission_id, chunk_index, res)?;
+                self.complete_chunk(py, submission_id, chunk_index, res)?;
                 println!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                 py.check_signals()?;
             }
         }
     }
+
 }
 
-// async fn run_unless_interrupted<T>(py: Python<'_>, future: impl std::future::Future<Output = PyResult<T>>) -> PyResult<T>  {
-// // 
-//     tokio::select! {
-//         res = future => res,
-//         py_err = check_signals_in_background(py) => Err(py_err)?,
-//     }
-// }
+// What follows are internal helper functions
+// that are not available from Python
+impl Client {
+    fn block_unless_interrupted<T, E>(&self, py: Python<'_>, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
+    where
+    E: From<PyErr>,
+    {
+        self.runtime.block_on(run_unless_interrupted(py, future))
+
+    }
+
+    fn sleep_unless_interrupted<E>(&self, py: Python<'_>, duration: Duration) -> Result<(), E> 
+    where
+        E: From<PyErr>
+    {
+        self.block_unless_interrupted(py, async {
+            tokio::time::sleep(duration).await;
+            Ok(())
+        })
+    }
+}
+
+async fn run_unless_interrupted<T, E>(py: Python<'_>, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
+where
+E: From<PyErr>,
+{
+    tokio::select! {
+        res = future => res,
+        py_err = check_signals_in_background(py) => Err(py_err.into())?,
+    }
+}
 
 async fn check_signals_in_background(py: Python<'_>) -> PyErr {
+    const CHECK_INTERVAL: Duration = Duration::from_millis(100);
     loop {
         if let Err(err) = py.check_signals() {
             return err;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await
+        tokio::time::sleep(CHECK_INTERVAL).await
     }
 }
 
