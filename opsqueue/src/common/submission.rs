@@ -72,7 +72,7 @@ pub struct Submission {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionCompleted {
     pub id: i64,
-    pub chunks_done: i64,
+    pub chunks_total: i64,
     pub metadata: Option<Metadata>,
     pub completed_at: NaiveDateTime,
 }
@@ -234,7 +234,7 @@ pub async fn submission_status(
             }))),
             1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
                 id: row.id,
-                chunks_done: row.chunks_done.unwrap_or_default(),
+                chunks_total: row.chunks_total,
                 metadata: row.metadata,
                 completed_at: row.completed_at.unwrap_or_default(),
             }))),
