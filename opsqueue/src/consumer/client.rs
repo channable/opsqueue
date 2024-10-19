@@ -1,10 +1,12 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
+use arc_swap::ArcSwapOption;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
 use http::Uri;
+use retry_if::ExponentialBackoffConfig;
 use tokio::net::TcpStream;
 use tokio::{
     select,
@@ -31,11 +33,88 @@ type InFlightRequests = Arc<
     )>,
 >;
 type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-#[derive(Debug, Clone)]
+
+/// A wrapper around the actual client,
+/// ensuring that the client:
+/// - Is initialized lazily
+/// - Is reset on low-level failures
+/// - And therefore, that it is resilient to temporary network failures
+#[derive(Debug)]
+pub struct OuterClient(ArcSwapOption<Client>, Box<str>);
+
+impl OuterClient {
+    pub fn new(url: &str) -> Self {
+        Self(None.into(), url.into())
+    }
+    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> Result<Vec<Chunk>, anyhow::Error> {
+        self.ensure_initialized().await;
+        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").reserve_chunks(max, strategy).await;
+        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+            self.0.store(None);
+        }
+        res
+    }
+
+    pub async fn complete_chunk(
+        &self,
+        id: ChunkId,
+        output_content: chunk::Content,
+    ) -> anyhow::Result<()> {
+        self.ensure_initialized().await;
+        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").complete_chunk(id, output_content).await;
+        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+            self.0.store(None);
+        }
+        res
+    }
+
+    async fn ensure_initialized(&self) {
+        if self.0.load().is_none() {
+            let client = loop {
+                match self.initialize().await {
+                    Ok(client) => break client,
+                    Err(_) => {
+                        // NOTE: This is extremely unlikely to occur; it means that the Opsqueue couldn't be reached
+                        // for a duration close to u32::MAX * 10sec.
+                        // TODO: Better would be to fix the retry_if crate to support indefinite retries!
+                        continue;
+                    }
+                }
+            };
+            log::info!("Consumer client connection established");
+            self.0.store(Some(Arc::new(client)));
+        }
+    }
+
+    #[retry_if::retry(BACKOFF_CONFIG, retry_errs)]
+    async fn initialize(&self) -> anyhow::Result<Client> {
+        Client::new(&self.1).await
+    }
+}
+
+const BACKOFF_CONFIG: ExponentialBackoffConfig = ExponentialBackoffConfig {
+    max_retries: i32::MAX, // TODO: This is brittle. Maybe improve the `retry_if` crate to support indefinite retries?
+    t_wait: Duration::from_millis(50),
+    backoff: 2.0,
+    t_wait_max: None,
+    backoff_max: Some(Duration::from_secs(10)),
+};
+
+fn retry_errs<T>(result: &anyhow::Result<T>) -> bool {
+    match result {
+        Err(err) => {
+            log::debug!("Error establishing consumer client WS connection. (Will retry). Details: {err:?}");
+            true
+        },
+        Ok(_) => false,
+    }
+}
+
+#[derive(Debug)]
 pub struct Client {
     in_flight_requests: InFlightRequests,
-    ws_sink: Arc<Mutex<SplitSink<WebsocketTcpStream, Message>>>,
-    _bg_handle: Arc<DropGuard>,
+    ws_sink: Mutex<SplitSink<WebsocketTcpStream, Message>>,
+    _bg_handle: DropGuard,
 }
 
 impl Client {
@@ -57,8 +136,8 @@ impl Client {
 
         let me = Self {
             in_flight_requests,
-            _bg_handle: Arc::from(cancellation_token.drop_guard()),
-            ws_sink: Arc::from(Mutex::new(ws_sink)),
+            _bg_handle: cancellation_token.drop_guard(),
+            ws_sink: Mutex::new(ws_sink),
         };
         Ok(me)
     }

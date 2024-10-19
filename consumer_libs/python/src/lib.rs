@@ -1,22 +1,31 @@
+use std::cell::Cell;
 use std::future::IntoFuture;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use pyo3::exceptions::PyKeyboardInterrupt;
+use pyo3::{create_exception, exceptions::{PyException, PyBaseException}, prelude::*};
 use log;
 
 use opsqueue::common::{chunk, submission};
-use opsqueue::consumer::client::Client as ActualClient;
+use opsqueue::consumer::client::OuterClient as ActualClient;
 use opsqueue::consumer::strategy;
 
 create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
 
 #[pyclass]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Client {
     client: ActualClient,
     runtime: Arc<tokio::runtime::Runtime>,
+}
+
+fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
+    match e.downcast() {
+        Ok(py_err) => py_err,
+        Err(other) => ConsumerClientError::new_err(other.to_string()).into()
+    }
 }
 
 #[pymethods]
@@ -24,10 +33,10 @@ impl Client {
     #[new]
     pub fn new(address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
-        let client = runtime
-            .block_on(run_unless_interrupted(ActualClient::new(address)))
-            .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
-        Ok(Client { client, runtime })
+        let client = ActualClient::new(&address);
+            // .map_err(|e| ConsumerClientError::new_err(e.to_string())).unwrap();
+
+        Ok(Client {client, runtime })
     }
 
     pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
@@ -39,7 +48,7 @@ impl Client {
             let res: Vec<Chunk> = 
                 self.block_unless_interrupted(self.client.reserve_chunks(max, strategy.clone()))
                 .map(|c| c.into_iter().map(Into::into).collect())
-                .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
+                .map_err(maybe_wrap_error)?;
 
             if !res.is_empty() {
                 return Ok(res);
@@ -56,33 +65,49 @@ impl Client {
     ) -> PyResult<()> {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(self.client.complete_chunk(chunk_id, output_content))
-            .map_err(|e| ConsumerClientError::new_err(e.to_string()))
+            .map_err(maybe_wrap_error)
     }
 
-    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
         if !fun.is_callable() {
-            let ex = pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
-            return Err(ex);
+            return pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
         }
         // NOTE: We take care here to unlock the GIL,
         // and only re-lock it for the duration of each call to `fun`.
         let unbound_fun = fun.as_unbound();
         fun.py().allow_threads(|| {
             loop {
-                let chunks = self.reserve_chunks(1, strategy.clone())?;
-                log::info!("Reserved {} chunks", chunks.len());
-                for chunk in chunks {
-                    let submission_id = chunk.submission_id;
-                    let chunk_index = chunk.chunk_index;
-                    log::info!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                    let res = Python::with_gil(|py| {
-                        let res = unbound_fun.bind(py).call1((chunk,))?;
-                        res.extract()
-                    })?;
-                    log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                    self.complete_chunk(submission_id, chunk_index, res)?;
-                    log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                    Python::with_gil(|py| {py.check_signals()})?;
+                let chunk_outcome: PyResult<()> = (|| {
+                    let chunks = self.reserve_chunks(1, strategy.clone())?;
+                    log::info!("Reserved {} chunks", chunks.len());
+                    for chunk in chunks {
+                        let submission_id = chunk.submission_id;
+                        let chunk_index = chunk.chunk_index;
+                        log::info!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                        let res = Python::with_gil(|py| {
+                            let res = unbound_fun.bind(py).call1((chunk,))?;
+                            res.extract()
+                        })?;
+                        log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                        self.complete_chunk(submission_id, chunk_index, res)?;
+                        log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                    }
+                    Ok(())
+                })();
+
+                // NOTE: We currently only quit on KeyboardInterrupt.
+                // Any other error (like e.g. connection errors)
+                // results in looping, which will re-establish the client connection.
+                match chunk_outcome {
+                    Ok(()) => {}
+                    // In essence we 'catch `Exception` (but _not_ `BaseException` here)
+                    Err(e) if Python::with_gil(|py| {e.is_instance_of::<PyException>(py)}) => {
+                        log::warn!("Opsqueue consumer encountered an error, but will continue: {}", e);
+                    }
+                    Err(e) => {
+                        log::info!("Opsqueue consumer closing because of exception: {e:?}");
+                        return e
+                    }
                 }
             }
         })
