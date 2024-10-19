@@ -37,9 +37,10 @@ impl ConsumerServerState {
 
     /// Select chunks, and store them in the reserver, to make sure that re-running the same selection returns different results as long as they are reserved.
     ///
-    /// `query_fun` is a 'strategy' function returning a stream of chunks, something like `sqlx::query!("SELECT * FROM chunks WHERE ...").fetch(conn)`
-    /// `limit` is the maximum number of chunks to return. The query/stream will be evaluated until that many not-already-reserved chunks can be returned.
-    /// `stale_chunks_notifier` is a Tokio channel, which the reserver will automatically invoke when a particular chunk reservation has expired.
+    /// - `query_fun` is a 'strategy' function returning a stream of chunks, something like `sqlx::query!("SELECT * FROM chunks WHERE ...").fetch(conn)`
+    /// - `limit` is the maximum number of chunks to return. The query/stream will be evaluated until that many not-already-reserved chunks can be returned.
+    ///    Of course, we'll return less if the stream is exhausted before `limit` is reached.
+    /// - `stale_chunks_notifier` is a Tokio channel, which the reserver will automatically invoke when a particular chunk reservation has expired.
     async fn reserve_chunks(
         &self,
         stream: impl Stream<Item = Result<Chunk, sqlx::Error>>,

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::NaiveDateTime;
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
@@ -19,7 +20,7 @@ struct Client {
 #[pymethods]
 impl Client {
     #[new]
-    pub fn new(address: &str) -> PyResult<Self> {
+    pub fn new(py: Python<'_>, address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = runtime
             .block_on(ActualClient::new(address))
@@ -27,11 +28,28 @@ impl Client {
         Ok(Client { client, runtime })
     }
 
-    pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
-        self.runtime
-            .block_on(self.client.reserve_chunks(max, strategy.into()))
-            .map(|c| c.into_iter().map(Into::into).collect())
-            .map_err(|e| ConsumerClientError::new_err(e.to_string()))
+    pub fn reserve_chunks(&self, py: Python<'_>, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
+        // TODO: Currently we do short-polling here if there are no chunks available.
+        // This is quite suboptimal; long-polling would be much nicer.
+        let strategy: strategy::Strategy = strategy.into();
+        loop {
+            let res: Vec<Chunk> = self.runtime
+                .block_on((|| async {
+                    tokio::select! {
+                        res = self.client.reserve_chunks(max, strategy.clone()) => res,
+                        py_err = check_signals_in_background(py) => Err(py_err)?,
+                    }
+                })())
+                .map(|c| c.into_iter().map(Into::into).collect())
+                .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
+
+            if !res.is_empty() {
+                return Ok(res);
+            }
+            py.check_signals()?;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            py.check_signals()?;
+        }
     }
 
     pub fn complete_chunk(
@@ -46,26 +64,49 @@ impl Client {
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
 
-    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub fn run_per_chunk(&self, py: Python<'_>, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
         if !fun.is_callable() {
             let ex = pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
             return Err(ex);
         }
         loop {
-            let chunks = self.reserve_chunks(1, strategy.clone())?;
+            py.check_signals()?;
+            let chunks = self.reserve_chunks(py, 1, strategy.clone())?;
+            println!("Reserved {} chunks", chunks.len());
+            py.check_signals()?;
             for chunk in chunks {
-                let submission_id = chunk.submission_id.clone();
-                let chunk_index = chunk.chunk_index.clone();
+                let submission_id = chunk.submission_id;
+                let chunk_index = chunk.chunk_index;
+                println!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                 let res = fun.call1((chunk,))?;
                 let res = res.extract::<Option<Vec<u8>>>()?;
                 self.complete_chunk(submission_id, chunk_index, res)?;
+                println!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                py.check_signals()?;
             }
         }
     }
 }
 
+// async fn run_unless_interrupted<T>(py: Python<'_>, future: impl std::future::Future<Output = PyResult<T>>) -> PyResult<T>  {
+// // 
+//     tokio::select! {
+//         res = future => res,
+//         py_err = check_signals_in_background(py) => Err(py_err)?,
+//     }
+// }
+
+async fn check_signals_in_background(py: Python<'_>) -> PyErr {
+    loop {
+        if let Err(err) = py.check_signals() {
+            return err;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await
+    }
+}
+
 #[pyclass(frozen, get_all, eq, ord, hash)]
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct SubmissionId {
     pub id: i64,
@@ -96,7 +137,7 @@ impl Into<SubmissionId> for submission::SubmissionId {
 }
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct ChunkIndex {
     pub id: i64,
@@ -292,6 +333,7 @@ fn opsqueue_consumer(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SubmissionId>()?;
     m.add_class::<ChunkIndex>()?;
     m.add_class::<Strategy>()?;
+    m.add_class::<Chunk>()?;
 
     // Exception classes
     m.add(

@@ -77,13 +77,13 @@ impl Client {
                     if msg.is_ping() {
                         println!("Received Heartbeat. (TODO: Handle)");
                     } else {
-                        let msg: ServerToClientMessage = dbg!(msg).try_into().expect("TODO");
+                        let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
                         match msg {
                             ServerToClientMessage::Sync(envelope) => {
                                 let mut in_flight_requests = in_flight_requests.lock().await;
                                 // Handle the response to some earlier request
-                                let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("TODO");
-                                let _ = oneshot_receiver.send(dbg!(envelope.contents));
+                                let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("Received response with nonce that matches none of the open requests");
+                                let _ = oneshot_receiver.send(envelope.contents);
 
                             },
                             ServerToClientMessage::Async(msg) => {
@@ -118,7 +118,7 @@ impl Client {
                 .ws_sink
                 .lock()
                 .await
-                .send(dbg!(envelope.try_into().expect("TODO")))
+                .send(envelope.into())
                 .await;
         }
         let resp = oneshot_receiver.await?;
@@ -194,11 +194,9 @@ mod tests {
         yield_now().await;
 
         let client = Client::new(ws_uri).await.unwrap();
-        println!("A");
         yield_now().await;
 
         let chunks = client.reserve_chunks(3, Strategy::Oldest).await.unwrap();
-        dbg!(&chunks);
         yield_now().await;
 
         assert_eq!(
@@ -216,8 +214,5 @@ mod tests {
 
         let three = three.await;
         let two = two.await;
-
-        dbg!(&two);
-        dbg!(&three);
     }
 }

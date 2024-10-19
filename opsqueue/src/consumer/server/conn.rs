@@ -88,12 +88,10 @@ impl ClientConn {
     }
 
     pub async fn run(mut self) -> Result<(), ClientConnError> {
-        println!("Run!");
         loop {
-            println!("Loop iter");
             select! {
                 msg = self.ws_stream.next() => {
-                    match dbg!(msg) {
+                    match msg {
                         // Socket closed (normal connection close)
                         None => return Ok(()),
                         // Socket had a problem (protocol violation, sending too much data, closed, etc.)
@@ -104,7 +102,7 @@ impl ClientConn {
                 },
                 Some((submission_id, chunk_index)) = self.rx.recv() => {
                     let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired((submission_id, chunk_index)));
-                    self.ws_stream.send(msg.try_into()?).await?;
+                    self.ws_stream.send(msg.into()).await?;
                 },
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
@@ -113,8 +111,6 @@ impl ClientConn {
 
     // Deals with any message arrived through the Websocket connection.
     async fn handle_incoming_msg(&mut self, msg: Message) -> Result<(), ClientConnError> {
-        dbg!(&msg);
-        dbg!(&self);
         self.heartbeat_interval.reset();
         self.heartbeats_missed = 0;
 
@@ -160,7 +156,7 @@ impl ClientConn {
                 contents: response,
             };
             self.ws_stream
-                .send(ServerToClientMessage::Sync(enveloped_response).try_into()?)
+                .send(ServerToClientMessage::Sync(enveloped_response).into())
                 .await?
         }
 

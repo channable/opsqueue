@@ -86,11 +86,13 @@ you can go to the respective `producer_libs/python` or `consumer_libs/python` di
 and run:
 
 ```bash
-maturin develop
+maturin develop # or `maturin develop -r` to run in release mode.
 # Now, you can use python or ipython or whatever and access
 # the `opsqueue_producer` resp. `opsqueue_consumer` module.
 ipython
 ```
+Note that the `maturin develop` step needs to be repeated after making any changes to the Rust code.
+
 
 If building a full Python wheel, use `maturin build` instead.
 

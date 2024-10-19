@@ -64,22 +64,22 @@ impl TryFrom<Message> for ServerToClientMessage {
     }
 }
 
-impl TryInto<Message> for ServerToClientMessage {
-    type Error = ciborium::ser::Error<std::io::Error>;
-    fn try_into(self) -> Result<Message, Self::Error> {
+// TODO: property test ensuring serialization never panics
+impl Into<Message> for ServerToClientMessage {
+    fn into(self) -> Message {
         let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&self, &mut writer)?;
+        ciborium::into_writer(&self, &mut writer).expect("Failed to serialize ServerToClientMessage");
         let msg = Message::binary(writer.into_inner());
-        Ok(msg)
+        msg
     }
 }
 
-impl TryInto<Message> for Envelope<ClientToServerMessage> {
-    type Error = ciborium::ser::Error<std::io::Error>;
-    fn try_into(self) -> Result<Message, Self::Error> {
+// TODO: property test ensuring serialization never panics
+impl Into<Message> for Envelope<ClientToServerMessage> {
+    fn into(self) -> Message {
         let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&self, &mut writer)?;
+        ciborium::into_writer(&self, &mut writer).expect("Failed to serialize ClientToServerMessage");
         let msg = Message::binary(writer.into_inner());
-        Ok(msg)
+        msg
     }
 }

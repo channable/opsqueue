@@ -39,7 +39,6 @@ impl Client {
             .json(submission)
             .send()
             .await?;
-        // dbg!(&resp);
         let body: InsertSubmissionResponse = resp.json().await?;
         Ok(body.id)
     }
@@ -54,13 +53,11 @@ impl Client {
             .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
             .send()
             .await?;
-        // dbg!(&resp);
         if resp.status().is_success() {
-            let body: Option<SubmissionStatus> = resp.json().await.map_err(|err| dbg!(err))?;
+            let body: Option<SubmissionStatus> = resp.json().await?;
             Ok(body)
         } else {
             let body: String = resp.text().await?;
-            dbg!(&body);
             anyhow::bail!(body)
         }
     }

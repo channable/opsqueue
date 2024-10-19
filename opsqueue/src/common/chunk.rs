@@ -377,7 +377,7 @@ pub mod test {
                 .await
                 .unwrap()
                 .unwrap();
-        match dbg!(submission_status) {
+        match submission_status {
             SubmissionStatus::InProgress(submission) => {
                 assert_eq!(submission.chunks_done, 1);
             }
