@@ -1,4 +1,6 @@
+import logging
 from opsqueue_consumer import Client, Strategy, Chunk
+
 
 def myfun(chunk: Chunk) -> bytes:
     if chunk.input_content is None:
@@ -6,5 +8,7 @@ def myfun(chunk: Chunk) -> bytes:
     else:
         return chunk.input_content + b"Was altered!"
 
+
+logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
 client = Client("ws://localhost:3998")
 client.run_per_chunk(Strategy.Oldest, myfun)

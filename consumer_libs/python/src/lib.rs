@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use log;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::client::Client as ActualClient;
@@ -21,65 +22,68 @@ struct Client {
 #[pymethods]
 impl Client {
     #[new]
-    pub fn new(py: Python<'_>, address: &str) -> PyResult<Self> {
+    pub fn new(address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = runtime
-            .block_on(run_unless_interrupted(py, ActualClient::new(address)))
+            .block_on(run_unless_interrupted(ActualClient::new(address)))
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
         Ok(Client { client, runtime })
     }
 
-    pub fn reserve_chunks(&self, py: Python<'_>, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
+    pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
         let strategy: strategy::Strategy = strategy.into();
         loop {
             let res: Vec<Chunk> = 
-                self.block_unless_interrupted(py, self.client.reserve_chunks(max, strategy.clone()))
+                self.block_unless_interrupted(self.client.reserve_chunks(max, strategy.clone()))
                 .map(|c| c.into_iter().map(Into::into).collect())
                 .map_err(|e| ConsumerClientError::new_err(e.to_string()))?;
 
             if !res.is_empty() {
                 return Ok(res);
             }
-            self.sleep_unless_interrupted::<PyErr>(py, POLL_INTERVAL)?;
+            self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?;
         }
     }
 
     pub fn complete_chunk(
         &self,
-        py: Python<'_>,
         submission_id: SubmissionId,
         chunk_index: ChunkIndex,
         output_content: chunk::Content,
     ) -> PyResult<()> {
         let chunk_id = (submission_id.into(), chunk_index.into());
-        self.block_unless_interrupted(py, self.client.complete_chunk(chunk_id, output_content))
+        self.block_unless_interrupted(self.client.complete_chunk(chunk_id, output_content))
             .map_err(|e| ConsumerClientError::new_err(e.to_string()))
     }
 
-    pub fn run_per_chunk(&self, py: Python<'_>, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyResult<()> {
         if !fun.is_callable() {
             let ex = pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
             return Err(ex);
         }
-        loop {
-            py.check_signals()?;
-            let chunks = self.reserve_chunks(py, 1, strategy.clone())?;
-            println!("Reserved {} chunks", chunks.len());
-            py.check_signals()?;
-            for chunk in chunks {
-                let submission_id = chunk.submission_id;
-                let chunk_index = chunk.chunk_index;
-                println!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                let res = fun.call1((chunk,))?;
-                let res = res.extract::<Option<Vec<u8>>>()?;
-                self.complete_chunk(py, submission_id, chunk_index, res)?;
-                println!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                py.check_signals()?;
+        // NOTE: We take care here to unlock the GIL,
+        // and only re-lock it for the duration of each call to `fun`.
+        let unbound_fun = fun.as_unbound();
+        fun.py().allow_threads(|| {
+            loop {
+                let chunks = self.reserve_chunks(1, strategy.clone())?;
+                log::info!("Reserved {} chunks", chunks.len());
+                for chunk in chunks {
+                    let submission_id = chunk.submission_id;
+                    let chunk_index = chunk.chunk_index;
+                    log::info!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                    let res = Python::with_gil(|py| {
+                        let res = unbound_fun.bind(py).call1((chunk,))?;
+                        res.extract()
+                    })?;
+                    self.complete_chunk(submission_id, chunk_index, res)?;
+                    log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                }
             }
-        }
+        })
     }
 
 }
@@ -87,39 +91,39 @@ impl Client {
 // What follows are internal helper functions
 // that are not available from Python
 impl Client {
-    fn block_unless_interrupted<T, E>(&self, py: Python<'_>, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
+    fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
     where
     E: From<PyErr>,
     {
-        self.runtime.block_on(run_unless_interrupted(py, future))
+        self.runtime.block_on(run_unless_interrupted(future))
 
     }
 
-    fn sleep_unless_interrupted<E>(&self, py: Python<'_>, duration: Duration) -> Result<(), E> 
+    fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E> 
     where
         E: From<PyErr>
     {
-        self.block_unless_interrupted(py, async {
+        self.block_unless_interrupted(async {
             tokio::time::sleep(duration).await;
             Ok(())
         })
     }
 }
 
-async fn run_unless_interrupted<T, E>(py: Python<'_>, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
+async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
 where
 E: From<PyErr>,
 {
     tokio::select! {
         res = future => res,
-        py_err = check_signals_in_background(py) => Err(py_err.into())?,
+        py_err = check_signals_in_background() => Err(py_err.into())?,
     }
 }
 
-async fn check_signals_in_background(py: Python<'_>) -> PyErr {
+async fn check_signals_in_background() -> PyErr {
     const CHECK_INTERVAL: Duration = Duration::from_millis(100);
     loop {
-        if let Err(err) = py.check_signals() {
+        if let Err(err) = Python::with_gil(|py| {py.check_signals()}) {
             return err;
         }
         tokio::time::sleep(CHECK_INTERVAL).await
@@ -349,6 +353,10 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn opsqueue_consumer(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // We want Rust logs created by code called from this module
+    // to be forwarded to Python's logging system
+    pyo3_log::init();
+
     // Classes
     m.add_class::<Client>()?;
     m.add_class::<SubmissionId>()?;

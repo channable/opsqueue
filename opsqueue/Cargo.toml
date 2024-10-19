@@ -34,6 +34,7 @@ serde_json = "1.0.124"
 ciborium = "0.2.2"
 bytes = { version = "1.7.1", features = ["serde"] }
 tokio-util = { version = "0.7.11", features = ["io", "rt", "time"] }
+log = { version = "0.4.22", features = ["std", "serde"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
