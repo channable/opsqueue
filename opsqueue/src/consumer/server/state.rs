@@ -60,6 +60,7 @@ impl ConsumerServerState {
             .await
     }
 
+    #[tracing::instrument(skip(self, stale_chunks_notifier))]
     pub async fn fetch_and_reserve_chunks(
         &self,
         strategy: Strategy,
@@ -72,6 +73,7 @@ impl ConsumerServerState {
             .await
     }
 
+    #[tracing::instrument(skip(self, output_content))]
     pub async fn complete_chunk(
         &self,
         id: ChunkId,
@@ -85,21 +87,22 @@ impl ConsumerServerState {
         Ok(res)
     }
 
+    #[tracing::instrument(skip(self, listener))]
     pub(crate) async fn accept_one_conn(
         &self,
         listener: &TcpListener,
     ) -> anyhow::Result<super::conn::ClientConn> {
-        println!("Waitning for a WS connection...");
+        tracing::info!("Waiting for a WS connection...");
         let (stream, addr) = listener.accept().await?;
-        println!("Incoming consumer client HTTP connection from {}", &addr);
+        tracing::info!("Incoming consumer client HTTP connection from {}", &addr);
         let ws_stream = ServerBuilder::new().accept(stream).await?;
-        println!("HTTP-> WS upgrade succeeded for {}", &addr);
+        tracing::info!("HTTP-> WS upgrade succeeded for {}", &addr);
         Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(&*self.server_addr).await?;
-        println!(
+        tracing::info!(
             "Consumer Websocket server listening at {}",
             self.server_addr
         );
@@ -109,6 +112,7 @@ impl ConsumerServerState {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn finish_reservation(&self, chunk_id: &ChunkId) {
         self.reserver.finish_reservation(chunk_id);
     }
@@ -122,12 +126,11 @@ mod tests {
 
     #[sqlx::test]
     pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
-        // let cleanup_fun = |chunk| { println!("Cleaning up chunk: {:?}", chunk); };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::task::spawn(async move {
-            while let Some(chunk) = rx.recv().await {
-                println!("Cleaning up chunk: {:?}", chunk)
+            while let Some(_chunk) = rx.recv().await {
+                // println!("Cleaning up chunk: {:?}", chunk)
             }
         });
 

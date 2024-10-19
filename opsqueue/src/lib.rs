@@ -32,21 +32,21 @@ pub async fn ensure_db_exists(database_filename: &str) {
         .await
         .unwrap_or(false)
     {
-        println!("Creating backing sqlite DB {}", database_filename);
+        tracing::info!("Creating backing sqlite DB {}", database_filename);
         Sqlite::create_database(database_filename)
             .await
             .expect("Could not create backing sqlite DB");
-        println!("Finished creating backing sqlite DB {}", database_filename);
+        tracing::info!("Finished creating backing sqlite DB {}", database_filename);
     } else {
-        println!("Starting up using existing sqlite DB {}", database_filename);
+        tracing::info!("Starting up using existing sqlite DB {}", database_filename);
     }
 }
 
 pub async fn ensure_db_migrated(db: &SqlitePool) {
-    println!("Migrating backing DB");
+    tracing::info!("Migrating backing DB");
     sqlx::migrate!("./migrations")
         .run(db)
         .await
         .expect("DB migrations failed");
-    println!("Finished migrating backing DB");
+    tracing::info!("Finished migrating backing DB");
 }

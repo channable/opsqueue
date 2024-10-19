@@ -89,6 +89,8 @@ impl Chunk {
     }
 }
 
+
+#[tracing::instrument]
 pub async fn insert_chunk(
     chunk: Chunk,
     conn: impl Executor<'_, Database = Sqlite>,
@@ -104,6 +106,7 @@ pub async fn insert_chunk(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn complete_chunk(
     full_chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
@@ -122,6 +125,7 @@ pub async fn complete_chunk(
     Ok(())
 }
 
+#[tracing::instrument]
 /// TODO: Complete submission automatically when all chunks are completed
 pub async fn complete_chunk_raw(
     full_chunk_id: ChunkId,
@@ -154,6 +158,7 @@ pub async fn complete_chunk_raw(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn fail_chunk(
     full_chunk_id: ChunkId,
     failure: Vec<u8>,
@@ -182,6 +187,7 @@ pub async fn fail_chunk(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn get_chunk(
     full_chunk_id: ChunkId,
     conn: impl Executor<'_, Database = Sqlite>,
@@ -196,6 +202,7 @@ pub async fn get_chunk(
     .await
 }
 
+#[tracing::instrument]
 pub async fn get_chunk_completed(
     full_chunk_id: (i64, i64),
     conn: impl Executor<'_, Database = Sqlite>,
@@ -203,6 +210,7 @@ pub async fn get_chunk_completed(
     query_as!(ChunkCompleted, "SELECT submission_id, chunk_index, output_content, completed_at FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
 }
 
+#[tracing::instrument(skip(chunks, conn))]
 pub async fn insert_many_chunks<Tx, Conn>(
     chunks: impl IntoIterator<Item = Chunk>,
     mut conn: Tx,
@@ -233,6 +241,7 @@ where
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn skip_remaining_chunks(
     submission_id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
@@ -254,6 +263,7 @@ pub async fn skip_remaining_chunks(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
     // TODO: Document what we're doing here exactly
     let count_div10 = std::cmp::max(count / 10, 100);
@@ -272,6 +282,7 @@ pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
     .unwrap()
 }
 
+#[tracing::instrument]
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
         .fetch_one(db)
@@ -279,6 +290,7 @@ pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32
     Ok(count.count)
 }
 
+#[tracing::instrument]
 pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
         .fetch_one(db)
@@ -286,6 +298,7 @@ pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::
     Ok(count.count)
 }
 
+#[tracing::instrument]
 pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
         .fetch_one(db)

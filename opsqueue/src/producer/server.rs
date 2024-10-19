@@ -22,6 +22,14 @@ impl ServerState {
         ServerState { pool }
     }
     pub async fn serve(self, server_addr: Box<str>) {
+    let tracing_middleware = 
+        tower_http::trace::TraceLayer::new_for_http()
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new() )
+        .on_request(tower_http::trace::DefaultOnRequest::new()
+        )
+        .on_response(tower_http::trace::DefaultOnResponse::new()
+            .level(tracing::Level::INFO));
+
         let app = Router::new()
             .route("/submissions", post(insert_submission))
             .route(
@@ -32,14 +40,16 @@ impl ServerState {
             .route("/submissions/count", get(submissions_count))
             .route("/submissions/:submission_id", get(submission_status))
             // TODO: Cancel a submission from the producer side
-            .with_state(self);
+            .with_state(self)
+           .layer(tracing_middleware);
 
         let listener = tokio::net::TcpListener::bind(&*server_addr).await.unwrap();
 
-        println!("Producer HTTP server listening at {server_addr}...");
+        tracing::info!("Producer HTTP server listening at {server_addr}...");
         axum::serve(listener, app).await.unwrap();
     }
 }
+
 
 // Make our own error that wraps `anyhow::Error`.
 struct ServerError(anyhow::Error);

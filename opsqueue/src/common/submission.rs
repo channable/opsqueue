@@ -131,6 +131,7 @@ impl Submission {
     }
 }
 
+#[tracing::instrument]
 pub async fn insert_submission_raw(
     submission: Submission,
     conn: impl Executor<'_, Database = Sqlite>,
@@ -147,6 +148,7 @@ pub async fn insert_submission_raw(
     Ok(())
 }
 
+#[tracing::instrument(skip(chunks))]
 pub async fn insert_submission(
     submission: Submission,
     chunks: impl IntoIterator<Item = Chunk>,
@@ -163,6 +165,7 @@ pub async fn insert_submission(
     Ok(())
 }
 
+#[tracing::instrument(skip(metadata, chunks_contents, conn))]
 pub async fn insert_submission_from_chunks(
     metadata: Option<Metadata>,
     chunks_contents: Vec<chunk::Content>,
@@ -183,6 +186,7 @@ pub async fn insert_submission_from_chunks(
     Ok(submission_id)
 }
 
+#[tracing::instrument]
 pub async fn get_submission(
     id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
@@ -206,6 +210,7 @@ pub enum SubmissionStatus {
     Failed(SubmissionFailed),
 }
 
+#[tracing::instrument]
 pub async fn submission_status(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
@@ -253,6 +258,7 @@ pub async fn submission_status(
     }
 }
 
+#[tracing::instrument]
 /// Completes the submission, iff all chunks have been completed.
 pub async fn maybe_complete_submission(
     id: SubmissionId,
@@ -274,6 +280,7 @@ pub async fn maybe_complete_submission(
     res
 }
 
+#[tracing::instrument]
 /// TODO: Should only do the actual work iff chunks_done === chunks_total.
 pub async fn complete_submission_raw(
     id: SubmissionId,
@@ -301,6 +308,7 @@ pub async fn complete_submission_raw(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn fail_submission_raw(
     id: SubmissionId,
     failed_chunk_id: ChunkIndex,
@@ -330,6 +338,7 @@ pub async fn fail_submission_raw(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn fail_submission(
     id: SubmissionId,
     failed_chunk_index: ChunkIndex,
@@ -348,6 +357,7 @@ pub async fn fail_submission(
     Ok(())
 }
 
+#[tracing::instrument]
 pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
         .fetch_one(db)
@@ -355,6 +365,7 @@ pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Resul
     Ok(count.count)
 }
 
+#[tracing::instrument]
 pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
         .fetch_one(db)
@@ -362,6 +373,7 @@ pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> s
     Ok(count.count)
 }
 
+#[tracing::instrument]
 pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
         .fetch_one(db)
@@ -372,6 +384,7 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 /// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
 ///
 /// Submissions/chunks that are neither failed nor completed are not touched.
+#[tracing::instrument]
 pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: NaiveDateTime,

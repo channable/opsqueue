@@ -44,11 +44,11 @@ where
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone()));
         let res = if entry.is_fresh() {
-            // println!("Reservation of {key:?} succeeded!");
+            tracing::debug!("Reservation of {key:?} succeeded!");
             // Reservation succeeded
             Some(entry.into_value().0)
         } else {
-            // println!("Reservation of {key:?} failed!");
+            tracing::debug!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
         };
@@ -64,10 +64,9 @@ where
     /// Precondition: key should be reserved first (checked in debug builds)
     pub fn finish_reservation(&self, key: &K) {
         let res = self.0.remove(key);
-        debug_assert!(
-            res.is_some(),
-            "Attempted to finish non-existent reservation"
-        );
+        if !res.is_some() {
+            tracing::error!("Attempted to finish non-existent reservation: {key:?}");
+        }
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up

@@ -75,7 +75,7 @@ impl Client {
                 Some(msg) = ws_stream.next() => {
                     let msg = msg.unwrap();
                     if msg.is_ping() {
-                        println!("Received Heartbeat. (TODO: Handle)");
+                        log::warn!("Received Heartbeat. (TODO: Handle)");
                     } else {
                         let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
                         match msg {
@@ -90,7 +90,7 @@ impl Client {
                                 // Handle a message from the server that was not associated with an earlier request
                                 match msg {
                                     AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                        println!("TODO: Client should cancel execution of current work if possible");
+                                        log::warn!("TODO: Client should cancel execution of current work if possible");
                                     },
                                 }
                             }

@@ -35,6 +35,10 @@ ciborium = "0.2.2"
 bytes = { version = "1.7.1", features = ["serde"] }
 tokio-util = { version = "0.7.11", features = ["io", "rt", "time"] }
 log = { version = "0.4.22", features = ["std", "serde"] }
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features = ["std", "env-filter"] }
+tower-http = { version = "0.6.1", features = ["trace"] }
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
