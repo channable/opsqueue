@@ -30,21 +30,40 @@ fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
 
 #[pymethods]
 impl Client {
+
+    /// Create a new client instance.
+    /// 
+    /// :param address: The HTTP address where the opsqueue instance is running.
+    /// 
+    /// :param object_store_url: The URL used to upload/download objects from e.g. GCS.
+    ///   use `file:///tmp/my/local/path` to use a local file when running small examples in development.
+    ///   use `gs://bucket-name/path/inside/bucket` to connect to GCS in production.
+    ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
+    ///   Note that other GCS settings are read from environment variables, using the steps outlined here: https://cloud.google.com/docs/authentication/application-default-credentials.
     #[new]
-    pub fn new(address: &str) -> PyResult<Self> {
+    pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let producer_client = ProducerClient::new(address);
         let object_store_client = 
-            opsqueue::object_store::ObjectStoreClient::new(address)
+            opsqueue::object_store::ObjectStoreClient::new(object_store_url)
             .map_err(maybe_wrap_error)?;
         Ok(Client { producer_client, object_store_client, runtime })
     }
 
+    /// Counts the number of ongoing submissions in the queue.
+    /// 
+    /// Completed and failed submissions are not included in the count.
     pub fn count_submissions(&self) -> PyResult<u32> {
         self.block_unless_interrupted(self.producer_client.count_submissions())
             .map_err(|e| PyTypeError::new_err(e.to_string()))
     }
 
+    /// Retrieve the status (in progress, completed or failed) of a specific submission.
+    /// 
+    /// The returned SubmissionStatus object also includes the number of chunks finished so far,
+    /// when the submission was started/completed/failed, etc.
+    /// 
+    /// This call does _not_ fetch the submission's chunk contents on its own.
     pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
         self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
             .map(|opt| opt.map(Into::into))
@@ -70,6 +89,7 @@ impl Client {
     #[pyo3(signature = (chunk_contents, metadata=None))]
     pub fn insert_submission(&self, chunk_contents: Bound<'_, PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
         self.block_unless_interrupted(async move {
+            let prefix = uuid::Uuid::new_v4().to_string().into_boxed_str();
             let stream = futures::stream::iter(&chunk_contents).map(|item| {
                 item.and_then(|item| item.extract())
                 .map_err(Into::into)
@@ -79,7 +99,7 @@ impl Client {
                 .map_err(maybe_wrap_error)?;
 
             let submission = opsqueue::producer::server::InsertSubmission2 {
-                prefix: self.object_store_client.base_path().as_ref().into(),
+                prefix: prefix,
                 chunk_contents: ChunkContents::SeeObjectStorage { count: chunk_count },
                 metadata,
             };
