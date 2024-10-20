@@ -127,7 +127,7 @@ pub enum ChunkContents {
     /// to recover the contents of a chunk in the consumer.
     /// 
     /// This is what you should use in production.
-    SeeObjectStorage{prefix: String, count: u32},
+    SeeObjectStorage{prefix: String, count: i64},
     /// Directly pass the contents of each chunk in Opsqueue itself.
     /// 
     /// NOTE: This is useful for small tests/examples,

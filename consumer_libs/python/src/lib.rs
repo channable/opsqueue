@@ -47,7 +47,7 @@ impl Client {
         loop {
             let res: Vec<Chunk> = 
                 self.block_unless_interrupted(self.client.reserve_chunks(max, strategy.clone()))
-                .map(|c| c.into_iter().map(Into::into).collect())
+                .map(|c| c.into_iter().map(|(c, _s)| c).map(Into::into).collect())
                 .map_err(maybe_wrap_error)?;
 
             if !res.is_empty() {

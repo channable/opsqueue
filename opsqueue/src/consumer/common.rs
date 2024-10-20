@@ -8,6 +8,7 @@ use tokio_websockets::Message;
 use crate::common::chunk;
 use crate::common::chunk::{Chunk, ChunkId};
 
+use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
@@ -34,7 +35,7 @@ pub enum ServerToClientMessage {
 /// Responses to earlier ClientToServerMessages
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
-    ChunksReserved(Vec<Chunk>),
+    ChunksReserved(Vec<(Chunk, Submission)>),
     ChunkCompleted,
     ChunkFailed,
 }

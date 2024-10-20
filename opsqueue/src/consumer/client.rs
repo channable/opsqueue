@@ -17,7 +17,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
 use crate::{
-    common::chunk::{self, Chunk, ChunkId},
+    common::{chunk::{self, Chunk, ChunkId}, submission::Submission},
     consumer::common::{AsyncServerToClientMessage, Envelope},
 };
 
@@ -46,7 +46,7 @@ impl OuterClient {
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
     }
-    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> Result<Vec<Chunk>, anyhow::Error> {
+    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> Result<Vec<(Chunk, Submission)>, anyhow::Error> {
         self.ensure_initialized().await;
         let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").reserve_chunks(max, strategy).await;
         if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
@@ -240,7 +240,7 @@ impl Client {
         &self,
         max: usize,
         strategy: Strategy,
-    ) -> anyhow::Result<Vec<Chunk>> {
+    ) -> anyhow::Result<Vec<(Chunk, Submission)>> {
         let resp = self
             .request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(
             chunks
                 .iter()
-                .map(|c| c.input_content.clone())
+                .map(|(c, _s)| c.input_content.clone())
                 .collect::<Vec<Option<Vec<u8>>>>(),
             input_chunks[0..3]
         );

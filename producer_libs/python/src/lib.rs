@@ -94,7 +94,7 @@ impl Client {
                 .map_err(Into::into)
             });
             let chunk_count = 
-                self.object_store_client.store_chunks(stream).await
+                self.object_store_client.store_chunks(&prefix, stream).await
                 .map_err(maybe_wrap_error)?;
 
             let submission = opsqueue::producer::server::InsertSubmission2 {

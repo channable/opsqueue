@@ -10,6 +10,7 @@ use tokio_util::task::TaskTracker;
 use tokio_websockets::ServerBuilder;
 
 use crate::common::chunk::{self, Chunk, ChunkId};
+use crate::common::submission::Submission;
 use crate::consumer::reserver::Reserver;
 use crate::consumer::strategy::Strategy;
 
@@ -46,17 +47,17 @@ impl ConsumerServerState {
     #[tracing::instrument(skip(self, stream, limit, stale_chunks_notifier))]
     async fn reserve_chunks(
         &self,
-        stream: impl Stream<Item = Result<Chunk, sqlx::Error>>,
+        stream: impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>>,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
-    ) -> Result<Vec<Chunk>, sqlx::Error> {
+    ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         stream
-            .try_filter_map(|chunk| async move {
+            .try_filter_map(|(chunk, submission)| async move {
                 let chunk_id = (chunk.submission_id, chunk.chunk_index);
                 Ok(self
                     .reserver
                     .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
-                    .map(|_| chunk))
+                    .map(|_| (chunk, submission)))
             })
             .take(limit)
             .try_collect()
@@ -69,7 +70,7 @@ impl ConsumerServerState {
         strategy: Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
-    ) -> Result<Vec<Chunk>, sqlx::Error> {
+    ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
         self.reserve_chunks(stream, limit, stale_chunks_notifier)
@@ -147,7 +148,7 @@ impl ConsumerServerState {
 mod tests {
 
     use super::*;
-    use crate::common::chunk::Chunk;
+    use crate::common::{chunk::Chunk, submission};
 
     #[sqlx::test]
     pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
@@ -164,6 +165,8 @@ mod tests {
         let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), url).await;
         // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let submission_id = 1.into();
+        let submission = Submission{id: submission_id, prefix: None, chunks_total: 4, chunks_done: 0, metadata: None};
+        submission::insert_submission_raw(submission.clone(), &mut *pool.acquire().await.unwrap()).await.unwrap();
         let zero = Chunk::new(submission_id, 0.into(), None);
         let one = Chunk::new(submission_id, 1.into(), None);
         let two = Chunk::new(submission_id, 2.into(), None);
@@ -189,12 +192,12 @@ mod tests {
             .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
             .await
             .unwrap();
-        assert_eq!(out, vec![zero, one, two]);
+        assert_eq!(out, vec![(zero, submission.clone()), (one, submission.clone()), (two, submission.clone())]);
 
         let out2 = state
             .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
             .await
             .unwrap();
-        assert_eq!(out2, vec![three, four]);
+        assert_eq!(out2, vec![(three, submission.clone()), (four, submission.clone())]);
     }
 }

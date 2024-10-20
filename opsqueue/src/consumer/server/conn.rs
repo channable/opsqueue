@@ -153,7 +153,7 @@ impl ClientConn {
                     .await?;
 
                 self.reservations
-                    .extend(chunks.iter().map(|c| (c.submission_id, c.chunk_index)));
+                    .extend(chunks.iter().map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)));
 
                 Some(SyncServerToClientResponse::ChunksReserved(chunks))
             },
@@ -244,7 +244,7 @@ mod tests {
                         assert_eq!(
                             chunks
                                 .iter()
-                                .map(|c| c.input_content.clone())
+                                .map(|(c, _s)| c.input_content.clone())
                                 .collect::<Vec<_>>(),
                             input_chunks
                         );

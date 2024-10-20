@@ -28,12 +28,12 @@ impl ObjectStoreClient {
         Ok(ObjectStoreClient {object_store: Arc::new(object_store), base_path: base_path })
     }
 
-    pub async fn store_chunks(&self, chunk_contents: impl TryStreamExt<Ok = chunk::Content, Error = anyhow::Error>) -> anyhow::Result<u32> {
+    pub async fn store_chunks(&self, submission_prefix: &str, chunk_contents: impl TryStreamExt<Ok = chunk::Content, Error = anyhow::Error>) -> anyhow::Result<i64> {
         chunk_contents.try_fold(0, |chunk_index, chunk_content| async move {
             match chunk_content {
                 None => {},
                 Some(content) => {
-                    let path = Path::from(format!("{}/{}", self.base_path, chunk_index));
+                    let path = self.chunk_path(submission_prefix, chunk_index.into());
                     self.object_store.put(&path, content.into()).await?;
                 }
             }
@@ -41,14 +41,14 @@ impl ObjectStoreClient {
         }).await
     }
 
-    pub async fn retrieve_chunk(&self, chunk_index: chunk::ChunkIndex) -> anyhow::Result<Bytes> {
-        let bytes = self.object_store.get(&self.chunk_path(chunk_index)).await?.bytes().await?;
+    pub async fn retrieve_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex) -> anyhow::Result<Bytes> {
+        let bytes = self.object_store.get(&self.chunk_path(submission_prefix, chunk_index)).await?.bytes().await?;
         Ok(bytes)
     }
 
-    pub async fn retrieve_chunks(&self, chunk_count: i64) -> impl TryStreamExt<Ok = Bytes, Error = anyhow::Error> + '_ {
+    pub async fn retrieve_chunks<'a>(&'a self, submission_prefix: &'a str, chunk_count: i64) -> impl TryStreamExt<Ok = Bytes, Error = anyhow::Error> + 'a {
         stream::iter(0..chunk_count).then(move |chunk_index| async move {
-            self.retrieve_chunk(chunk_index.into()).await
+            self.retrieve_chunk(submission_prefix, chunk_index.into()).await
         })
     }
 
@@ -56,8 +56,8 @@ impl ObjectStoreClient {
         &self.base_path
     }
 
-    fn chunk_path(&self, chunk_index: chunk::ChunkIndex) -> Path {
-        Path::from(format!("{}/{}", self.base_path, chunk_index))
+    fn chunk_path(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex) -> Path {
+        Path::from(format!("{}/{}/{}", self.base_path, submission_prefix, chunk_index))
     }
 
 }
