@@ -1,3 +1,4 @@
+use crate::common::chunk;
 use crate::common::submission::{self, Metadata, SubmissionId};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -31,7 +32,7 @@ impl ServerState {
             .level(tracing::Level::INFO));
 
         let app = Router::new()
-            .route("/submissions", post(insert_submission))
+            .route("/submissions", post(insert_submission2))
             .route(
                 // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
                 "/submissions/count_completed",
@@ -93,6 +94,42 @@ async fn insert_submission(
         submission::insert_submission_from_chunks(request.metadata, chunks_contents, &mut conn)
             .await?;
     Ok(Json(InsertSubmissionResponse { id: submission_id }))
+}
+
+async fn insert_submission2(
+    State(state): State<ServerState>,
+    Json(request): Json<InsertSubmission2>,
+) -> Result<Json<InsertSubmissionResponse>, ServerError> {
+    let mut conn = state.pool.acquire().await?;
+    let chunk_contents = match request.chunk_contents {
+        ChunkContents::Direct{contents} => contents,
+        ChunkContents::SeeObjectStorage{count} => (0..count).map(|_index| None).collect(),
+    };
+    let submission_id =
+      submission::insert_submission_from_chunks(request.metadata, chunk_contents, &mut conn)
+      .await?;
+    Ok(Json(InsertSubmissionResponse { id: submission_id }))
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct InsertSubmission2 {
+    pub prefix: Box<str>,
+    pub chunk_contents: ChunkContents,
+    pub metadata: Option<Metadata>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum ChunkContents {
+    /// Use the `prefix` + the indexes 0..count
+    /// to recover the contents of a chunk in the consumer.
+    /// 
+    /// This is what you should use in production.
+    SeeObjectStorage{count: u32},
+    /// Directly pass the contents of each chunk in Opsqueue itself.
+    /// 
+    /// NOTE: This is useful for small tests/examples,
+    /// but significantly less scalable than using `SeeObjectStorage`.
+    Direct{contents: Vec<chunk::Content>},
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

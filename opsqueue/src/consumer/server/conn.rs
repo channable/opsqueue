@@ -144,8 +144,9 @@ impl ClientConn {
         &mut self,
         msg: Envelope<ClientToServerMessage>,
     ) -> Result<(), ClientConnError> {
+        use ClientToServerMessage::*;
         let response = match msg.contents {
-            ClientToServerMessage::WantToReserveChunks { max, strategy } => {
+            WantToReserveChunks { max, strategy } => {
                 let chunks = self
                     .server_state
                     .fetch_and_reserve_chunks(strategy, max, &self.tx)
@@ -155,11 +156,15 @@ impl ClientConn {
                     .extend(chunks.iter().map(|c| (c.submission_id, c.chunk_index)));
 
                 Some(SyncServerToClientResponse::ChunksReserved(chunks))
-            }
-            ClientToServerMessage::CompleteChunk { id, output_content } => {
+            },
+            CompleteChunk { id, output_content } => {
                 self.server_state.complete_chunk(id, output_content).await?;
                 Some(SyncServerToClientResponse::ChunkCompleted)
-            }
+            },
+            FailChunk {id, failure } => {
+                self.server_state.fail_chunk(id, failure).await?;
+                Some(SyncServerToClientResponse::ChunkFailed)
+            },
         };
         if let Some(response) = response {
             let enveloped_response = Envelope {

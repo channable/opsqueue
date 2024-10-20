@@ -90,6 +90,19 @@ impl ConsumerServerState {
         res
     }
 
+    pub async fn fail_chunk(
+        &self,
+        id: ChunkId,
+        failure: String,
+    ) -> Result<(), sqlx::Error> {
+        let mut conn = self.pool.acquire().await?;
+        // NOTE: Even in the unlikely event the query fails,
+        // we want the chunk to be un-reserved
+        let res = chunk::retry_or_fail_chunk(id, failure, &mut *conn).await;
+        self.reserver.finish_reservation(&id);
+        res
+    }
+
     pub(crate) async fn accept_one_conn(
         &self,
         listener: &TcpListener,

@@ -19,6 +19,10 @@ pub enum ClientToServerMessage {
         id: ChunkId,
         output_content: chunk::Content,
     },
+    FailChunk {
+        id: ChunkId,
+        failure: String,
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -32,6 +36,7 @@ pub enum ServerToClientMessage {
 pub enum SyncServerToClientResponse {
     ChunksReserved(Vec<Chunk>),
     ChunkCompleted,
+    ChunkFailed,
 }
 
 /// Messages the server sends on its own

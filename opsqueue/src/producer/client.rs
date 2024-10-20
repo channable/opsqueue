@@ -1,6 +1,6 @@
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 
-use super::server::{InsertSubmission, InsertSubmissionResponse};
+use super::server::{InsertSubmission2, InsertSubmissionResponse};
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -30,7 +30,7 @@ impl Client {
 
     pub async fn insert_submission(
         &self,
-        submission: &InsertSubmission,
+        submission: &InsertSubmission2,
     ) -> anyhow::Result<SubmissionId> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
@@ -65,7 +65,7 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::submission::{self, SubmissionStatus};
+    use crate::{common::submission::{self, SubmissionStatus}, producer::server::ChunkContents};
 
     use super::*;
 
@@ -107,9 +107,9 @@ mod tests {
             .expect("Should be OK");
         assert_eq!(count, 0);
 
-        let submission = InsertSubmission {
-            directory_uri: "test_directory".into(),
-            chunk_count: 3,
+        let submission = InsertSubmission2 {
+            prefix: "test_directory".into(),
+            chunk_contents: ChunkContents::Direct{contents: vec![None, None, None]},
             metadata: None,
         };
         client
@@ -147,9 +147,9 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let submission = InsertSubmission {
-            directory_uri: "test_directory".into(),
-            chunk_count: 3,
+        let submission = InsertSubmission2 {
+            prefix: "test_directory".into(),
+            chunk_contents: ChunkContents::Direct {contents: vec![None, None, None] },
             metadata: None,
         };
         let submission_id = client

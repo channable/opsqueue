@@ -158,15 +158,45 @@ pub async fn complete_chunk_raw(
 }
 
 #[tracing::instrument]
-pub async fn fail_chunk(
+pub async fn retry_or_fail_chunk(
     full_chunk_id: ChunkId,
-    failure: Vec<u8>,
+    failure: String,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<()> {
+    query!("SAVEPOINT retry_or_fail_chunk;")
+        .execute(&mut *conn)
+        .await?;
+
+    const MAX_RETRIES: i64 = 10;
+    let (submission_id, chunk_index) = full_chunk_id;
+    let fields = query!("
+    UPDATE chunks SET retries = retries + 1 
+    WHERE submission_id = ? AND chunk_index = ?
+    RETURNING retries
+    ;
+    ", submission_id, chunk_index).fetch_one(&mut *conn).await?;
+    if fields.retries >= MAX_RETRIES {
+        super::submission::fail_submission(submission_id, chunk_index, failure, conn).await?
+    }
+
+    query!("RELEASE SAVEPOINT retry_or_fail_chunk;")
+        .execute(&mut *conn)
+        .await?;
+
+    Ok(())
+}
+
+
+#[tracing::instrument]
+pub async fn move_chunk_to_failed_chunks(
+    full_chunk_id: ChunkId,
+    failure: String,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
     let (submission_id, chunk_index) = full_chunk_id;
     query!("
-    SAVEPOINT fail_chunk;
+    SAVEPOINT move_chunk_to_failed_chunks;
 
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, failed_at) 
@@ -174,7 +204,7 @@ pub async fn fail_chunk(
 
     DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ? RETURNING *;
 
-    RELEASE SAVEPOINT fail_chunk;
+    RELEASE SAVEPOINT move_chunk_to_failed_chunks;
     ", 
     failure, 
     now,
@@ -251,13 +281,16 @@ pub async fn skip_remaining_chunks(
     SAVEPOINT skip_remaining_chunks;
 
     INSERT INTO chunks_failed
-    (submission_id, chunk_index, input_content, failure, failed_at)
-    SELECT submission_id, chunk_index, input_content, 'skip', julianday(?) FROM chunks WHERE submission_id = ?;
+    (submission_id, chunk_index, input_content, failure, skipped, failed_at)
+    SELECT submission_id, chunk_index, input_content, '', 1, julianday(?) FROM chunks WHERE chunks.submission_id = ?;
+
+    DELETE FROM chunks WHERE chunks.submission_id = ?;
 
     RELEASE SAVEPOINT skip_remaining_chunks;
     ",
-    submission_id,
     now,
+    submission_id,
+    submission_id,
     ).execute(conn).await?;
     Ok(())
 }
@@ -405,9 +438,9 @@ pub mod test {
         insert_chunk(chunk.clone(), &mut *conn)
             .await
             .expect("Insert chunk failed");
-        fail_chunk(
+        move_chunk_to_failed_chunks(
             (chunk.submission_id, chunk.chunk_index),
-            vec![6, 7, 8, 9],
+            "Boom!".to_string(),
             &mut *conn,
         )
         .await

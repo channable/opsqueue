@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 use pyo3::exceptions::PyKeyboardInterrupt;
+use pyo3::types::PyBytes;
 use pyo3::{create_exception, exceptions::{PyException, PyBaseException}, prelude::*};
 use log;
 
@@ -67,6 +68,18 @@ impl Client {
             .map_err(maybe_wrap_error)
     }
 
+    pub fn fail_chunk(
+        &self,
+        submission_id: SubmissionId,
+        chunk_index: ChunkIndex,
+        failure: String,
+    ) -> PyResult<()> {
+        let chunk_id = (submission_id.into(), chunk_index.into());
+        self.block_unless_interrupted(self.client.fail_chunk(chunk_id, failure))
+            .map_err(maybe_wrap_error)
+    }
+
+
     pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
         if !fun.is_callable() {
             return pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
@@ -86,10 +99,19 @@ impl Client {
                         let res = Python::with_gil(|py| {
                             let res = unbound_fun.bind(py).call1((chunk,))?;
                             res.extract()
-                        })?;
-                        log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                        self.complete_chunk(submission_id, chunk_index, res)?;
-                        log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                        });
+                        match res {
+                            Ok(res) => {
+                                log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                self.complete_chunk(submission_id, chunk_index, res)?;
+                                log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                            },
+                            Err(failure) => {
+                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, reason: {failure:?}", submission_id, chunk_index);
+                                self.fail_chunk(submission_id, chunk_index, format!("{failure:?}"))?;
+                                log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                            }
+                        }
                     }
                     Ok(())
                 })();
@@ -241,12 +263,28 @@ impl Into<strategy::Strategy> for Strategy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentAsBytes(chunk::Content);
+
+
+impl IntoPy<PyObject> for ContentAsBytes {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self.0 {
+            None => py.None(),
+            Some(content) => {
+                let content_ref: &[u8] = content.as_ref();
+                content_ref.into_py(py)
+            },
+        }
+    }
+}
+
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
-    pub input_content: chunk::Content,
+    pub input_content: ContentAsBytes,
     pub retries: i64,
 }
 
@@ -255,7 +293,7 @@ impl From<chunk::Chunk> for Chunk {
         Self {
             submission_id: value.submission_id.into(),
             chunk_index: value.chunk_index.into(),
-            input_content: value.input_content,
+            input_content: ContentAsBytes(value.input_content),
             retries: value.retries,
         }
     }
@@ -266,7 +304,7 @@ impl Into<chunk::Chunk> for Chunk {
         chunk::Chunk {
             submission_id: self.submission_id.into(),
             chunk_index: self.chunk_index.into(),
-            input_content: self.input_content,
+            input_content: self.input_content.0,
             retries: self.retries,
         }
     }

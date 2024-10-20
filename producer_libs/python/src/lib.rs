@@ -7,7 +7,7 @@ use pyo3::{
     prelude::*,
 };
 
-use opsqueue::common::submission;
+use opsqueue::{common::{chunk, submission}, producer::server::ChunkContents};
 use opsqueue::producer::client::Client as ActualClient;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
@@ -39,16 +39,16 @@ impl Client {
             .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 
-    #[pyo3(signature = (directory_uri, chunk_count, metadata=None))]
-    pub fn insert_submission(
+    #[pyo3(signature = (prefix, chunk_contents, metadata=None))]
+    pub fn insert_submission_direct(
         &self,
-        directory_uri: String,
-        chunk_count: u32,
+        prefix: &str,
+        chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
     ) -> PyResult<SubmissionId> {
-        let submission = opsqueue::producer::server::InsertSubmission {
-            directory_uri,
-            chunk_count,
+        let submission = opsqueue::producer::server::InsertSubmission2 {
+            prefix: prefix.into(),
+            chunk_contents: ChunkContents::Direct { contents: chunk_contents },
             metadata,
         };
         self.block_unless_interrupted(self.client.insert_submission(&submission))

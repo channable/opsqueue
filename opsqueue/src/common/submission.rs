@@ -317,15 +317,11 @@ pub async fn fail_submission_raw(
 
     query!(
         "
-    SAVEPOINT fail_submission_raw;
-
     INSERT INTO submissions_failed
     (id, chunks_total, metadata, failed_at, failed_chunk_id)
     SELECT id, chunks_total, metadata, julianday(?), ? FROM submissions WHERE id = ?;
 
     DELETE FROM submissions WHERE id = ? RETURNING *;
-
-    RELEASE SAVEPOINT fail_submission_raw;
     ",
         now,
         failed_chunk_id,
@@ -341,18 +337,18 @@ pub async fn fail_submission_raw(
 pub async fn fail_submission(
     id: SubmissionId,
     failed_chunk_index: ChunkIndex,
-    failure: Vec<u8>,
+    failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    query!("SAVEPOINT fail_submission;")
-        .execute(&mut *conn)
-        .await?;
+    // query!("SAVEPOINT fail_submission;")
+    //     .execute(&mut *conn)
+    //     .await?;
     fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
-    super::chunk::fail_chunk((id, failed_chunk_index), failure, &mut *conn).await?;
+    super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut *conn).await?;
     super::chunk::skip_remaining_chunks(id, &mut *conn).await?;
-    query!("RELEASE SAVEPOINT fail_submission;")
-        .execute(&mut *conn)
-        .await?;
+    // query!("RELEASE SAVEPOINT fail_submission;")
+    //     .execute(&mut *conn)
+    //     .await?;
     Ok(())
 }
 
@@ -495,7 +491,7 @@ pub mod test {
             .expect("insertion failed");
         let mut conn = db.acquire().await.unwrap();
 
-        fail_submission(submission.id, 1.into(), vec![1, 2, 3], &mut conn)
+        fail_submission(submission.id, 1.into(), "Boom!".to_string(), &mut conn)
             .await
             .unwrap();
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);

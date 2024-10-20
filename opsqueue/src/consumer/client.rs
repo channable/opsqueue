@@ -68,6 +68,19 @@ impl OuterClient {
         res
     }
 
+    pub async fn fail_chunk(
+        &self,
+        id: ChunkId,
+        failure: String,
+    ) -> anyhow::Result<()> {
+        self.ensure_initialized().await;
+        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").fail_chunk(id, failure).await;
+        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+            self.0.store(None);
+        }
+        res
+    }
+
     async fn ensure_initialized(&self) {
         if self.0.load().is_none() {
             let client = loop {
@@ -247,6 +260,20 @@ impl Client {
             .await?;
         match resp {
             SyncServerToClientResponse::ChunkCompleted => Ok(()),
+            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+        }
+    }
+
+    pub async fn fail_chunk(
+        &self,
+        id: ChunkId,
+        failure: String,
+    ) -> anyhow::Result<()> {
+        let resp = self
+            .request(ClientToServerMessage::FailChunk { id, failure })
+            .await?;
+        match resp {
+            SyncServerToClientResponse::ChunkFailed => Ok(()),
             _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
         }
     }
