@@ -308,6 +308,7 @@ mod tests {
         crate::common::submission::insert_submission_from_chunks(
             None,
             input_chunks.clone(),
+            None,
             &mut conn,
         )
         .await

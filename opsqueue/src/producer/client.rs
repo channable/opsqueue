@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
-        submission::insert_submission_from_chunks(None, vec![None, None, None], &mut conn)
+        submission::insert_submission_from_chunks(None, vec![None, None, None], None, &mut conn)
             .await
             .expect("Insertion failed");
 
@@ -108,7 +108,6 @@ mod tests {
         assert_eq!(count, 0);
 
         let submission = InsertSubmission2 {
-            prefix: "test_directory".into(),
             chunk_contents: ChunkContents::Direct{contents: vec![None, None, None]},
             metadata: None,
         };
@@ -148,7 +147,6 @@ mod tests {
         let client = Client::new(url);
 
         let submission = InsertSubmission2 {
-            prefix: "test_directory".into(),
             chunk_contents: ChunkContents::Direct {contents: vec![None, None, None] },
             metadata: None,
         };

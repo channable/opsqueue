@@ -63,6 +63,7 @@ impl sqlx::Type<Sqlite> for SubmissionId {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
     pub id: SubmissionId,
+    pub prefix: Option<String>,
     pub chunks_total: i64,
     pub chunks_done: i64,
     pub metadata: Option<Metadata>,
@@ -71,6 +72,7 @@ pub struct Submission {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionCompleted {
     pub id: i64,
+    pub prefix: Option<String>,
     pub chunks_total: i64,
     pub metadata: Option<Metadata>,
     pub completed_at: NaiveDateTime,
@@ -79,6 +81,7 @@ pub struct SubmissionCompleted {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionFailed {
     pub id: i64,
+    pub prefix: Option<String>,
     pub chunks_total: i64,
     pub metadata: Option<Metadata>,
     pub failed_at: NaiveDateTime,
@@ -95,6 +98,7 @@ impl Submission {
     pub fn new() -> Self {
         Submission {
             id: SubmissionId(0),
+            prefix: None,
             chunks_total: 0,
             chunks_done: 0,
             metadata: None,
@@ -113,6 +117,7 @@ impl Submission {
         let len = chunks.len().try_into().ok()?;
         let submission = Submission {
             id: submission_id,
+            prefix: None,
             chunks_total: len,
             chunks_done: 0,
             metadata,
@@ -136,8 +141,12 @@ pub async fn insert_submission_raw(
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
     sqlx::query!(
-        "INSERT INTO submissions (id, chunks_total, chunks_done, metadata) VALUES ($1, $2, $3, $4)",
+        "
+        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata) 
+        VALUES ($1, $2, $3, $4, $5)
+        ",
         submission.id,
+        submission.prefix,
         submission.chunks_total,
         submission.chunks_done,
         submission.metadata
@@ -166,13 +175,15 @@ pub async fn insert_submission(
 
 #[tracing::instrument(skip(metadata, chunks_contents, conn))]
 pub async fn insert_submission_from_chunks(
-    metadata: Option<Metadata>,
+    prefix: Option<String>,
     chunks_contents: Vec<chunk::Content>,
+    metadata: Option<Metadata>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<SubmissionId> {
     let submission_id = Submission::generate_id();
     let submission = Submission {
         id: submission_id,
+        prefix: prefix,
         chunks_total: chunks_contents.len() as i64,
         chunks_done: 0,
         metadata,
@@ -215,11 +226,11 @@ pub async fn submission_status(
     conn: impl SqliteExecutor<'_>,
 ) -> sqlx::Result<Option<SubmissionStatus>> {
     let maybe_row = query!("
-        SELECT 0 as status, id, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
+        SELECT 0 as status, id, prefix, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
         UNION ALL
-        SELECT 1 as status, id, NULL as chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, completed_at FROM submissions_completed WHERE id = ?
+        SELECT 1 as status, id, prefix, NULL as chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, completed_at FROM submissions_completed WHERE id = ?
         UNION ALL
-        SELECT 2 as status, id, NULL as chunks_done, chunks_total, metadata, failed_chunk_id, failed_at, NULL as completed_at FROM submissions_failed WHERE id = ?
+        SELECT 2 as status, id, prefix, NULL as chunks_done, chunks_total, metadata, failed_chunk_id, failed_at, NULL as completed_at FROM submissions_failed WHERE id = ?
     ",
     id,
     id,
@@ -232,18 +243,21 @@ pub async fn submission_status(
             // TODO: Cleaner error handling than unwrap_or_default
             0 => Ok(Some(SubmissionStatus::InProgress(Submission {
                 id: row.id.into(),
+                prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 chunks_done: row.chunks_done.unwrap_or_default(),
                 metadata: row.metadata,
             }))),
             1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
                 id: row.id,
+                prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 metadata: row.metadata,
                 completed_at: row.completed_at.unwrap_or_default(),
             }))),
             2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
                 id: row.id,
+                prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 metadata: row.metadata,
                 failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
@@ -504,17 +518,17 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
-        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
-        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
         let old_four_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
                 .await
                 .unwrap();
 
@@ -530,14 +544,14 @@ pub mod test {
 
         let cutoff_timestamp = Utc::now().naive_utc();
 
-        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
         let _too_new_two_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
                 .await
                 .unwrap();
-        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), &mut conn)
+        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
 

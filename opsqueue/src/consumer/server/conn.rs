@@ -257,7 +257,7 @@ mod tests {
         let mut conn = server_state.accept_one_conn(&listener).await.unwrap();
 
         let mut sql_conn = pool.acquire().await.unwrap();
-        submission::insert_submission_from_chunks(None, input_chunks, &mut sql_conn)
+        submission::insert_submission_from_chunks(None, input_chunks, None, &mut sql_conn)
             .await
             .unwrap();
 

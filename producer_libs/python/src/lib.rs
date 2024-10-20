@@ -77,7 +77,6 @@ impl Client {
         metadata: Option<submission::Metadata>,
     ) -> PyResult<SubmissionId> {
         let submission = opsqueue::producer::server::InsertSubmission2 {
-            prefix: "".into(),
             chunk_contents: ChunkContents::Direct { contents: chunk_contents },
             metadata,
         };
@@ -89,7 +88,7 @@ impl Client {
     #[pyo3(signature = (chunk_contents, metadata=None))]
     pub fn insert_submission(&self, chunk_contents: Bound<'_, PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
         self.block_unless_interrupted(async move {
-            let prefix = uuid::Uuid::new_v4().to_string().into_boxed_str();
+            let prefix = uuid::Uuid::new_v4().to_string();
             let stream = futures::stream::iter(&chunk_contents).map(|item| {
                 item.and_then(|item| item.extract())
                 .map_err(Into::into)
@@ -99,8 +98,7 @@ impl Client {
                 .map_err(maybe_wrap_error)?;
 
             let submission = opsqueue::producer::server::InsertSubmission2 {
-                prefix: prefix,
-                chunk_contents: ChunkContents::SeeObjectStorage { count: chunk_count },
+                chunk_contents: ChunkContents::SeeObjectStorage { prefix, count: chunk_count },
                 metadata,
             };
             self.producer_client.insert_submission(&submission).await

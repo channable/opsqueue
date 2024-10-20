@@ -91,7 +91,7 @@ async fn insert_submission(
     let chunks_contents = (0..request.chunk_count).map(|_index| None).collect();
 
     let submission_id =
-        submission::insert_submission_from_chunks(request.metadata, chunks_contents, &mut conn)
+        submission::insert_submission_from_chunks(None, chunks_contents, request.metadata, &mut conn)
             .await?;
     Ok(Json(InsertSubmissionResponse { id: submission_id }))
 }
@@ -101,19 +101,22 @@ async fn insert_submission2(
     Json(request): Json<InsertSubmission2>,
 ) -> Result<Json<InsertSubmissionResponse>, ServerError> {
     let mut conn = state.pool.acquire().await?;
-    let chunk_contents = match request.chunk_contents {
-        ChunkContents::Direct{contents} => contents,
-        ChunkContents::SeeObjectStorage{count} => (0..count).map(|_index| None).collect(),
+    let (prefix, chunk_contents) = match request.chunk_contents {
+        ChunkContents::Direct{contents} => (None, contents),
+        ChunkContents::SeeObjectStorage{prefix, count} => (Some(prefix), (0..count).map(|_index| None).collect()),
     };
     let submission_id =
-      submission::insert_submission_from_chunks(request.metadata, chunk_contents, &mut conn)
+      submission::insert_submission_from_chunks(
+        prefix,
+        chunk_contents, 
+        request.metadata,
+        &mut conn)
       .await?;
     Ok(Json(InsertSubmissionResponse { id: submission_id }))
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InsertSubmission2 {
-    pub prefix: Box<str>,
     pub chunk_contents: ChunkContents,
     pub metadata: Option<Metadata>,
 }
@@ -124,7 +127,7 @@ pub enum ChunkContents {
     /// to recover the contents of a chunk in the consumer.
     /// 
     /// This is what you should use in production.
-    SeeObjectStorage{count: u32},
+    SeeObjectStorage{prefix: String, count: u32},
     /// Directly pass the contents of each chunk in Opsqueue itself.
     /// 
     /// NOTE: This is useful for small tests/examples,

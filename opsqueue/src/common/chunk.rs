@@ -402,6 +402,7 @@ pub mod test {
         let submission_id = crate::common::submission::insert_submission_from_chunks(
             None,
             vec![Some("first".into())],
+            None,
             &mut conn,
         )
         .await
