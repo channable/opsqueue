@@ -1,12 +1,11 @@
-use std::cell::Cell;
 use std::future::IntoFuture;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
-use pyo3::exceptions::PyKeyboardInterrupt;
-use pyo3::types::PyBytes;
-use pyo3::{create_exception, exceptions::{PyException, PyBaseException}, prelude::*};
+use futures::{stream, StreamExt, TryStreamExt};
+use opsqueue::object_store::ObjectStoreClient;
+use pyo3::{create_exception, exceptions::PyException, prelude::*};
 use log;
 
 use opsqueue::common::{chunk, submission};
@@ -19,6 +18,7 @@ create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
 #[derive(Debug)]
 struct Client {
     client: ActualClient,
+    object_store_client: ObjectStoreClient,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -32,11 +32,12 @@ fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
 #[pymethods]
 impl Client {
     #[new]
-    pub fn new(address: &str) -> PyResult<Self> {
+    pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = ActualClient::new(&address);
+        let object_store_client = ObjectStoreClient::new(&object_store_url).map_err(maybe_wrap_error)?;
 
-        Ok(Client {client, runtime })
+        Ok(Client {client, object_store_client, runtime })
     }
 
     pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
@@ -46,10 +47,8 @@ impl Client {
         let strategy: strategy::Strategy = strategy.into();
         loop {
             let res: Vec<Chunk> = 
-                self.block_unless_interrupted(self.client.reserve_chunks(max, strategy.clone()))
-                .map(|c| c.into_iter().map(|(c, _s)| c).map(Into::into).collect())
+                self.block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
                 .map_err(maybe_wrap_error)?;
-
             if !res.is_empty() {
                 return Ok(res);
             }
@@ -155,6 +154,30 @@ impl Client {
             tokio::time::sleep(duration).await;
             Ok(())
         })
+    }
+
+    async fn reserve_and_retrieve_chunks(&self, max: usize, strategy: opsqueue::consumer::strategy::Strategy) -> anyhow::Result<Vec<Chunk>>{
+        let chunks = self.client.reserve_chunks(max, strategy).await?;
+        let stream = stream::iter(chunks).then(|(c, s)| async move {
+            let content = match c.input_content {
+                Some(bytes) => bytes,
+                None => {
+                    let prefix = s.prefix.unwrap();
+                    log::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
+                    let res = self.object_store_client.retrieve_chunk(&prefix, c.chunk_index).await?.to_vec();
+                    log::debug!("Fetched chunk content: {res:?}");
+                    res
+                }
+            };
+            Ok::<_, anyhow::Error>(Chunk {
+                submission_id: c.submission_id.into(),
+                chunk_index: c.chunk_index.into(),
+                input_content: ContentAsBytes(Some(content)),
+                retries: c.retries,
+            })
+        });
+        let elems: Vec<Chunk> = stream.try_collect().await?;
+        Ok(elems)
     }
 }
 
