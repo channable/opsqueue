@@ -22,7 +22,7 @@ struct Client {
 }
 
 fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
-    match e.downcast() {
+    match e.downcast::<PyErr>() {
         Ok(py_err) => py_err,
         Err(other) => ConsumerClientError::new_err(other.to_string()).into()
     }
@@ -34,7 +34,6 @@ impl Client {
     pub fn new(address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = ActualClient::new(&address);
-            // .map_err(|e| ConsumerClientError::new_err(e.to_string())).unwrap();
 
         Ok(Client {client, runtime })
     }

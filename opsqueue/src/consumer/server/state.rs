@@ -90,7 +90,6 @@ impl ConsumerServerState {
         res
     }
 
-    #[tracing::instrument(skip(self, listener))]
     pub(crate) async fn accept_one_conn(
         &self,
         listener: &TcpListener,

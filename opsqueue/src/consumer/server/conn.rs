@@ -88,6 +88,7 @@ impl ClientConn {
         }
     }
 
+    #[tracing::instrument]
     pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientConnError> {
         const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
 
