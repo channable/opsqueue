@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 use arc_swap::ArcSwapOption;
 use futures::{
@@ -18,11 +18,11 @@ use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
 use crate::{
     common::{chunk::{self, Chunk, ChunkId}, submission::Submission},
-    consumer::common::{AsyncServerToClientMessage, Envelope},
+    consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
 };
 
 use super::{
-    common::{ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse},
+    common::{ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL},
     strategy::Strategy,
 };
 
@@ -82,7 +82,9 @@ impl OuterClient {
     }
 
     async fn ensure_initialized(&self) {
-        if self.0.load().is_none() {
+        let inner = self.0.load();
+        if inner.is_none() || inner.as_ref().is_some_and(|c| !c.is_healthy()) {
+            log::info!("Initializing (or re-initializing) consumer client connection");
             let client = loop {
                 match self.initialize().await {
                     Ok(client) => break client,
@@ -126,7 +128,8 @@ fn retry_errs<T>(result: &anyhow::Result<T>) -> bool {
 #[derive(Debug)]
 pub struct Client {
     in_flight_requests: InFlightRequests,
-    ws_sink: Mutex<SplitSink<WebsocketTcpStream, Message>>,
+    ws_sink: Arc<Mutex<SplitSink<WebsocketTcpStream, Message>>>,
+    healthy: Arc<AtomicBool>,
     _bg_handle: DropGuard,
 }
 
@@ -139,32 +142,62 @@ impl Client {
             .connect()
             .await?;
         let (ws_sink, ws_stream) = websocket_conn.split();
+        let ws_sink = Arc::new(Mutex::new(ws_sink));
         let cancellation_token = CancellationToken::new();
 
+        let healthy = Arc::new(AtomicBool::new(true));
         tokio::spawn(Self::background_task(
             cancellation_token.clone(),
+            healthy.clone(),
             in_flight_requests.clone(),
             ws_stream,
+            ws_sink.clone(),
         ));
 
         let me = Self {
             in_flight_requests,
             _bg_handle: cancellation_token.drop_guard(),
-            ws_sink: Mutex::new(ws_sink),
+            healthy: healthy,
+            ws_sink,
         };
         Ok(me)
     }
 
+    pub fn is_healthy(&self) -> bool {
+        self.healthy.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     async fn background_task(
         cancellation_token: CancellationToken,
+        healthy: Arc<AtomicBool>,
         in_flight_requests: InFlightRequests,
         mut ws_stream: SplitStream<WebsocketTcpStream>,
+        ws_sink: Arc<Mutex<SplitSink<WebsocketTcpStream, Message>>>,
     ) {
+        let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        let mut heartbeats_missed = 0;
         loop {
             yield_now().await;
             select! {
                 _ = cancellation_token.cancelled() => break,
+                _ = heartbeat_interval.tick() => {
+                    if heartbeats_missed > MAX_MISSABLE_HEARTBEATS {
+                        log::warn!("Too many missed heartbeats! Closing connection and marking client as unhealthy.");
+                        // Mark ourselves as unhealthy:
+                        healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+                        // For good measure, let's close the WebSocket connection early:
+                        let _ = ws_sink.lock().await.close().await;
+                        // And now exit the background task, which means all remaining in-flight requests immediately fail as well
+                        break
+                    } else {
+                        log::debug!("Sending heartbeat");
+                        let _ = ws_sink.lock().await.send(Message::ping("heartbeat")).await;
+                        heartbeats_missed += 1;
+                    }
+                },
                 msg = ws_stream.next() => {
+                    heartbeat_interval.reset();
+                    heartbeats_missed = 0;
                     match msg {
                         None => {
                             log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
@@ -179,8 +212,11 @@ impl Client {
                                 log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
                                 break
                             } else if msg.is_ping() {
-                                log::warn!("Received Heartbeat. (TODO: Handle)");
-                            } else {
+                                log::debug!("Received Heartbeat, expect auto-pong");
+                                // let _ = ws_sink.lock().await.send(Message::pong("heartbeat")).await;
+                            } else if msg.is_pong() {
+                                log::debug!("Received Pong reply to heartbeat, nice!");
+                            } else if msg.is_binary() {
                                 let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
                                 match msg {
                                     ServerToClientMessage::Sync(envelope) => {
@@ -194,7 +230,7 @@ impl Client {
                                         // Handle a message from the server that was not associated with an earlier request
                                         match msg {
                                             AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                                log::warn!("TODO: Client should cancel execution of current work if possible");
+                                                log::error!("TODO: Client should cancel execution of current work if possible");
                                             },
                                         }
                                     }
@@ -208,8 +244,8 @@ impl Client {
         // Clear any and all in-flight requests on exit of the background task.
         // This ensures that any waiting requests immediately return with an error as well.
         let mut in_flight_requests = in_flight_requests.lock().await;
-        in_flight_requests.1.clear(); 
-
+        in_flight_requests.1.clear();
+        in_flight_requests.0 = 0;
     }
 
     async fn request(

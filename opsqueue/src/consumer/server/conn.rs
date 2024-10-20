@@ -11,8 +11,7 @@ use tokio_websockets::{Message, WebSocketStream};
 
 use crate::common::chunk::ChunkId;
 use crate::consumer::common::{
-    AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
-    SyncServerToClientResponse,
+    AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS
 };
 
 #[derive(Debug)]
@@ -73,8 +72,7 @@ impl ClientConn {
         server_state: super::state::ConsumerServerState,
         ws_stream: WebSocketStream<TcpStream>,
     ) -> Self {
-        // TODO: make interval configurable
-        let heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
+        let heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
@@ -91,6 +89,7 @@ impl ClientConn {
     #[tracing::instrument]
     pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientConnError> {
         const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
+        let res = (|| async move {
 
         loop {
             select! {
@@ -119,6 +118,9 @@ impl ClientConn {
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
         }
+    })().await;
+    tracing::warn!("Closing websocket connection, response was: {:?}", &res);
+    res
     }
 
     // Deals with any message arrived through the Websocket connection.
@@ -128,11 +130,12 @@ impl ClientConn {
 
         // Other side sent a heartbeat, send a heartbeat response
         if msg.is_ping() {
-            self.ws_stream.send(Message::pong("heartbeat")).await?
-        }
-
-        // App-specific messages:
-        if msg.is_binary() {
+            tracing::trace!("Received heartbeat, expect auto-pong!");
+            // self.ws_stream.send(Message::pong("heartbeat")).await?
+        } else if msg.is_pong() {
+            tracing::trace!("Received Pong reply to heartbeat, nice!");
+        } else if msg.is_binary() {
+            // App-specific messages:
             self.handle_incoming_client_msg(msg.try_into()?).await?;
         }
 
@@ -182,7 +185,9 @@ impl ClientConn {
     // Manages heartbeating:
     // Sends the next heartbeat, or exits with an error if too many were already missed.
     async fn beat_heart(&mut self) -> Result<(), ClientConnError> {
-        if self.heartbeats_missed > 5 {
+        tracing::debug!("Sending heartbeat");
+        if self.heartbeats_missed > MAX_MISSABLE_HEARTBEATS {
+            tracing::warn!("Too many heartbeat misses, closing connection.");
             Err(ClientConnError::HeartbeatFailure)
         } else {
             let _ = self.ws_stream.send(Message::ping("heartbeat")).await;
