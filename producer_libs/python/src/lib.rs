@@ -4,56 +4,89 @@ use chrono::NaiveDateTime;
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyTypeError},
-    prelude::*,
+    prelude::*, types::PyIterator,
 };
 
 use opsqueue::{common::{chunk, submission}, producer::server::ChunkContents};
-use opsqueue::producer::client::Client as ActualClient;
+use opsqueue::producer::client::Client as ProducerClient;
+use futures::StreamExt;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
 
 #[pyclass]
 #[derive(Debug, Clone)]
 struct Client {
-    client: ActualClient,
+    producer_client: ProducerClient,
+    object_store_client: opsqueue::object_store::ObjectStoreClient,
     runtime: Arc<tokio::runtime::Runtime>,
+}
+
+fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
+    match e.downcast::<PyErr>() {
+        Ok(py_err) => py_err,
+        Err(other) => ProducerClientError::new_err(other.to_string()).into()
+    }
 }
 
 #[pymethods]
 impl Client {
     #[new]
-    pub fn new(address: &str) -> Self {
+    pub fn new(address: &str) -> PyResult<Self> {
         let runtime = start_runtime();
-        let client = ActualClient::new(address);
-        Client { client, runtime }
+        let producer_client = ProducerClient::new(address);
+        let object_store_client = 
+            opsqueue::object_store::ObjectStoreClient::new(address)
+            .map_err(maybe_wrap_error)?;
+        Ok(Client { producer_client, object_store_client, runtime })
     }
 
     pub fn count_submissions(&self) -> PyResult<u32> {
-        self.block_unless_interrupted(self.client.count_submissions())
+        self.block_unless_interrupted(self.producer_client.count_submissions())
             .map_err(|e| PyTypeError::new_err(e.to_string()))
     }
 
     pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
-        self.block_unless_interrupted(self.client.get_submission(id.into()))
+        self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
             .map(|opt| opt.map(Into::into))
             .map_err(|e| ProducerClientError::new_err(e.to_string()))
     }
 
-    #[pyo3(signature = (prefix, chunk_contents, metadata=None))]
+    #[pyo3(signature = (chunk_contents, metadata=None))]
     pub fn insert_submission_direct(
         &self,
-        prefix: &str,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
     ) -> PyResult<SubmissionId> {
         let submission = opsqueue::producer::server::InsertSubmission2 {
-            prefix: prefix.into(),
+            prefix: "".into(),
             chunk_contents: ChunkContents::Direct { contents: chunk_contents },
             metadata,
         };
-        self.block_unless_interrupted(self.client.insert_submission(&submission))
+        self.block_unless_interrupted(self.producer_client.insert_submission(&submission))
             .map(Into::into)
             .map_err(|e| ProducerClientError::new_err(e.to_string()))
+    }
+
+    #[pyo3(signature = (chunk_contents, metadata=None))]
+    pub fn insert_submission(&self, chunk_contents: Bound<'_, PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
+        self.block_unless_interrupted(async move {
+            let stream = futures::stream::iter(&chunk_contents).map(|item| {
+                item.and_then(|item| item.extract())
+                .map_err(Into::into)
+            });
+            let chunk_count = 
+                self.object_store_client.store_chunks(stream).await
+                .map_err(maybe_wrap_error)?;
+
+            let submission = opsqueue::producer::server::InsertSubmission2 {
+                prefix: self.object_store_client.base_path().as_ref().into(),
+                chunk_contents: ChunkContents::SeeObjectStorage { count: chunk_count },
+                metadata,
+            };
+            self.producer_client.insert_submission(&submission).await
+            .map(Into::into)
+            .map_err(maybe_wrap_error)
+        })
     }
 }
 

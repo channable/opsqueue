@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::common::chunk;
 use bytes::Bytes;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -9,8 +11,9 @@ use reqwest::Url;
 /// 
 /// This exists as a separate type, so we can build it _once_
 /// and then re-use it in the producer/consumer for all communication going forward from there.
+#[derive(Debug, Clone)]
 pub struct ObjectStoreClient {
-    object_store: Box<DynObjectStore>,
+    object_store: Arc<DynObjectStore>,
     base_path: Path,
 }
 
@@ -22,10 +25,10 @@ impl ObjectStoreClient {
     pub fn new(object_store_url: &str) -> anyhow::Result<Self> {
         let url = Url::parse(object_store_url)?;
         let (object_store, base_path) = object_store::parse_url(&url)?;
-        Ok(ObjectStoreClient {object_store: object_store, base_path: base_path })
+        Ok(ObjectStoreClient {object_store: Arc::new(object_store), base_path: base_path })
     }
 
-    pub async fn store_chunks(&self, chunk_contents: impl TryStreamExt<Ok = chunk::Content, Error = anyhow::Error>) -> anyhow::Result<i64> {
+    pub async fn store_chunks(&self, chunk_contents: impl TryStreamExt<Ok = chunk::Content, Error = anyhow::Error>) -> anyhow::Result<u32> {
         chunk_contents.try_fold(0, |chunk_index, chunk_content| async move {
             match chunk_content {
                 None => {},
@@ -47,6 +50,10 @@ impl ObjectStoreClient {
         stream::iter(0..chunk_count).then(move |chunk_index| async move {
             self.retrieve_chunk(chunk_index.into()).await
         })
+    }
+
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
     }
 
     fn chunk_path(&self, chunk_index: chunk::ChunkIndex) -> Path {
