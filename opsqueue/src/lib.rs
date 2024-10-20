@@ -7,6 +7,7 @@ use sqlx::{
 pub mod common;
 pub mod consumer;
 pub mod producer;
+pub mod object_store;
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
