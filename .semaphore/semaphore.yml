@@ -1,0 +1,69 @@
+version: "v1.0"
+name: "Opsqueue CI"
+
+agent:
+  machine:
+    type: "f1-standard-2"
+    os_image: "ubuntu2204"
+
+# If we push a new build to some branch that isn't master, and another build is
+# already running, we cancel it.
+auto_cancel:
+  running:
+    # Auto-cancelling is handled per queue, not per branch. This means that we
+    # need to disable auto-cancelling for these builds, otherwise they will
+    # cancel each other which trips up Hoff.
+    #
+    # Tags should also never be cancelled, please build all tags.
+    when: "branch != 'master' AND branch !~ '^auto-' and tag !~ '^v[[:digit:]]+$'"
+
+  # Auto cancelling queued builds should be fine, these builds should not be
+  # able to confuse Hoff.
+  #
+  # Similar to above, tags should not be cancelled.
+  queued:
+    when: "tag !~ '^v[[:digit:]]+$'"
+
+# This configuration applies to all blocks.
+global_job_config:
+  # List secrets that are to be available in all jobs.
+  # Secrets can be created using the web interface, or by using the `sem` tool.
+  secrets:
+    # This secret installs the SSH key to ~/.ssh/id_ed25519. It is chmodded to
+    # proper permissions and `ssh-add`ed in the prologue.
+    - name: "opsbot-github-key"
+    # Keys needed to access our cachix cache.
+    - name: "cachix-channable"
+
+  prologue:
+    commands:
+      - chmod 0600 ~/.ssh/id_ed25519
+      - ssh-add ~/.ssh/id_ed25519
+      - set -evo pipefail
+
+      # With `--use-cache` we get a full clone that is cached by semaphore so that fetching is faster.
+      - checkout --use-cache
+      - .semaphore/prologue.sh
+      - source $HOME/.nix-profile/etc/profile.d/nix.sh
+
+      # Push dev environment to cachix
+      - cachix watch-exec channable -- nix print-dev-env --file default.nix --argstr environment shell > "$HOME/devenv"
+
+      - source "$HOME/devenv"
+
+      # Push the environment to the semaphore cache
+      - cache store nix-store-$(date -u -Idate) /nix
+
+blocks:
+  - name: "Build and check"
+    skip:
+      when: "branch = 'master'"
+    task:
+      jobs:
+        - name: "Type- and format-check"
+          commands:
+            - "./build.py check style"
+
+        - name: "Build"
+          commands:
+            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix pythonChannable.pkgs.opsqueue_consumer opsqueue pythonChannable.pkgs.opsqueue_producer | cachix push channable"
