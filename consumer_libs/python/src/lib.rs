@@ -2,7 +2,7 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{stream, StreamExt, TryStreamExt};
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
@@ -402,7 +402,7 @@ impl SubmissionCompleted {
 impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
     fn from(value: opsqueue::common::submission::SubmissionCompleted) -> Self {
         Self {
-            id: value.id,
+            id: value.id.into(),
             completed_at: value.completed_at,
             chunks_total: value.chunks_total,
             metadata: value.metadata,
@@ -420,7 +420,7 @@ impl SubmissionFailed {
 impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
         Self {
-            id: value.id,
+            id: value.id.into(),
             failed_at: value.failed_at,
             chunks_total: value.chunks_total,
             metadata: value.metadata,
@@ -435,7 +435,7 @@ pub struct SubmissionCompleted {
     pub id: i64,
     pub chunks_total: i64,
     pub metadata: Option<submission::Metadata>,
-    pub completed_at: NaiveDateTime,
+    pub completed_at: DateTime<Utc>,
 }
 
 #[pyclass(frozen, get_all)]
@@ -444,7 +444,7 @@ pub struct SubmissionFailed {
     pub id: i64,
     pub chunks_total: i64,
     pub metadata: Option<submission::Metadata>,
-    pub failed_at: NaiveDateTime,
+    pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: i64,
 }
 

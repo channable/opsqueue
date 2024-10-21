@@ -1,23 +1,34 @@
 use std::fmt::Display;
+use std::time::Duration;
 
-use chrono::NaiveDateTime;
+use chrono::{Local, DateTime, Utc};
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use super::chunk::Chunk;
 use super::chunk::{self, ChunkIndex};
+use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
 
 static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct SubmissionId(i64);
 
 impl Display for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for SubmissionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubmissionId")
+        .field("id", &self.0)
+        .field("timestamp", &self.timestamp())
+        .finish()
     }
 }
 
@@ -51,12 +62,30 @@ impl From<SubmissionId> for i64 {
     }
 }
 
+impl Into<std::time::SystemTime> for &SubmissionId {
+    fn into(self) -> std::time::SystemTime {
+        self.system_time()
+    }
+}
+
 impl sqlx::Type<Sqlite> for SubmissionId {
     fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
         <i64 as sqlx::Type<Sqlite>>::compatible(ty)
     }
     fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
         <i64 as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
+impl SubmissionId {
+    pub fn system_time(self)  -> std::time::SystemTime {
+        let unix_timestamp_ms = self.0.timestamp();
+        let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
+        ID_GENERATOR.epoch().checked_add(unix_timestamp).expect("Invalid timestamp extracted from snowflake ID")
+    }
+
+    pub fn timestamp(self) -> chrono::DateTime<Utc> {
+        self.system_time().into()
     }
 }
 
@@ -71,20 +100,20 @@ pub struct Submission {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionCompleted {
-    pub id: i64,
+    pub id: SubmissionId,
     pub prefix: Option<String>,
     pub chunks_total: i64,
     pub metadata: Option<Metadata>,
-    pub completed_at: NaiveDateTime,
+    pub completed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionFailed {
-    pub id: i64,
+    pub id: SubmissionId,
     pub prefix: Option<String>,
     pub chunks_total: i64,
     pub metadata: Option<Metadata>,
-    pub failed_at: NaiveDateTime,
+    pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: i64,
 }
 
@@ -249,19 +278,19 @@ pub async fn submission_status(
                 metadata: row.metadata,
             }))),
             1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
-                id: row.id,
+                id: row.id.into(),
                 prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 metadata: row.metadata,
-                completed_at: row.completed_at.unwrap_or_default(),
+                completed_at: row.completed_at.unwrap_or_default().and_utc(),
             }))),
             2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
-                id: row.id,
+                id: row.id.into(),
                 prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 metadata: row.metadata,
                 failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
-                failed_at: row.failed_at.unwrap_or_default(),
+                failed_at: row.failed_at.unwrap_or_default().and_utc(),
             }))),
             idx => Err(sqlx::Error::ColumnIndexOutOfBounds {
                 index: 0,
@@ -396,7 +425,7 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 #[tracing::instrument]
 pub async fn cleanup_old(
     conn: &mut SqliteConnection,
-    older_than: NaiveDateTime,
+    older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     query!("SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
     query!(
@@ -542,7 +571,7 @@ pub mod test {
             .await
             .unwrap();
 
-        let cutoff_timestamp = Utc::now().naive_utc();
+        let cutoff_timestamp = Utc::now();
 
         let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await

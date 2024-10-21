@@ -13,6 +13,7 @@ use reqwest::Url;
 /// and then re-use it in the producer/consumer for all communication going forward from there.
 #[derive(Debug, Clone)]
 pub struct ObjectStoreClient {
+    pub url: Box<str>,
     object_store: Arc<DynObjectStore>,
     base_path: Path,
 }
@@ -47,7 +48,7 @@ impl ObjectStoreClient {
     pub fn new(object_store_url: &str) -> anyhow::Result<Self> {
         let url = Url::parse(object_store_url)?;
         let (object_store, base_path) = object_store::parse_url(&url)?;
-        Ok(ObjectStoreClient {object_store: Arc::new(object_store), base_path: base_path })
+        Ok(ObjectStoreClient {url: object_store_url.into(), object_store: Arc::new(object_store), base_path: base_path })
     }
 
     pub async fn store_chunks(&self, submission_prefix: &str, chunk_type: ChunkType, chunk_contents: impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error>) -> anyhow::Result<i64> {

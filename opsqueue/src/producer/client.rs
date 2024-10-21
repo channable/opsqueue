@@ -4,7 +4,7 @@ use super::server::{InsertSubmission2, InsertSubmissionResponse};
 
 #[derive(Debug, Clone)]
 pub struct Client {
-    endpoint_url: Box<str>,
+    pub endpoint_url: Box<str>,
     http_client: reqwest::Client,
 }
 

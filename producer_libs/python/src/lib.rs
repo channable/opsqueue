@@ -1,6 +1,6 @@
 use std::{future::IntoFuture, sync::Arc, time::Duration};
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyTypeError},
@@ -55,6 +55,10 @@ impl Client {
             opsqueue::object_store::ObjectStoreClient::new(object_store_url)
             .map_err(maybe_wrap_error)?;
         Ok(Client { producer_client, object_store_client, runtime })
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("<opsqueue_producer.Client(address={:?}, object_store_url={:?})>", self.producer_client.endpoint_url, self.object_store_client.url)
     }
 
     /// Counts the number of ongoing submissions in the queue.
@@ -187,7 +191,8 @@ impl SubmissionId {
     }
 
     fn __repr__(&self) -> String {
-        format!("SubmissionId(id={})", self.id)
+        let submission_id: submission::SubmissionId = self.clone().into();
+        format!("SubmissionId(id={}, timestamp={})", self.id, submission_id.timestamp())
     }
 }
 
@@ -251,7 +256,8 @@ impl From<opsqueue::common::submission::Submission> for Submission {
 #[pymethods]
 impl Submission {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("Submission(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?})",
+        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata)
     }
 }
 
@@ -265,14 +271,16 @@ impl SubmissionStatus {
 #[pymethods]
 impl SubmissionCompleted {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?})",
+        self.id.__repr__(), self.chunks_total, self.completed_at, self.metadata)
+
     }
 }
 
 impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompleted {
     fn from(value: opsqueue::common::submission::SubmissionCompleted) -> Self {
         Self {
-            id: value.id,
+            id: value.id.into(),
             completed_at: value.completed_at,
             chunks_total: value.chunks_total,
             metadata: value.metadata,
@@ -283,14 +291,15 @@ impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompl
 #[pymethods]
 impl SubmissionFailed {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?})",
+        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata)
     }
 }
 
 impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
         Self {
-            id: value.id,
+            id: value.id.into(),
             failed_at: value.failed_at,
             chunks_total: value.chunks_total,
             metadata: value.metadata,
@@ -302,19 +311,19 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCompleted {
-    pub id: i64,
+    pub id: SubmissionId,
     pub chunks_total: i64,
     pub metadata: Option<submission::Metadata>,
-    pub completed_at: NaiveDateTime,
+    pub completed_at: DateTime<Utc>,
 }
 
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionFailed {
-    pub id: i64,
+    pub id: SubmissionId,
     pub chunks_total: i64,
     pub metadata: Option<submission::Metadata>,
-    pub failed_at: NaiveDateTime,
+    pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: i64,
 }
 
