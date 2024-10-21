@@ -13,7 +13,7 @@ let
     paths = with pkgs; [
       # For linting and formatting
       ruff
-      
+
       # For compiling the Rust parts
       rust-with-lsp
 

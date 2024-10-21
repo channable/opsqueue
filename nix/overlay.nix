@@ -15,14 +15,6 @@ in
   # and it makes it possible to override them in new overlays.
   sources = if super ? sources then super.sources // sources else sources;
 
-  # rustToolchain =
-  #   self.rustChannelOf { rustToolchain = ../rust-toolchain; };
-
-  # arustPlatform = self.makeRustPlatform {
-  #   cargo = self.rustToolchain.rust;
-  #   rustc = self.rustToolchain.rust;
-  # };
-
   opsqueue = self.callPackage ../opsqueue/opsqueue.nix {};
 
   # The explicit choice is made not to override `python312`, as this will cause a rebuild of many

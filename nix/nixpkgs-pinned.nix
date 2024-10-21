@@ -7,7 +7,7 @@ let
   sources = import ./sources.nix;
 
   used_overlays = [
-    # (import (sources.nixpkgs-mozilla + "/rust-overlay.nix"))
+    (import (sources.nixpkgs-mozilla + "/rust-overlay.nix")) # Used for development only
     (import "${sources.devops}/nix/overlay.nix")
     (import ./overlay.nix)
   ] ++ overlays;
