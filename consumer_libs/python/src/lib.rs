@@ -43,6 +43,7 @@ impl Client {
         let runtime = start_runtime();
         let client = ActualClient::new(&address);
         let object_store_client = ObjectStoreClient::new(&object_store_url).map_err(maybe_wrap_error)?;
+        log::info!("Opsqueue consumer client initialized");
 
         Ok(Client {client, object_store_client, runtime })
     }
@@ -79,23 +80,24 @@ impl Client {
         // and only re-lock it for the duration of each call to `fun`.
         let unbound_fun = fun.as_unbound();
         fun.py().allow_threads(|| {
+            let mut done_count: usize = 0;
             loop {
                 let chunk_outcome: PyResult<()> = (|| {
                     let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
-                    log::info!("Reserved {} chunks", chunks.len());
+                    log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
                         let submission_id = chunk.submission_id;
                         let chunk_index = chunk.chunk_index;
-                        log::info!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                        log::debug!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                         let res = Python::with_gil(|py| {
                             let res = unbound_fun.bind(py).call1((chunk,))?;
                             res.extract()
                         });
                         match res {
                             Ok(res) => {
-                                log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                                 self.complete_chunk_gilless(submission_id, chunk_index, res)?;
-                                log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                             },
                             Err(failure) => {
                                 log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, reason: {failure:?}", submission_id, chunk_index);
@@ -107,6 +109,11 @@ impl Client {
                                     return Err(failure)
                                 }
                             }
+                        }
+
+                        done_count = done_count.saturating_add(1);
+                        if done_count % 50 == 0 {
+                            log::info!("Processed {} chunks", done_count);
                         }
                     }
                     Ok(())

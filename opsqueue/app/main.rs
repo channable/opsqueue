@@ -110,7 +110,7 @@ fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
             opentelemetry_sdk::trace::Config::default()
                 // Customize sampling strategy
                 .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
-                    1.0,
+                    0.01,
                 ))))
                 // If export trace to AWS X-Ray, you can use XrayIdGenerator
                 .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
