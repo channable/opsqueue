@@ -2,11 +2,10 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt, TryStreamExt};
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
-use log;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::client::OuterClient as ActualClient;
@@ -32,7 +31,7 @@ struct Client {
 fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
     match e.downcast::<PyErr>() {
         Ok(py_err) => py_err,
-        Err(other) => ConsumerClientError::new_err(other.to_string()).into()
+        Err(other) => ConsumerClientError::new_err(other.to_string())
     }
 }
 
@@ -41,8 +40,8 @@ impl Client {
     #[new]
     pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
         let runtime = start_runtime();
-        let client = ActualClient::new(&address);
-        let object_store_client = ObjectStoreClient::new(&object_store_url).map_err(maybe_wrap_error)?;
+        let client = ActualClient::new(address);
+        let object_store_client = ObjectStoreClient::new(object_store_url).map_err(maybe_wrap_error)?;
         log::info!("Opsqueue consumer client initialized");
 
         Ok(Client {client, object_store_client, runtime })
@@ -142,7 +141,7 @@ impl Client {
 // What follows are internal helper functions
 // that are not available directly from Python
 impl Client {
-    fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
+    fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>
     where
     E: From<PyErr>,
     {
@@ -150,7 +149,7 @@ impl Client {
 
     }
 
-    fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E> 
+    fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E>
     where
         E: From<PyErr>
     {
@@ -167,7 +166,7 @@ impl Client {
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
         let strategy: strategy::Strategy = strategy.into();
         loop {
-            let res: Vec<Chunk> = 
+            let res: Vec<Chunk> =
                 self.block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
                 .map_err(maybe_wrap_error)?;
             if !res.is_empty() {
@@ -201,7 +200,7 @@ impl Client {
 
     async fn reserve_and_retrieve_chunks(&self, max: usize, strategy: opsqueue::consumer::strategy::Strategy) -> anyhow::Result<Vec<Chunk>>{
         let chunks = self.client.reserve_chunks(max, strategy).await?;
-        let elems = 
+        let elems =
             stream::iter(chunks)
             .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
             .try_collect().await?;
@@ -209,13 +208,13 @@ impl Client {
     }
 }
 
-async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
+async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>
 where
 E: From<PyErr>,
 {
     tokio::select! {
         res = future => res,
-        py_err = check_signals_in_background() => Err(py_err.into())?,
+        py_err = check_signals_in_background() => Err(py_err)?,
     }
 }
 
@@ -247,15 +246,15 @@ impl SubmissionId {
     }
 }
 
-impl Into<submission::SubmissionId> for SubmissionId {
-    fn into(self) -> submission::SubmissionId {
-        submission::SubmissionId::from(self.id)
+impl From<SubmissionId> for submission::SubmissionId {
+    fn from(val: SubmissionId) -> Self {
+        submission::SubmissionId::from(val.id)
     }
 }
 
-impl Into<SubmissionId> for submission::SubmissionId {
-    fn into(self) -> SubmissionId {
-        SubmissionId { id: self.into() }
+impl From<submission::SubmissionId> for SubmissionId {
+    fn from(val: submission::SubmissionId) -> Self {
+        SubmissionId { id: val.into() }
     }
 }
 
@@ -277,15 +276,15 @@ impl ChunkIndex {
     }
 }
 
-impl Into<chunk::ChunkIndex> for ChunkIndex {
-    fn into(self) -> chunk::ChunkIndex {
-        chunk::ChunkIndex::from(self.id)
+impl From<ChunkIndex> for chunk::ChunkIndex {
+    fn from(val: ChunkIndex) -> Self {
+        chunk::ChunkIndex::from(val.id)
     }
 }
 
-impl Into<ChunkIndex> for chunk::ChunkIndex {
-    fn into(self) -> ChunkIndex {
-        ChunkIndex { id: self.into() }
+impl From<chunk::ChunkIndex> for ChunkIndex {
+    fn from(val: chunk::ChunkIndex) -> Self {
+        ChunkIndex { id: val.into() }
     }
 }
 
@@ -305,9 +304,9 @@ impl From<strategy::Strategy> for Strategy {
     }
 }
 
-impl Into<strategy::Strategy> for Strategy {
-    fn into(self) -> strategy::Strategy {
-        match self {
+impl From<Strategy> for strategy::Strategy {
+    fn from(val: Strategy) -> Self {
+        match val {
             Strategy::Oldest => strategy::Strategy::Oldest,
             Strategy::Newest => strategy::Strategy::Newest,
         }

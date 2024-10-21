@@ -48,9 +48,7 @@ buildPythonPackage rec {
     ];
   };
 
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = ../Cargo.lock;
-  };
+  cargoDeps = rustPlatform.importCargoLock { lockFile = ../Cargo.lock; };
 
   # preBuild = "${tree}/bin/tree /build/opsqueue_consumer";
 

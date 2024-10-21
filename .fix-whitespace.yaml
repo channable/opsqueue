@@ -1,0 +1,18 @@
+# Settings for fix-whitespace
+#
+# see https://github.com/agda/fix-whitespace/blob/master/fix-whitespace.yaml
+# for a complete example
+
+included-files:
+  - "**/*.nix"
+  - "**/*.py"
+  - "**/*.rs"
+  - "**/*.toml"
+  - "**/*.yaml"
+  - "**/*.yml"
+
+excluded-files:
+  - ".git/**"
+  - "result/**"
+  - ".ruff_cache/**"
+  - ".direnv/**"

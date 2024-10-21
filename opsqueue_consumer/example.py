@@ -3,7 +3,6 @@ from opsqueue_consumer import Client, Strategy, Chunk
 
 
 def myfun(chunk: Chunk) -> bytes:
-    import time
     # time.sleep(1) # We simulate that this takes a while
     # return 1 / 0
     if chunk.input_content is None:
@@ -12,6 +11,6 @@ def myfun(chunk: Chunk) -> bytes:
         return chunk.input_content + b"Was altered!"
 
 
-logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 client = Client("ws://localhost:3998", "file:///tmp/opsqueue/")
 client.run_per_chunk(Strategy.Newest, myfun)

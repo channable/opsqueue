@@ -33,7 +33,7 @@ struct Client {
 fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
     match e.downcast::<PyErr>() {
         Ok(py_err) => py_err,
-        Err(other) => ProducerClientError::new_err(other.to_string()).into()
+        Err(other) => ProducerClientError::new_err(other.to_string())
     }
 }
 
@@ -205,7 +205,7 @@ E: From<PyErr>,
 {
     tokio::select! {
         res = future => res,
-        py_err = check_signals_in_background() => Err(py_err.into())?,
+        py_err = check_signals_in_background() => Err(py_err)?,
     }
 }
 
@@ -232,20 +232,20 @@ impl SubmissionId {
     }
 
     fn __repr__(&self) -> String {
-        let submission_id: submission::SubmissionId = self.clone().into();
+        let submission_id: submission::SubmissionId = (*self).into();
         format!("SubmissionId(id={}, timestamp={})", self.id, submission_id.timestamp())
     }
 }
 
-impl Into<submission::SubmissionId> for SubmissionId {
-    fn into(self) -> submission::SubmissionId {
-        submission::SubmissionId::from(self.id)
+impl From<SubmissionId> for submission::SubmissionId {
+    fn from(val: SubmissionId) -> Self {
+        submission::SubmissionId::from(val.id)
     }
 }
 
-impl Into<SubmissionId> for submission::SubmissionId {
-    fn into(self) -> SubmissionId {
-        SubmissionId { id: self.into() }
+impl From<submission::SubmissionId> for SubmissionId {
+    fn from(val: submission::SubmissionId) -> Self {
+        SubmissionId { id: val.into() }
     }
 }
 

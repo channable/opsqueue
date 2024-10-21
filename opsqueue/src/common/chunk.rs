@@ -137,8 +137,8 @@ pub async fn complete_chunk_raw(
 
     UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
 
-    INSERT INTO chunks_completed 
-    (submission_id, chunk_index, output_content, completed_at) 
+    INSERT INTO chunks_completed
+    (submission_id, chunk_index, output_content, completed_at)
     SELECT submission_id, chunk_index, ?, julianday(?) FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
 
     DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
@@ -147,11 +147,11 @@ pub async fn complete_chunk_raw(
     RELEASE SAVEPOINT complete_chunk_raw;
     ",
     full_chunk_id.0,
-    output_content, 
+    output_content,
     now,
-    full_chunk_id.0, 
+    full_chunk_id.0,
     full_chunk_id.1,
-    full_chunk_id.0, 
+    full_chunk_id.0,
     full_chunk_id.1,
     ).execute(conn).await?;
     Ok(())
@@ -170,7 +170,7 @@ pub async fn retry_or_fail_chunk(
     const MAX_RETRIES: i64 = 10;
     let (submission_id, chunk_index) = full_chunk_id;
     let fields = query!("
-    UPDATE chunks SET retries = retries + 1 
+    UPDATE chunks SET retries = retries + 1
     WHERE submission_id = ? AND chunk_index = ?
     RETURNING retries
     ;
@@ -199,18 +199,18 @@ pub async fn move_chunk_to_failed_chunks(
     SAVEPOINT move_chunk_to_failed_chunks;
 
     INSERT INTO chunks_failed
-    (submission_id, chunk_index, input_content, failure, failed_at) 
+    (submission_id, chunk_index, input_content, failure, failed_at)
     SELECT submission_id, chunk_index, input_content, ?, julianday(?) FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
 
     DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ? RETURNING *;
 
     RELEASE SAVEPOINT move_chunk_to_failed_chunks;
-    ", 
-    failure, 
+    ",
+    failure,
     now,
-    submission_id, 
-    chunk_index, 
-    submission_id, 
+    submission_id,
+    chunk_index,
+    submission_id,
     chunk_index,
     ).fetch_one(conn).await?;
     Ok(())

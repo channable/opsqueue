@@ -48,9 +48,7 @@ buildPythonPackage rec {
     ];
   };
 
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = ../Cargo.lock;
-  };
+  cargoDeps = rustPlatform.importCargoLock { lockFile = ../Cargo.lock; };
 
   env = {
     DATABASE_URL = "sqlite:///build/opsqueue_producer/opsqueue/opsqueue_example_database_schema.db";

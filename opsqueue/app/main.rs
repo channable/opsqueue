@@ -1,4 +1,3 @@
-use opsqueue;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use std::time::Duration;
 
@@ -38,8 +37,8 @@ async fn main() {
     );
     let producer_server = opsqueue::producer::server::serve(db_pool, producer_server_addr);
 
-    task_tracker.spawn(async move { consumer_server.await });
-    tokio::spawn(async move { producer_server.await });
+    task_tracker.spawn(consumer_server);
+    tokio::spawn(producer_server);
 
     tokio::signal::ctrl_c()
         .await
@@ -51,7 +50,7 @@ async fn main() {
     cancellation_token.cancel();
     task_tracker.wait().await;
 
-    println!("");
+    println!();
     println!("Opsqueue Stopped");
 }
 

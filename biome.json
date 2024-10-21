@@ -1,0 +1,17 @@
+{
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": true,
+    "indentStyle": "space",
+    "lineWidth": 100
+  },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignore": ["nix/**"],
+    "maxSize": 20971520
+  }
+}

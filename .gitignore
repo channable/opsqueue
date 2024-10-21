@@ -26,3 +26,6 @@ Cargo.lock
 
 # Nix/direnv setup:
 .direnv
+
+.mypy_cache
+.ruff_cache
