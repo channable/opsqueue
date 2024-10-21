@@ -7,11 +7,18 @@ use pyo3::{
     prelude::*, types::PyIterator,
 };
 
-use opsqueue::{common::{chunk, submission}, producer::server::ChunkContents};
+use opsqueue::{common::{chunk, submission}, object_store::ChunkType, producer::server::ChunkContents};
 use opsqueue::producer::client::Client as ProducerClient;
 use futures::StreamExt;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
+
+// In development, check 10 times per second so we respond early to Ctrl+C
+// But in production, only once per second so we don't fight as much over the GIL
+#[cfg(debug_assertions)]
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(not(debug_assertions))]
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[pyclass]
 #[derive(Debug, Clone)]
@@ -53,9 +60,11 @@ impl Client {
     /// Counts the number of ongoing submissions in the queue.
     /// 
     /// Completed and failed submissions are not included in the count.
-    pub fn count_submissions(&self) -> PyResult<u32> {
-        self.block_unless_interrupted(self.producer_client.count_submissions())
-            .map_err(|e| PyTypeError::new_err(e.to_string()))
+    pub fn count_submissions(&self, py: Python<'_>) -> PyResult<u32> {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(self.producer_client.count_submissions())
+                .map_err(|e| PyTypeError::new_err(e.to_string()))
+        })
     }
 
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
@@ -64,39 +73,53 @@ impl Client {
     /// when the submission was started/completed/failed, etc.
     /// 
     /// This call does _not_ fetch the submission's chunk contents on its own.
-    pub fn get_submission(&self, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
-        self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
-            .map(|opt| opt.map(Into::into))
-            .map_err(|e| ProducerClientError::new_err(e.to_string()))
+    pub fn get_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<Option<SubmissionStatus>> {
+        py.allow_threads(||{
+            self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
+                .map(|opt| opt.map(Into::into))
+                .map_err(|e| ProducerClientError::new_err(e.to_string()))
+        })
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
     pub fn insert_submission_direct(
         &self,
+        py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
     ) -> PyResult<SubmissionId> {
-        let submission = opsqueue::producer::server::InsertSubmission2 {
-            chunk_contents: ChunkContents::Direct { contents: chunk_contents },
-            metadata,
-        };
-        self.block_unless_interrupted(self.producer_client.insert_submission(&submission))
-            .map(Into::into)
-            .map_err(|e| ProducerClientError::new_err(e.to_string()))
+        py.allow_threads(|| {
+            let submission = opsqueue::producer::server::InsertSubmission2 {
+                chunk_contents: ChunkContents::Direct { contents: chunk_contents },
+                metadata,
+            };
+            self.block_unless_interrupted(self.producer_client.insert_submission(&submission))
+                .map(Into::into)
+                .map_err(|e| ProducerClientError::new_err(e.to_string()))
+        })
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
-    pub fn insert_submission(&self, chunk_contents: Bound<'_, PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
-        self.block_unless_interrupted(async move {
+    pub fn insert_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<SubmissionId> {
+        // This function is split into two parts.
+        // For the upload to object storage, we need the GIL as we run the python iterator to completion.
+        // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
+        py.allow_threads(|| {
             let prefix = uuid::Uuid::new_v4().to_string();
-            let stream = futures::stream::iter(&chunk_contents).map(|item| {
-                item.and_then(|item| item.extract())
-                .map_err(Into::into)
-            });
             let chunk_count = 
-                self.object_store_client.store_chunks(&prefix, stream).await
-                .map_err(maybe_wrap_error)?;
+            Python::with_gil(|py| {
+                self.block_unless_interrupted(async {
+                let chunk_contents = chunk_contents.bind(py);
+                let stream = futures::stream::iter(chunk_contents).map(|item| {
+                    item.and_then(|item| item.extract())
+                    .map_err(Into::into)
+                });
+                self.object_store_client.store_chunks(&prefix, ChunkType::Input, stream).await
+                .map_err(maybe_wrap_error)
+            })
+        })?;
 
+        self.block_unless_interrupted(async move {
             let submission = opsqueue::producer::server::InsertSubmission2 {
                 chunk_contents: ChunkContents::SeeObjectStorage { prefix, count: chunk_count },
                 metadata,
@@ -105,6 +128,7 @@ impl Client {
             .map(Into::into)
             .map_err(maybe_wrap_error)
         })
+    })
     }
 }
 
@@ -141,12 +165,11 @@ E: From<PyErr>,
 }
 
 async fn check_signals_in_background() -> PyErr {
-    const CHECK_INTERVAL: Duration = Duration::from_millis(100);
     loop {
+        tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
         if let Err(err) = Python::with_gil(|py| {py.check_signals()}) {
             return err;
         }
-        tokio::time::sleep(CHECK_INTERVAL).await
     }
 }
 
@@ -335,6 +358,10 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn opsqueue_producer(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // We want Rust logs created by code called from this module
+    // to be forwarded to Python's logging system
+    pyo3_log::init();
+
     // Classes
     m.add_class::<Client>()?;
     m.add_class::<SubmissionId>()?;

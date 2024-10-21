@@ -17,6 +17,28 @@ pub struct ObjectStoreClient {
     base_path: Path,
 }
 
+/// The object store doesn't really care whether the chunk contents sent to it
+/// are 'input' (producer -> consumer) or 'output' (consumer -> producer),
+/// but it has to be able to read/write both and disambiguate between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkType {
+    /// Input chunk, 
+    /// data made by the producer and operated on by the consumer.
+    Input,
+    /// Output chunk, AKA 'chunk result',
+    /// the outcome that is made by the consumer and returned to the producer
+    Output,
+}
+
+impl std::fmt::Display for ChunkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChunkType::Input => write!(f, "in"),
+            ChunkType::Output => write!(f, "out"),
+        }
+    }
+}
+
 impl ObjectStoreClient {
     /// Creates a new client for interacting with an object store.
     /// 
@@ -28,27 +50,30 @@ impl ObjectStoreClient {
         Ok(ObjectStoreClient {object_store: Arc::new(object_store), base_path: base_path })
     }
 
-    pub async fn store_chunks(&self, submission_prefix: &str, chunk_contents: impl TryStreamExt<Ok = chunk::Content, Error = anyhow::Error>) -> anyhow::Result<i64> {
-        chunk_contents.try_fold(0, |chunk_index, chunk_content| async move {
-            match chunk_content {
-                None => {},
-                Some(content) => {
-                    let path = self.chunk_path(submission_prefix, chunk_index.into());
-                    self.object_store.put(&path, content.into()).await?;
-                }
-            }
+    pub async fn store_chunks(&self, submission_prefix: &str, chunk_type: ChunkType, chunk_contents: impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error>) -> anyhow::Result<i64> {
+        let chunk_count = chunk_contents.try_fold(0, |chunk_index, chunk_content| async move {
+            self.store_chunk(submission_prefix, chunk_index.into(), chunk_type, chunk_content).await?;
+            tracing::debug!("Upladed chunk {}", self.chunk_path(submission_prefix, chunk_index.into(), chunk_type));
             Ok(chunk_index + 1)
-        }).await
+        }).await?;
+        tracing::debug!("Finished uploading all {} chunks for submission prefix {}", chunk_count, submission_prefix);
+        Ok(chunk_count)
     }
 
-    pub async fn retrieve_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex) -> anyhow::Result<Bytes> {
-        let bytes = self.object_store.get(&self.chunk_path(submission_prefix, chunk_index)).await?.bytes().await?;
+    pub async fn store_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType, content: Vec<u8>) -> anyhow::Result<()> {
+        let path = self.chunk_path(submission_prefix, chunk_index.into(), chunk_type);
+        self.object_store.put(&path, content.into()).await?;
+        Ok(())
+    }
+
+    pub async fn retrieve_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType) -> anyhow::Result<Bytes> {
+        let bytes = self.object_store.get(&self.chunk_path(submission_prefix, chunk_index, chunk_type)).await?.bytes().await?;
         Ok(bytes)
     }
 
-    pub async fn retrieve_chunks<'a>(&'a self, submission_prefix: &'a str, chunk_count: i64) -> impl TryStreamExt<Ok = Bytes, Error = anyhow::Error> + 'a {
+    pub async fn retrieve_chunks<'a>(&'a self, submission_prefix: &'a str, chunk_count: i64, chunk_type: ChunkType) -> impl TryStreamExt<Ok = Bytes, Error = anyhow::Error> + 'a {
         stream::iter(0..chunk_count).then(move |chunk_index| async move {
-            self.retrieve_chunk(submission_prefix, chunk_index.into()).await
+            self.retrieve_chunk(submission_prefix, chunk_index.into(), chunk_type).await
         })
     }
 
@@ -56,8 +81,7 @@ impl ObjectStoreClient {
         &self.base_path
     }
 
-    fn chunk_path(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex) -> Path {
-        Path::from(format!("{}/{}/{}", self.base_path, submission_prefix, chunk_index))
+    fn chunk_path(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType) -> Path {
+        Path::from(format!("{}/{}/{}-{}.bin", self.base_path, submission_prefix, chunk_index, chunk_type))
     }
-
 }

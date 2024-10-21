@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::NaiveDateTime;
 use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::object_store::ObjectStoreClient;
+use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 use log;
 
@@ -13,6 +13,13 @@ use opsqueue::consumer::client::OuterClient as ActualClient;
 use opsqueue::consumer::strategy;
 
 create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
+
+// In development, check 10 times per second so we respond early to Ctrl+C
+// But in production, only once per second so we don't fight as much over the GIL
+#[cfg(debug_assertions)]
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(not(debug_assertions))]
+const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[pyclass]
 #[derive(Debug)]
@@ -40,56 +47,41 @@ impl Client {
         Ok(Client {client, object_store_client, runtime })
     }
 
-    pub fn reserve_chunks(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
-        // TODO: Currently we do short-polling here if there are no chunks available.
-        // This is quite suboptimal; long-polling would be much nicer.
-        const POLL_INTERVAL: Duration = Duration::from_millis(500);
-        let strategy: strategy::Strategy = strategy.into();
-        loop {
-            let res: Vec<Chunk> = 
-                self.block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
-                .map_err(maybe_wrap_error)?;
-            if !res.is_empty() {
-                return Ok(res);
-            }
-            self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?;
-        }
+    pub fn reserve_chunks(&self, py: Python<'_>, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
+        py.allow_threads(|| { self.reserve_chunks_gilless(max, strategy)})
     }
 
     pub fn complete_chunk(
         &self,
+        py: Python<'_>,
         submission_id: SubmissionId,
         chunk_index: ChunkIndex,
         output_content: chunk::Content,
     ) -> PyResult<()> {
-        let chunk_id = (submission_id.into(), chunk_index.into());
-        self.block_unless_interrupted(self.client.complete_chunk(chunk_id, output_content))
-            .map_err(maybe_wrap_error)
+        py.allow_threads(|| { self.complete_chunk_gilless(submission_id, chunk_index, output_content)})
     }
 
     pub fn fail_chunk(
         &self,
+        py: Python<'_>,
         submission_id: SubmissionId,
         chunk_index: ChunkIndex,
         failure: String,
     ) -> PyResult<()> {
-        let chunk_id = (submission_id.into(), chunk_index.into());
-        self.block_unless_interrupted(self.client.fail_chunk(chunk_id, failure))
-            .map_err(maybe_wrap_error)
+        py.allow_threads(|| { self.fail_chunk_gilless(submission_id, chunk_index, failure)})
     }
-
 
     pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
         if !fun.is_callable() {
             return pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
         }
-        // NOTE: We take care here to unlock the GIL,
+        // NOTE: We take care here to unlock the GIL for most of the loop,
         // and only re-lock it for the duration of each call to `fun`.
         let unbound_fun = fun.as_unbound();
         fun.py().allow_threads(|| {
             loop {
                 let chunk_outcome: PyResult<()> = (|| {
-                    let chunks = self.reserve_chunks(1, strategy.clone())?;
+                    let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
                     log::info!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
                         let submission_id = chunk.submission_id;
@@ -102,13 +94,18 @@ impl Client {
                         match res {
                             Ok(res) => {
                                 log::info!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                                self.complete_chunk(submission_id, chunk_index, res)?;
+                                self.complete_chunk_gilless(submission_id, chunk_index, res)?;
                                 log::info!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
                             },
                             Err(failure) => {
                                 log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, reason: {failure:?}", submission_id, chunk_index);
-                                self.fail_chunk(submission_id, chunk_index, format!("{failure:?}"))?;
+                                self.fail_chunk_gilless(submission_id, chunk_index, format!("{failure:?}"))?;
                                 log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
+                                // otherwise, continue with next chunk
+                                if !Python::with_gil(|py| {failure.is_instance_of::<PyException>(py)}) {
+                                    return Err(failure)
+                                }
                             }
                         }
                     }
@@ -136,7 +133,7 @@ impl Client {
 }
 
 // What follows are internal helper functions
-// that are not available from Python
+// that are not available directly from Python
 impl Client {
     fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E> 
     where
@@ -156,27 +153,51 @@ impl Client {
         })
     }
 
+
+    fn reserve_chunks_gilless(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
+        // TODO: Currently we do short-polling here if there are no chunks available.
+        // This is quite suboptimal; long-polling would be much nicer.
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
+        let strategy: strategy::Strategy = strategy.into();
+        loop {
+            let res: Vec<Chunk> = 
+                self.block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
+                .map_err(maybe_wrap_error)?;
+            if !res.is_empty() {
+                return Ok(res);
+            }
+            self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?;
+        }
+    }
+
+    fn complete_chunk_gilless(
+        &self,
+        submission_id: SubmissionId,
+        chunk_index: ChunkIndex,
+        output_content: chunk::Content,
+    ) -> PyResult<()> {
+        let chunk_id = (submission_id.into(), chunk_index.into());
+        self.block_unless_interrupted(self.client.complete_chunk(chunk_id, output_content))
+            .map_err(maybe_wrap_error)
+    }
+
+    pub fn fail_chunk_gilless(
+        &self,
+        submission_id: SubmissionId,
+        chunk_index: ChunkIndex,
+        failure: String,
+    ) -> PyResult<()> {
+        let chunk_id = (submission_id.into(), chunk_index.into());
+        self.block_unless_interrupted(self.client.fail_chunk(chunk_id, failure))
+            .map_err(maybe_wrap_error)
+    }
+
     async fn reserve_and_retrieve_chunks(&self, max: usize, strategy: opsqueue::consumer::strategy::Strategy) -> anyhow::Result<Vec<Chunk>>{
         let chunks = self.client.reserve_chunks(max, strategy).await?;
-        let stream = stream::iter(chunks).then(|(c, s)| async move {
-            let content = match c.input_content {
-                Some(bytes) => bytes,
-                None => {
-                    let prefix = s.prefix.unwrap();
-                    log::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
-                    let res = self.object_store_client.retrieve_chunk(&prefix, c.chunk_index).await?.to_vec();
-                    log::debug!("Fetched chunk content: {res:?}");
-                    res
-                }
-            };
-            Ok::<_, anyhow::Error>(Chunk {
-                submission_id: c.submission_id.into(),
-                chunk_index: c.chunk_index.into(),
-                input_content: ContentAsBytes(Some(content)),
-                retries: c.retries,
-            })
-        });
-        let elems: Vec<Chunk> = stream.try_collect().await?;
+        let elems = 
+            stream::iter(chunks)
+            .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
+            .try_collect().await?;
         Ok(elems)
     }
 }
@@ -192,12 +213,12 @@ E: From<PyErr>,
 }
 
 async fn check_signals_in_background() -> PyErr {
-    const CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
     loop {
+        tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
         if let Err(err) = Python::with_gil(|py| {py.check_signals()}) {
             return err;
         }
-        tokio::time::sleep(CHECK_INTERVAL).await
     }
 }
 
@@ -287,18 +308,13 @@ impl Into<strategy::Strategy> for Strategy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContentAsBytes(chunk::Content);
+pub struct ContentAsBytes(Vec<u8>);
 
 
 impl IntoPy<PyObject> for ContentAsBytes {
     fn into_py(self, py: Python<'_>) -> PyObject {
-        match self.0 {
-            None => py.None(),
-            Some(content) => {
-                let content_ref: &[u8] = content.as_ref();
-                content_ref.into_py(py)
-            },
-        }
+        let byteslice: &[u8] = self.0.as_ref();
+        byteslice.into_py(py)
     }
 }
 
@@ -311,28 +327,49 @@ pub struct Chunk {
     pub retries: i64,
 }
 
-impl From<chunk::Chunk> for Chunk {
-    fn from(value: chunk::Chunk) -> Self {
-        Self {
-            submission_id: value.submission_id.into(),
-            chunk_index: value.chunk_index.into(),
-            input_content: ContentAsBytes(value.input_content),
-            retries: value.retries,
-        }
+impl Chunk {
+    pub async fn from_internal(c: chunk::Chunk, s: submission::Submission, object_store_client: &ObjectStoreClient) -> anyhow::Result<Self> {
+        let content = match c.input_content {
+            Some(bytes) => bytes,
+            None => {
+                let prefix = s.prefix.unwrap();
+                log::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
+                let res = object_store_client.retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input).await?.to_vec();
+                log::debug!("Fetched chunk content: {res:?}");
+                res
+            }
+        };
+        Ok(Chunk {
+            submission_id: c.submission_id.into(),
+            chunk_index: c.chunk_index.into(),
+            input_content: ContentAsBytes(content),
+            retries: c.retries,
+        })
     }
+
 }
 
-impl Into<chunk::Chunk> for Chunk {
-    fn into(self) -> chunk::Chunk {
-        chunk::Chunk {
-            submission_id: self.submission_id.into(),
-            chunk_index: self.chunk_index.into(),
-            input_content: self.input_content.0,
-            retries: self.retries,
-        }
-    }
+// impl From<chunk::Chunk> for Chunk {
+//     fn from(value: chunk::Chunk) -> Self {
+//         Self {
+//             submission_id: value.submission_id.into(),
+//             chunk_index: value.chunk_index.into(),
+//             input_content: ContentAsBytes(value.input_content),
+//             retries: value.retries,
+//         }
+//     }
+// }
 
-}
+// impl Into<chunk::Chunk> for Chunk {
+//     fn into(self) -> chunk::Chunk {
+//         chunk::Chunk {
+//             submission_id: self.submission_id.into(),
+//             chunk_index: self.chunk_index.into(),
+//             input_content: self.input_content.0,
+//             retries: self.retries,
+//         }
+//     }
+// }
 
 #[pymethods]
 impl Chunk {
