@@ -9,7 +9,7 @@ use pyo3::{
 
 use opsqueue::{common::{chunk, submission}, object_store::ChunkType, producer::server::ChunkContents};
 use opsqueue::producer::client::Client as ProducerClient;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
 
@@ -19,6 +19,8 @@ create_exception!(opsqueue_producer, ProducerClientError, PyException);
 const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(not(debug_assertions))]
 const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
 #[pyclass]
 #[derive(Debug, Clone)]
@@ -134,6 +136,33 @@ impl Client {
         })
     })
     }
+
+    // TODO: Currently we materialize the full submission at once. Instead, we want to stream results lazily by creating and returning a Python iterator
+    pub fn stream_completed_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<Vec<Vec<u8>>> {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(async move {
+                match self.maybe_stream_completed_submission(id).await? {
+                    None => Err(ProducerClientError::new_err("Submission not completed yet".to_string()))?,
+                    Some(vec) => Ok(vec)
+                }
+            })
+        })
+    }
+
+    #[pyo3(signature = (chunk_contents, metadata=None))]
+    pub fn run_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<Vec<Vec<u8>>> {
+        let submission_id = self.insert_submission(py, chunk_contents, metadata)?;
+        py.allow_threads(||{
+            self.block_unless_interrupted(async move {
+                loop {
+                    if let Some(vec) = self.maybe_stream_completed_submission(submission_id).await? {
+                        return Ok(vec)
+                    }
+                    tokio::time::sleep(SUBMISSION_POLLING_INTERVAL).await;
+                }
+            })
+        })
+    }
 }
 
 // What follows are internal helper functions
@@ -156,6 +185,18 @@ impl Client {
     //         Ok(())
     //     })
     // }
+
+    async fn maybe_stream_completed_submission(&self, id: SubmissionId) -> PyResult<Option<Vec<Vec<u8>>>> { 
+        match self.producer_client.get_submission(id.into()).await.map_err(maybe_wrap_error)? {
+            Some(submission::SubmissionStatus::Completed(submission)) => {
+                let prefix = submission.prefix.unwrap_or_default();
+                let stream = self.object_store_client.retrieve_chunks(&prefix, submission.chunks_total, ChunkType::Output).await;
+                let result = stream.try_collect().await.map_err(maybe_wrap_error)?;
+                Ok(Some(result))
+            }
+            _ => Ok(None)
+        }
+    }
 }
 
 async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>  
@@ -178,7 +219,7 @@ async fn check_signals_in_background() -> PyErr {
 }
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SubmissionId {
     pub id: i64,
 }

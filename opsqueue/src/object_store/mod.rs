@@ -67,12 +67,12 @@ impl ObjectStoreClient {
         Ok(())
     }
 
-    pub async fn retrieve_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType) -> anyhow::Result<Bytes> {
-        let bytes = self.object_store.get(&self.chunk_path(submission_prefix, chunk_index, chunk_type)).await?.bytes().await?;
+    pub async fn retrieve_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType) -> anyhow::Result<Vec<u8>> {
+        let bytes = self.object_store.get(&self.chunk_path(submission_prefix, chunk_index, chunk_type)).await?.bytes().await?.into();
         Ok(bytes)
     }
 
-    pub async fn retrieve_chunks<'a>(&'a self, submission_prefix: &'a str, chunk_count: i64, chunk_type: ChunkType) -> impl TryStreamExt<Ok = Bytes, Error = anyhow::Error> + 'a {
+    pub async fn retrieve_chunks<'a>(&'a self, submission_prefix: &'a str, chunk_count: i64, chunk_type: ChunkType) -> impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error> + 'a {
         stream::iter(0..chunk_count).then(move |chunk_index| async move {
             self.retrieve_chunk(submission_prefix, chunk_index.into(), chunk_type).await
         })
