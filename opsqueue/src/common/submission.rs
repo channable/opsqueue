@@ -334,8 +334,8 @@ pub async fn complete_submission_raw(
     SAVEPOINT complete_submission_raw;
 
     INSERT INTO submissions_completed
-    (id, chunks_total, metadata, completed_at)
-    SELECT id, chunks_total, metadata, julianday(?) FROM submissions WHERE id = ?;
+    (id, chunks_total, prefix, metadata, completed_at)
+    SELECT id, chunks_total, prefix, metadata, julianday(?) FROM submissions WHERE id = ?;
 
     DELETE FROM submissions WHERE id = ? RETURNING *;
 
@@ -361,8 +361,8 @@ pub async fn fail_submission_raw(
     query!(
         "
     INSERT INTO submissions_failed
-    (id, chunks_total, metadata, failed_at, failed_chunk_id)
-    SELECT id, chunks_total, metadata, julianday(?), ? FROM submissions WHERE id = ?;
+    (id, chunks_total, prefix, metadata, failed_at, failed_chunk_id)
+    SELECT id, chunks_total, prefix, metadata, julianday(?), ? FROM submissions WHERE id = ?;
 
     DELETE FROM submissions WHERE id = ? RETURNING *;
     ",
