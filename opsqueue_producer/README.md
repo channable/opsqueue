@@ -1,20 +1,13 @@
 # How to run
 
-For this library, Nix has not yet been set up.
+1. Move to the `opsqueue_producer` subdirectory. With `direnv`, the extra `.envrc` in those directories will load an (essentially empty) Python virtual environment. This is necessary to make the next step work.
 
-Instead, the following steps are used:
-
-```bash
-# Activate a Python virtualenv in which `maturin` was previously installed using `pip`:
-source .env/bin/activate
-```
-
-Any time you change any Rust code, run [maturin](https://github.com/PyO3/maturin) to update the Rust<->Python library bindings:
+2. Any time you change any Rust code, run [maturin](https://github.com/PyO3/maturin), specifically `maturin develop` to update the Rust<->Python library bindings:
 ```bash
 maturin develop
 ```
 
-Now, just run a Python shell which now has access to the `opsqueue_producer` module using:
+3. Now, just run a Python shell which now (courtesy of the virtual env) has access to the `opsqueue_producer` module using:
 ```bash
 python
 ```

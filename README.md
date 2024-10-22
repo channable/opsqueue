@@ -86,6 +86,7 @@ you can go to the respective `opsqueue_producer` or `opsqueue_consumer` director
 and run:
 
 ```bash
+# NOTE: we depend on `direnv` to load a (mostly empty!) Python virtualenv, as it is a requirement for the next step.
 maturin develop # or `maturin develop -r` to run in release mode.
 # Now, you can use python or ipython or whatever and access
 # the `opsqueue_producer` resp. `opsqueue_consumer` module.
@@ -93,10 +94,11 @@ ipython
 ```
 Note that the `maturin develop` step needs to be repeated after making any changes to the Rust code.
 
-
-If building a full Python wheel, use `maturin build` instead.
+For full/final builds, just use Nix which will call `maturin build` internally.
 
 [Maturin usage guide](https://www.maturin.rs/tutorial).
+
+See the `example.py` in the respective directories for a tiny example on how to use the two libraries.
 
 ## Running Litestream
 
