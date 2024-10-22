@@ -1,13 +1,13 @@
 # How to run
 
-1. Move to the `opsqueue_producer` subdirectory. With `direnv`, the extra `.envrc` in those directories will load an (essentially empty) Python virtual environment. This is necessary to make the next step work.
+1. Move to the `opsqueue_consumer` subdirectory. With `direnv`, the extra `.envrc` in those directories will load an (essentially empty) Python virtual environment. This is necessary to make the next step work.
 
 2. Any time you change any Rust code, run [maturin](https://github.com/PyO3/maturin), specifically `maturin develop` to update the Rust<->Python library bindings:
 ```bash
 maturin develop
 ```
 
-3. Now, just run a Python shell which now (courtesy of the virtual env) has access to the `opsqueue_producer` module using:
+3. Now, just run a Python shell which now (courtesy of the virtual env) has access to the `opsqueue_consumer` module using:
 ```bash
 python
 ```
