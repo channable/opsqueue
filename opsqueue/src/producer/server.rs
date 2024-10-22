@@ -23,7 +23,7 @@ impl ServerState {
         ServerState { pool }
     }
     pub async fn serve(self, server_addr: Box<str>) {
-    let tracing_middleware = 
+    let tracing_middleware =
         tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(tower_http::trace::DefaultMakeSpan::new() )
         .on_request(tower_http::trace::DefaultOnRequest::new()
@@ -32,7 +32,7 @@ impl ServerState {
             .level(tracing::Level::INFO));
 
         let app = Router::new()
-            .route("/submissions", post(insert_submission2))
+            .route("/submissions", post(insert_submission))
             .route(
                 // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
                 "/submissions/count_completed",
@@ -87,20 +87,6 @@ async fn insert_submission(
     Json(request): Json<InsertSubmission>,
 ) -> Result<Json<InsertSubmissionResponse>, ServerError> {
     let mut conn = state.pool.acquire().await?;
-
-    let chunks_contents = (0..request.chunk_count).map(|_index| None).collect();
-
-    let submission_id =
-        submission::insert_submission_from_chunks(None, chunks_contents, request.metadata, &mut conn)
-            .await?;
-    Ok(Json(InsertSubmissionResponse { id: submission_id }))
-}
-
-async fn insert_submission2(
-    State(state): State<ServerState>,
-    Json(request): Json<InsertSubmission2>,
-) -> Result<Json<InsertSubmissionResponse>, ServerError> {
-    let mut conn = state.pool.acquire().await?;
     let (prefix, chunk_contents) = match request.chunk_contents {
         ChunkContents::Direct{contents} => (None, contents),
         ChunkContents::SeeObjectStorage{prefix, count} => (Some(prefix), (0..count).map(|_index| None).collect()),
@@ -108,7 +94,7 @@ async fn insert_submission2(
     let submission_id =
       submission::insert_submission_from_chunks(
         prefix,
-        chunk_contents, 
+        chunk_contents,
         request.metadata,
         &mut conn)
       .await?;
@@ -116,7 +102,7 @@ async fn insert_submission2(
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InsertSubmission2 {
+pub struct InsertSubmission {
     pub chunk_contents: ChunkContents,
     pub metadata: Option<Metadata>,
 }
@@ -125,21 +111,14 @@ pub struct InsertSubmission2 {
 pub enum ChunkContents {
     /// Use the `prefix` + the indexes 0..count
     /// to recover the contents of a chunk in the consumer.
-    /// 
+    ///
     /// This is what you should use in production.
     SeeObjectStorage{prefix: String, count: i64},
     /// Directly pass the contents of each chunk in Opsqueue itself.
-    /// 
+    ///
     /// NOTE: This is useful for small tests/examples,
     /// but significantly less scalable than using `SeeObjectStorage`.
     Direct{contents: Vec<chunk::Content>},
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InsertSubmission {
-    pub directory_uri: String,
-    pub chunk_count: u32,
-    pub metadata: Option<Metadata>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

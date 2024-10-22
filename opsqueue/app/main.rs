@@ -79,26 +79,26 @@ fn setup_tracing() -> OtelGuard {
 /// Sets up the global tracing subscriber.
 /// Current choices are based on the defaults described
 /// in the Tokio tracing tutorial https://tokio.rs/tokio/topics/tracing
-fn tracing_subscriber() -> impl tracing::Subscriber {
-    // Start configuring a `fmt` subscriber
-    tracing_subscriber::fmt()
-    // The log level is set based on the `RUST_LOG` environment variable.
-    // ex: `RUST_LOG="debug"` shows all error, warn, info and debug logs (but no trace logs) across all crates.
-    // `RUST_LOG="opsqueue=trace"` shows _all_ logs for opsqueue, including trace logs.
-    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-    // Use a more compact, abbreviated log format
-    // .compact()
-    // Display source code file paths
-    .with_file(true)
-    // Display source code line numbers
-    .with_line_number(true)
-    // Display the thread ID an event was recorded on
-    .with_thread_ids(true)
-    // Don't display the event's target (module path)
-    .with_target(false)
-    // Build the subscriber
-    .finish()
-}
+// fn tracing_subscriber() -> impl tracing::Subscriber {
+//     // Start configuring a `fmt` subscriber
+//     tracing_subscriber::fmt()
+//     // The log level is set based on the `RUST_LOG` environment variable.
+//     // ex: `RUST_LOG="debug"` shows all error, warn, info and debug logs (but no trace logs) across all crates.
+//     // `RUST_LOG="opsqueue=trace"` shows _all_ logs for opsqueue, including trace logs.
+//     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+//     // Use a more compact, abbreviated log format
+//     // .compact()
+//     // Display source code file paths
+//     .with_file(true)
+//     // Display source code line numbers
+//     .with_line_number(true)
+//     // Display the thread ID an event was recorded on
+//     .with_thread_ids(true)
+//     // Don't display the event's target (module path)
+//     .with_target(false)
+//     // Build the subscriber
+//     .finish()
+// }
 
 // Construct Tracer for OpenTelemetryLayer
 fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {

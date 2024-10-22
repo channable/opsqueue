@@ -1,6 +1,6 @@
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 
-use super::server::{InsertSubmission2, InsertSubmissionResponse};
+use super::server::{InsertSubmission, InsertSubmissionResponse};
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -30,7 +30,7 @@ impl Client {
 
     pub async fn insert_submission(
         &self,
-        submission: &InsertSubmission2,
+        submission: &InsertSubmission,
     ) -> anyhow::Result<SubmissionId> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
@@ -107,7 +107,7 @@ mod tests {
             .expect("Should be OK");
         assert_eq!(count, 0);
 
-        let submission = InsertSubmission2 {
+        let submission = InsertSubmission {
             chunk_contents: ChunkContents::Direct{contents: vec![None, None, None]},
             metadata: None,
         };
@@ -146,7 +146,7 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let submission = InsertSubmission2 {
+        let submission = InsertSubmission {
             chunk_contents: ChunkContents::Direct {contents: vec![None, None, None] },
             metadata: None,
         };
