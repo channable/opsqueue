@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt, TryStreamExt};
+use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
@@ -51,24 +52,28 @@ impl Client {
         py.allow_threads(|| { self.reserve_chunks_gilless(max, strategy)})
     }
 
+    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
     pub fn complete_chunk(
         &self,
         py: Python<'_>,
         submission_id: SubmissionId,
+        submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: chunk::Content,
     ) -> PyResult<()> {
-        py.allow_threads(|| { self.complete_chunk_gilless(submission_id, chunk_index, output_content)})
+        py.allow_threads(|| { self.complete_chunk_gilless(submission_id, submission_prefix, chunk_index, output_content)})
     }
 
+    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, failure))]
     pub fn fail_chunk(
         &self,
         py: Python<'_>,
         submission_id: SubmissionId,
+        submission_prefix: Option<&str>,
         chunk_index: ChunkIndex,
         failure: String,
     ) -> PyResult<()> {
-        py.allow_threads(|| { self.fail_chunk_gilless(submission_id, chunk_index, failure)})
+        py.allow_threads(|| { self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)})
     }
 
     pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
@@ -86,22 +91,23 @@ impl Client {
                     log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
                         let submission_id = chunk.submission_id;
+                        let submission_prefix = chunk.submission_prefix;
                         let chunk_index = chunk.chunk_index;
-                        log::debug!("Running fun for chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                        log::debug!("Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, submission_prefix);
                         let res = Python::with_gil(|py| {
                             let res = unbound_fun.bind(py).call1((chunk,))?;
                             res.extract()
                         });
                         match res {
                             Ok(res) => {
-                                log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
-                                self.complete_chunk_gilless(submission_id, chunk_index, res)?;
-                                log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, submission_prefix);
+                                self.complete_chunk_gilless(submission_id, chunk.submission_prefix, chunk_index, res)?;
+                                log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, submission_prefix);
                             },
                             Err(failure) => {
-                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, reason: {failure:?}", submission_id, chunk_index);
-                                self.fail_chunk_gilless(submission_id, chunk_index, format!("{failure:?}"))?;
-                                log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}", submission_id, chunk_index);
+                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure:?}", submission_id, chunk_index, submission_prefix);
+                                self.fail_chunk_gilless(submission_id, chunk.submission_prefix, chunk_index, format!("{failure:?}"))?;
+                                log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, submission_prefix);
                                 // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
                                 // otherwise, continue with next chunk
                                 if !Python::with_gil(|py| {failure.is_instance_of::<PyException>(py)}) {
@@ -179,17 +185,28 @@ impl Client {
     fn complete_chunk_gilless(
         &self,
         submission_id: SubmissionId,
+        submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: chunk::Content,
     ) -> PyResult<()> {
         let chunk_id = (submission_id.into(), chunk_index.into());
-        self.block_unless_interrupted(self.client.complete_chunk(chunk_id, output_content))
+        self.block_unless_interrupted(async move {
+            match submission_prefix {
+                None =>
+                    self.client.complete_chunk(chunk_id, output_content).await?,
+                Some(prefix) => {
+                    self.object_store_client.store_chunk(submission_prefix, chunk_index, ChunkType::Output, output_content).await?;
+                    self.client.complete_chunk(chunk_id, None).await
+                }
+            }
+    })
             .map_err(maybe_wrap_error)
     }
 
     pub fn fail_chunk_gilless(
         &self,
         submission_id: SubmissionId,
+        submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
     ) -> PyResult<()> {
@@ -324,6 +341,8 @@ impl IntoPy<PyObject> for ContentAsBytes {
     }
 }
 
+/// Wrapper for the internal Opsqueue Chunk datatype
+/// Note that it also includes some fields originating from the Submission
 #[pyclass(frozen, get_all)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
@@ -331,6 +350,8 @@ pub struct Chunk {
     pub chunk_index: ChunkIndex,
     pub input_content: ContentAsBytes,
     pub retries: i64,
+    pub submission_prefix: Option<String>,
+    pub submission_metadata: Option<Metadata>,
 }
 
 impl Chunk {
@@ -350,6 +371,8 @@ impl Chunk {
             chunk_index: c.chunk_index.into(),
             input_content: ContentAsBytes(content),
             retries: c.retries,
+            submission_prefix: s.prefix,
+            submission_metadata: s.metadata,
         })
     }
 
