@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::time::Duration;
 
-use chrono::{Local, DateTime, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use super::chunk::Chunk;
@@ -62,9 +62,9 @@ impl From<SubmissionId> for i64 {
     }
 }
 
-impl Into<std::time::SystemTime> for &SubmissionId {
-    fn into(self) -> std::time::SystemTime {
-        self.system_time()
+impl From<&SubmissionId> for std::time::SystemTime {
+    fn from(val: &SubmissionId) -> Self {
+        val.system_time()
     }
 }
 
@@ -171,7 +171,7 @@ pub async fn insert_submission_raw(
 ) -> sqlx::Result<()> {
     sqlx::query!(
         "
-        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata) 
+        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata)
         VALUES ($1, $2, $3, $4, $5)
         ",
         submission.id,
@@ -212,7 +212,7 @@ pub async fn insert_submission_from_chunks(
     let submission_id = Submission::generate_id();
     let submission = Submission {
         id: submission_id,
-        prefix: prefix,
+        prefix,
         chunks_total: chunks_contents.len() as i64,
         chunks_done: 0,
         metadata,

@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use crate::common::chunk;
-use bytes::Bytes;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::DynObjectStore;
 use reqwest::Url;
 
 /// A client for interacting with an object store.
-/// 
+///
 /// This exists as a separate type, so we can build it _once_
 /// and then re-use it in the producer/consumer for all communication going forward from there.
 #[derive(Debug, Clone)]
@@ -23,7 +22,7 @@ pub struct ObjectStoreClient {
 /// but it has to be able to read/write both and disambiguate between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkType {
-    /// Input chunk, 
+    /// Input chunk,
     /// data made by the producer and operated on by the consumer.
     Input,
     /// Output chunk, AKA 'chunk result',
@@ -42,13 +41,13 @@ impl std::fmt::Display for ChunkType {
 
 impl ObjectStoreClient {
     /// Creates a new client for interacting with an object store.
-    /// 
+    ///
     /// The given `object_store_url` recognizes the formats detailed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
     pub fn new(object_store_url: &str) -> anyhow::Result<Self> {
         let url = Url::parse(object_store_url)?;
         let (object_store, base_path) = object_store::parse_url(&url)?;
-        Ok(ObjectStoreClient {url: object_store_url.into(), object_store: Arc::new(object_store), base_path: base_path })
+        Ok(ObjectStoreClient {url: object_store_url.into(), object_store: Arc::new(object_store), base_path })
     }
 
     pub async fn store_chunks(&self, submission_prefix: &str, chunk_type: ChunkType, chunk_contents: impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error>) -> anyhow::Result<i64> {
@@ -62,7 +61,7 @@ impl ObjectStoreClient {
     }
 
     pub async fn store_chunk(&self, submission_prefix: &str, chunk_index: chunk::ChunkIndex, chunk_type: ChunkType, content: Vec<u8>) -> anyhow::Result<()> {
-        let path = self.chunk_path(submission_prefix, chunk_index.into(), chunk_type);
+        let path = self.chunk_path(submission_prefix, chunk_index, chunk_type);
         self.object_store.put(&path, content.into()).await?;
         Ok(())
     }

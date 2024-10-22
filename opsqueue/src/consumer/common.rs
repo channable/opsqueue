@@ -79,21 +79,21 @@ impl TryFrom<Message> for ServerToClientMessage {
 }
 
 // TODO: property test ensuring serialization never panics
-impl Into<Message> for ServerToClientMessage {
-    fn into(self) -> Message {
+impl From<ServerToClientMessage> for Message {
+    fn from(val: ServerToClientMessage) -> Self {
         let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&self, &mut writer).expect("Failed to serialize ServerToClientMessage");
-        let msg = Message::binary(writer.into_inner());
-        msg
+        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ServerToClientMessage");
+
+        Message::binary(writer.into_inner())
     }
 }
 
 // TODO: property test ensuring serialization never panics
-impl Into<Message> for Envelope<ClientToServerMessage> {
-    fn into(self) -> Message {
+impl From<Envelope<ClientToServerMessage>> for Message {
+    fn from(val: Envelope<ClientToServerMessage>) -> Self {
         let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&self, &mut writer).expect("Failed to serialize ClientToServerMessage");
-        let msg = Message::binary(writer.into_inner());
-        msg
+        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ClientToServerMessage");
+
+        Message::binary(writer.into_inner())
     }
 }

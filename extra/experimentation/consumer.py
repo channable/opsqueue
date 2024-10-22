@@ -2,6 +2,7 @@
 """
 This file implements a super simple consumer for Opsqueue.
 """
+
 import os
 import random
 import requests

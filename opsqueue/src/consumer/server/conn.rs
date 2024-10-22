@@ -89,7 +89,7 @@ impl ClientConn {
     #[tracing::instrument]
     pub async fn run(mut self, cancellation_token: CancellationToken) -> Result<(), ClientConnError> {
         const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
-        let res = (|| async move {
+        let res = async move {
 
         loop {
             select! {
@@ -118,7 +118,7 @@ impl ClientConn {
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
             }
         }
-    })().await;
+    }.await;
     tracing::warn!("Closing websocket connection, response was: {:?}", &res);
     res
     }

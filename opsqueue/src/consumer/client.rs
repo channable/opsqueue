@@ -157,7 +157,7 @@ impl Client {
         let me = Self {
             in_flight_requests,
             _bg_handle: cancellation_token.drop_guard(),
-            healthy: healthy,
+            healthy,
             ws_sink,
         };
         Ok(me)
@@ -257,7 +257,7 @@ impl Client {
             let mut in_flight_requests = self.in_flight_requests.lock().await;
             let nonce = in_flight_requests.0.wrapping_add(1);
             let envelope = Envelope {
-                nonce: nonce,
+                nonce,
                 contents: request,
             };
             in_flight_requests.1.insert(nonce, oneshot_sender);

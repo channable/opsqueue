@@ -1,0 +1,54 @@
+# Pre-commit config as used by ./build.py.
+repos:
+  # Use local to make sure the dependencies are taken from pre-commit's own environment and
+  # therefore from our nix derivation.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: Ruff linting
+        entry: ruff check --fix
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: ruff-format
+        name: Ruff formatting
+        entry: ruff format
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: no-code-in-__init__.py
+        name: No code in __init__.py
+        entry: sh -c '! find . -size +0c -type f -name __init__.py  -not -path "./.venv/*" | grep .'
+        language: system
+        pass_filenames: false
+      - id: biome
+        name: Biome formatting
+        entry: biome format --write --files-ignore-unknown=true --no-errors-on-unmatched
+        language: system
+      - id: rustfmt
+        name: rustfmt
+        entry: rustfmt
+        language: system
+        pass_filenames: false
+      - id: mypy
+        name: mypy
+        entry: mypy --strict
+        language: system
+        types: [python]
+        exclude: extra|example\.py
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt --strict
+        language: system
+        types: [nix]
+        exclude: extra
+      - id: fix-whitespace
+        name: fix-whitespace
+        entry: fix-whitespace --config=.fix-whitespace.yaml
+        language: system
+        pass_filenames: false
+      - id: clippy
+        name: Cargo clippy
+        entry: cargo clippy --no-deps --fix --allow-dirty -- -Dwarnings
+        language: system
+        pass_filenames: false

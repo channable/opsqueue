@@ -2,7 +2,6 @@
 import sqlite3
 
 from contextlib import contextmanager
-from datetime import datetime
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.testclient import TestClient
