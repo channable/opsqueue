@@ -10,7 +10,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-.venv/
+# .venv/ <- NOTE: Disabled for now, for compatibility with maturin develop with Nix
 env/
 bin/
 build/
