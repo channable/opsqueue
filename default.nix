@@ -13,7 +13,7 @@ let
     paths = with pkgs; [
       # For linting and formatting
       ruff
-      
+
       # For compiling the Rust parts
       rust-with-lsp
 
@@ -22,9 +22,10 @@ let
       nvd
 
       # Rust build tools
-      pkgs.cargo-audit
-      pkgs.cargo-edit
-      pkgs.cargo-nextest
+      cargo-audit
+      cargo-edit
+      cargo-nextest
+      maturin
     ];
   };
   environments = {

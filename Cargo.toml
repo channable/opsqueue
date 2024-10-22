@@ -5,8 +5,8 @@ resolver = "2"
 
 members = [
     "opsqueue/",
-    "producer_libs/python",
-    "consumer_libs/python",
+    "opsqueue_producer",
+    "opsqueue_consumer",
 ]
 
 
@@ -43,4 +43,3 @@ opt-level = 3
 
 [profile.release.build-override]
 opt-level = 3
-
