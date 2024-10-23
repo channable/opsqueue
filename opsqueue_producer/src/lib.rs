@@ -1,7 +1,6 @@
-use std::{future::IntoFuture, pin::Pin, sync::Arc, time::Duration};
+use std::{future::IntoFuture, mem::MaybeUninit, pin::Pin, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
-use ouroboros::self_referencing;
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyTypeError},
@@ -10,7 +9,7 @@ use pyo3::{
 
 use opsqueue::{common::{chunk, submission}, object_store::ChunkType, producer::server::ChunkContents};
 use opsqueue::producer::client::Client as ProducerClient;
-use futures::{Stream, StreamExt, TryStream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
@@ -203,49 +202,41 @@ impl Client {
     }
 }
 
-// TODO: This is really ugly.
-// A low-hanging fruit alternative approach is to use Ourorobos for the self-referencing struct.
+type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
+
+// TODO: This is ugly and painful.
+// At the very least, we should double-check the soundness with miri.
 #[pyclass]
 struct PyChunksIter {
-    stream: Option<Mutex<Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>>>>,
+    stream: MaybeUninit<Mutex<PinfulStream<PyResult<Vec<u8>>>>>,
+    // SAFETY:
+    // The following fields _have_ to be boxed so they won't move in memory once the struct itself moves.
+    // They also _have_ to be after the `stream` field, ensuring they are dropped _after_ stream is dropped.
     self_borrows: Box<(String, Client)>,
 }
 
 impl PyChunksIter {
     pub (crate) async fn new(client: Client, prefix: String, chunks_total: i64) -> Self {
-        unsafe {
-            let mut me = Self::allocate(prefix, client);
-            me.initialize(chunks_total).await;
-            me
-        }
-    }
-
-    // SAFETY: Actually safe but unusable without also calling initialize
-    // (if used that way, the resulting iterator will panic)
-    unsafe fn allocate(prefix: String, client: Client) -> Self 
-    {
         let self_borrows = Box::new((prefix, client));
-        Self {self_borrows, stream: None}
+        let mut me = Self {self_borrows, stream: MaybeUninit::uninit() };
 
-    }
-
-    async fn initialize(&mut self, chunks_total: i64) 
-    {
-        let stream = self.self_borrows.1.object_store_client.retrieve_chunks(&self.self_borrows.0, chunks_total, ChunkType::Output).await;
+        let stream = me.self_borrows.1.object_store_client.retrieve_chunks(&me.self_borrows.0, chunks_total, ChunkType::Output).await;
         let stream = stream.map_err(maybe_wrap_error);
-        let stream : Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
         // SAFETY:
-        // What rust wants to prevent, is that `self.stream` outlives the passed `client` and `prefix`.
-        // It cannot figure out that by making sure we only use it with `self.client` and `self.prefix`
-        // and never take it out of the PyChunksIter struct, that it will indeed never outlive those.
-        // (because when PyChunksIter is dropped, all three of these fields are dropped (in declaration order))
+        // Welcome in self-referential struct land.
         //
-        // The normal way of indicating this (adding a lifetime bound to PyChunksIter itself; that way we won't even need to include the other fields in there)
-        // cannot cross the Python language border.
-        // Instead, we transmute the lifetime away.
-        // As long as we indeed never take the stream out of the PyChunksIter struct, this is safe!
-        let stream :Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = unsafe { std::mem::transmute(stream) };
-        self.stream = Some(Mutex::new(stream));
+        // We have to transmute the too-short lifetime to a fake 'static lifetime,
+        // to convince the compiler that `self.stream` will never outlive the passed `client` and `prefix`.
+        // As long as we indeed pass `self.client` and `self.prefix` and never take the `stream` field out of the PyChunksIter struct
+        // after creation, this is sound.
+        //
+        // We have to resort to a self-referential struct because lifetimes cannot cross over to Python,
+        // so we have to pack the stream with all of its dependencies.
+        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
+        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = unsafe { std::mem::transmute(stream) };
+        me.stream = MaybeUninit::new(Mutex::new(stream));
+
+        me
     }
 }
 
@@ -257,7 +248,8 @@ impl PyChunksIter {
 
     fn __next__(slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
         slf.self_borrows.1.runtime.block_on(async {
-            let mut stream = slf.stream.as_ref().unwrap().lock().await;
+            // SAFETY: The MaybeUninit is always initialized once `PyChunksIter::new` returns.
+            let mut stream = unsafe { slf.stream.assume_init_ref() }.lock().await;
             stream.next().await.map(|r| r.map(VecAsPyBytes))
         })
         // slf.iter.next().map(|result| result.map(VecAsPyBytes))
@@ -515,14 +507,14 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 // }
 
 // impl PyChunksStream {
-//     pub (crate) fn new_from_rust<S>(stream: S, runtime: Arc<tokio::runtime::Runtime>) -> PyResult<Self> 
+//     pub (crate) fn new_from_rust<S>(stream: S, runtime: Arc<tokio::runtime::Runtime>) -> PyResult<Self>
 //     where
 //     S: Stream<Item = PyResult<Vec<u8>>> + TryStream<Ok = Vec<u8>, Error = PyErr> + Send + 'static
 //     {
 //         // It's rather annoying that we need _two_ boxes here,
 //         // one for the box-pin and one to wrap the iterator.
 //         // TODO: Investigate if there is a better way.
-//         // One thing that comes to mind is to replace `from_fn` 
+//         // One thing that comes to mind is to replace `from_fn`
 //         // (which gives rise to a voldemort type and that is problematic as we cannot use generics with PyO3).
 //         // with a dedicated home-written iterator struct.
 //         let mut stream = Box::pin(stream);

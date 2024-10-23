@@ -5,4 +5,5 @@ from opsqueue_producer import Client
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 client = Client("localhost:3999", "file:///tmp/opsqueue/")
 result = client.run_submission(map(lambda x: str(x).encode(), range(0, 1_000)))
-print(result)
+for x in result:
+    print(x)
