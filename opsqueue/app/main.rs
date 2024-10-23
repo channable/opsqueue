@@ -104,42 +104,17 @@ fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) 
         }
 }
 
-/// Sets up the global tracing subscriber.
-/// Current choices are based on the defaults described
-/// in the Tokio tracing tutorial https://tokio.rs/tokio/topics/tracing
-// fn tracing_subscriber() -> impl tracing::Subscriber {
-//     // Start configuring a `fmt` subscriber
-//     tracing_subscriber::fmt()
-//     // The log level is set based on the `RUST_LOG` environment variable.
-//     // ex: `RUST_LOG="debug"` shows all error, warn, info and debug logs (but no trace logs) across all crates.
-//     // `RUST_LOG="opsqueue=trace"` shows _all_ logs for opsqueue, including trace logs.
-//     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-//     // Use a more compact, abbreviated log format
-//     // .compact()
-//     // Display source code file paths
-//     .with_file(true)
-//     // Display source code line numbers
-//     .with_line_number(true)
-//     // Display the thread ID an event was recorded on
-//     .with_thread_ids(true)
-//     // Don't display the event's target (module path)
-//     .with_target(false)
-//     // Build the subscriber
-//     .finish()
-// }
-
-// Construct Tracer for OpenTelemetryLayer
+/// Builds the tracer configuration for OpenTelemetry,
+/// including the desired sampling rate and exporter to use.
 fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
     use opentelemetry::trace::TracerProvider;
     let provider = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_trace_config(
             opentelemetry_sdk::trace::Config::default()
-                // Customize sampling strategy
                 .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
-                    1.0,// 0.01,
+                    0.01,
                 ))))
-                // If export trace to AWS X-Ray, you can use XrayIdGenerator
                 .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
                 .with_resource(opentelemetry_resource()),
         )
@@ -154,7 +129,7 @@ fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
     #[cfg(debug_assertions)]
     let _ = opentelemetry::global::set_error_handler(otel_debug_mode_error_handler);
 
-    provider.tracer("tracing-otel-subscriber")
+    provider.tracer("opsqueue")
 }
 fn opentelemetry_resource() -> opentelemetry_sdk::Resource {
     use opentelemetry_semantic_conventions::{
