@@ -1,6 +1,7 @@
 use std::{future::IntoFuture, pin::Pin, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
+use ouroboros::self_referencing;
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyTypeError},
@@ -193,19 +194,8 @@ impl Client {
         match self.producer_client.get_submission(id.into()).await.map_err(maybe_wrap_error)? {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();
+                let py_chunks_iter = PyChunksIter::new(self.clone(), prefix, submission.chunks_total).await;
 
-                // let stream = self.object_store_client.retrieve_chunks(&prefix, submission.chunks_total, ChunkType::Output).await;
-                // let stream = stream.map_err(maybe_wrap_error);
-                // let mut stream = Box::pin(stream);
-                // let iter = std::iter::from_fn(move || {
-                //     self.runtime.block_on(stream.next())
-                // });
-                let mut py_chunks_iter = PyChunksIter::build(prefix, self.clone());
-                py_chunks_iter.setup(submission.chunks_total).await;
-
-
-                // let py_stream = PyChunksStream::new_from_rust(stream, self.runtime.clone())?;
-                // let result = stream.try_collect().await.map_err(maybe_wrap_error)?;
                 Ok(Some(py_chunks_iter))
             }
             _ => Ok(None)
@@ -218,20 +208,30 @@ impl Client {
 #[pyclass]
 struct PyChunksIter {
     stream: Option<Mutex<Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>>>>,
-    prefix: Box<String>,
-    client: Box<Client>,
+    self_borrows: Box<(String, Client)>,
 }
 
 impl PyChunksIter {
-    fn build(prefix: String, client: Client) -> Self 
-    {
+    pub (crate) async fn new(client: Client, prefix: String, chunks_total: i64) -> Self {
+        unsafe {
+            let mut me = Self::allocate(prefix, client);
+            me.initialize(chunks_total).await;
+            me
+        }
+    }
 
-        Self {prefix: Box::new(prefix), client: Box::new(client), stream: None}
+    // SAFETY: Actually safe but unusable without also calling initialize
+    // (if used that way, the resulting iterator will panic)
+    unsafe fn allocate(prefix: String, client: Client) -> Self 
+    {
+        let self_borrows = Box::new((prefix, client));
+        Self {self_borrows, stream: None}
 
     }
-    async fn setup(&mut self, chunks_total: i64) 
+
+    async fn initialize(&mut self, chunks_total: i64) 
     {
-        let stream = self.client.object_store_client.retrieve_chunks(&self.prefix, chunks_total, ChunkType::Output).await;
+        let stream = self.self_borrows.1.object_store_client.retrieve_chunks(&self.self_borrows.0, chunks_total, ChunkType::Output).await;
         let stream = stream.map_err(maybe_wrap_error);
         let stream : Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
         // SAFETY:
@@ -256,7 +256,7 @@ impl PyChunksIter {
     }
 
     fn __next__(slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
-        slf.client.runtime.block_on(async {
+        slf.self_borrows.1.runtime.block_on(async {
             let mut stream = slf.stream.as_ref().unwrap().lock().await;
             stream.next().await.map(|r| r.map(VecAsPyBytes))
         })
