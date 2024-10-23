@@ -377,7 +377,7 @@ mod tests {
 
         yield_now().await;
 
-        let three = three.await;
-        let two = two.await;
+        let _three = three.await;
+        let _two = two.await;
     }
 }
