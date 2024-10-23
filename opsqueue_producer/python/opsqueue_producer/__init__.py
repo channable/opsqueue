@@ -1,11 +1,15 @@
-from typing import Any, Iterable, Iterator
-import itertools
+from __future__ import annotations
+from collections.abc import Iterable, Iterator
+from typing import Any, Protocol
 
+import itertools
 import json
+import pickle
 
 import opsqueue_producer.opsqueue_producer_internal
 from opsqueue_producer.opsqueue_producer_internal import SubmissionId
 from opsqueue_producer.opsqueue_producer_internal import SubmissionStatus
+
 
 class Client():
     """
@@ -17,7 +21,7 @@ class Client():
         self.inner = opsqueue_producer_internal.Client(opsqueue_url, object_store_url)
 
     # TODO: Make serialization format customizable
-    def run_submission(self, ops: Iterable[Any], chunk_size: int, metadata: None | bytes = None) -> Iterator[bytes]:
+    def run_submission(self, ops: Iterable[Any], chunk_size: int, serialization_format: SerializationFormat = pickle, metadata: None | bytes = None) -> Iterator[bytes]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
 
@@ -26,18 +30,18 @@ class Client():
         If the submission fails, an exception will be raised.
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
         """
-        results_iter = self.run_submission_chunks(_chunk_iterator(ops, chunk_size), metadata)
-        return _unchunk_iterator(results_iter)
+        results_iter = self.run_submission_chunks(_chunk_iterator(ops, chunk_size, serialization_format), metadata)
+        return _unchunk_iterator(results_iter, serialization_format)
 
     # TODO: Make serialization format customizable
-    def insert_submission(self, ops: Iterable[Any], chunk_size: int, metadata: None | bytes = None) -> SubmissionId:
+    def insert_submission(self, ops: Iterable[Any], chunk_size: int, serialization_format: SerializationFormat = json, metadata: None | bytes = None) -> SubmissionId:
         """
         Inserts a submission into the queue, 
         returning an ID you can use to track the submission's progress afterwards.
 
         Chunking is done automatically, based on the provided chunk size.
         """
-        return self.insert_submission_chunks(_chunk_iterator(ops, chunk_size), metadata)
+        return self.insert_submission_chunks(_chunk_iterator(ops, chunk_size, serialization_format), metadata)
 
 
     def stream_completed_submission(self, submission_id: SubmissionId) -> Iterator[Any]:
@@ -101,24 +105,37 @@ class Client():
         raise NotImplementedError
 
 
-def _chunk_iterator(iter: Iterable[Any], chunk_size: int) -> Iterator[bytes]:
-    return map(_encode_chunk, itertools.batched(iter, chunk_size))
+def _chunk_iterator(iter: Iterable[Any], chunk_size: int, serialization_format: SerializationFormat) -> Iterator[bytes]:
+    return map(lambda c: _encode_chunk(c, serialization_format), itertools.batched(iter, chunk_size))
 
-def _unchunk_iterator(encoded_chunks_iter: Iterable[bytes]) -> Iterator[Any]:
-    return _flatten_iterator(map(_decode_chunk, encoded_chunks_iter))
-
-    chunks_iterator = map(_encode_chunk, itertools.batched(ops, chunk_size))
-    encoded_chunk_results_iterator = self.run_submission_chunks(chunks_iterator, metadata)
-    chunk_results_iterator = map(_decode_chunk, encoded_chunk_results_iterator)
+def _unchunk_iterator(encoded_chunks_iter: Iterable[bytes], serialization_format: SerializationFormat) -> Iterator[Any]:
+    return _flatten_iterator(map(lambda c: _decode_chunk(c, serialization_format), encoded_chunks_iter))
 
 
-def _encode_chunk(chunk: tuple[Any]) -> bytes:
-    return json.dumps(chunk).encode()
+def _encode_chunk(chunk: tuple[Any], serialization_format: SerializationFormat) -> bytes:
+    return serialization_format.dumps(chunk)
 
-def _decode_chunk(chunk: bytes) -> tuple[Any]:
-    return json.loads(chunk.decode())
+def _decode_chunk(chunk: bytes, serialization_format: SerializationFormat) -> tuple[Any]:
+    return serialization_format.loads(chunk)
 
 
 def _flatten_iterator(iter_of_iters: Iterable[Iterable[bytes]]) -> Iterator[bytes]:
     "Flatten one level of nesting."
     return itertools.chain.from_iterable(iter_of_iters)
+
+class SerializationFormat(Protocol):
+    def dumps(self, obj: Any) -> bytes: ...
+    def loads(self, data: bytes) -> Any: ...
+
+class json_as_bytes:
+    """
+    JSON encoding as per the `json` module,
+    but making sure that the output type is `bytes` rather than `str`.
+    """
+    @classmethod
+    def dumps(cls, obj: Any) -> bytes:
+        return json.dumps(obj).encode()
+
+    @classmethod
+    def loads(cls, data: bytes) -> Any:
+        return json.loads(data.decode())
