@@ -8,7 +8,9 @@ def myfun(chunk: Chunk) -> bytes:
     # if chunk.input_content is None:
     #     return b"Hello world!"
     # else:
-    return chunk.input_content + b"Was altered!"
+    print(chunk.input_content)
+    return chunk.input_content
+    # return chunk.input_content + b"Was altered!"
 
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
