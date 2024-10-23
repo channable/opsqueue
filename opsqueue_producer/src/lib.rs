@@ -138,24 +138,28 @@ impl Client {
     }
 
     // TODO: Currently we materialize the full submission at once. Instead, we want to stream results lazily by creating and returning a Python iterator
-    pub fn stream_completed_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<Vec<Vec<u8>>> {
+    pub fn stream_completed_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<Vec<VecAsPyBytes>> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 match self.maybe_stream_completed_submission(id).await? {
                     None => Err(ProducerClientError::new_err("Submission not completed yet".to_string()))?,
-                    Some(vec) => Ok(vec)
+                    Some(vec) => {
+                        let vec = vec.into_iter().map(Into::into).collect();
+                        Ok(vec)
+                    }
                 }
             })
         })
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
-    pub fn run_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<Vec<Vec<u8>>> {
+    pub fn run_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<Vec<VecAsPyBytes>> {
         let submission_id = self.insert_submission(py, chunk_contents, metadata)?;
         py.allow_threads(||{
             self.block_unless_interrupted(async move {
                 loop {
                     if let Some(vec) = self.maybe_stream_completed_submission(submission_id).await? {
+                        let vec = vec.into_iter().map(Into::into).collect();
                         return Ok(vec)
                     }
                     tokio::time::sleep(SUBMISSION_POLLING_INTERVAL).await;
@@ -366,6 +370,21 @@ pub struct SubmissionFailed {
     pub metadata: Option<submission::Metadata>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VecAsPyBytes(Vec<u8>);
+
+impl IntoPy<PyObject> for VecAsPyBytes {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        self.0.as_slice().into_py(py)
+    }
+}
+
+impl From<Vec<u8>> for VecAsPyBytes {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
+    }
 }
 
 // #[pyclass(frozen, get_all)]
