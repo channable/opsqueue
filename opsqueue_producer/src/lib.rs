@@ -1,4 +1,4 @@
-use std::{future::IntoFuture, sync::Arc, time::Duration};
+use std::{future::IntoFuture, pin::Pin, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use pyo3::{
@@ -9,7 +9,8 @@ use pyo3::{
 
 use opsqueue::{common::{chunk, submission}, object_store::ChunkType, producer::server::ChunkContents};
 use opsqueue::producer::client::Client as ProducerClient;
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStream, TryStreamExt};
+use tokio::sync::Mutex;
 
 create_exception!(opsqueue_producer, ProducerClientError, PyException);
 
@@ -22,6 +23,7 @@ const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
+// NOTE: Client is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass]
 #[derive(Debug, Clone)]
 struct Client {
@@ -137,15 +139,13 @@ impl Client {
     })
     }
 
-    // TODO: Currently we materialize the full submission at once. Instead, we want to stream results lazily by creating and returning a Python iterator
-    pub fn stream_completed_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<Vec<VecAsPyBytes>> {
+    pub fn stream_completed_submission(&self, py: Python<'_>, id: SubmissionId) -> PyResult<PyChunksIter> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 match self.maybe_stream_completed_submission(id).await? {
                     None => Err(ProducerClientError::new_err("Submission not completed yet".to_string()))?,
-                    Some(vec) => {
-                        let vec = vec.into_iter().map(Into::into).collect();
-                        Ok(vec)
+                    Some(py_iter) => {
+                        Ok(py_iter)
                     }
                 }
             })
@@ -153,14 +153,13 @@ impl Client {
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
-    pub fn run_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<Vec<VecAsPyBytes>> {
+    pub fn run_submission(&self, py: Python<'_>, chunk_contents: Py<PyIterator>, metadata: Option<submission::Metadata>) -> PyResult<PyChunksIter> {
         let submission_id = self.insert_submission(py, chunk_contents, metadata)?;
         py.allow_threads(||{
             self.block_unless_interrupted(async move {
                 loop {
-                    if let Some(vec) = self.maybe_stream_completed_submission(submission_id).await? {
-                        let vec = vec.into_iter().map(Into::into).collect();
-                        return Ok(vec)
+                    if let Some(py_stream) = self.maybe_stream_completed_submission(submission_id).await? {
+                        return Ok(py_stream)
                     }
                     tokio::time::sleep(SUBMISSION_POLLING_INTERVAL).await;
                 }
@@ -190,18 +189,83 @@ impl Client {
     //     })
     // }
 
-    async fn maybe_stream_completed_submission(&self, id: SubmissionId) -> PyResult<Option<Vec<Vec<u8>>>> {
+    async fn maybe_stream_completed_submission(&self, id: SubmissionId) -> PyResult<Option<PyChunksIter>> {
         match self.producer_client.get_submission(id.into()).await.map_err(maybe_wrap_error)? {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();
-                let stream = self.object_store_client.retrieve_chunks(&prefix, submission.chunks_total, ChunkType::Output).await;
-                let result = stream.try_collect().await.map_err(maybe_wrap_error)?;
-                Ok(Some(result))
+
+                // let stream = self.object_store_client.retrieve_chunks(&prefix, submission.chunks_total, ChunkType::Output).await;
+                // let stream = stream.map_err(maybe_wrap_error);
+                // let mut stream = Box::pin(stream);
+                // let iter = std::iter::from_fn(move || {
+                //     self.runtime.block_on(stream.next())
+                // });
+                let mut py_chunks_iter = PyChunksIter::build(prefix, self.clone());
+                py_chunks_iter.setup(submission.chunks_total).await;
+
+
+                // let py_stream = PyChunksStream::new_from_rust(stream, self.runtime.clone())?;
+                // let result = stream.try_collect().await.map_err(maybe_wrap_error)?;
+                Ok(Some(py_chunks_iter))
             }
             _ => Ok(None)
         }
     }
 }
+
+// TODO: This is really ugly.
+// A low-hanging fruit alternative approach is to use Ourorobos for the self-referencing struct.
+#[pyclass]
+struct PyChunksIter {
+    stream: Option<Mutex<Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>>>>,
+    prefix: Box<String>,
+    client: Box<Client>,
+}
+
+impl PyChunksIter {
+    fn build(prefix: String, client: Client) -> Self 
+    {
+
+        Self {prefix: Box::new(prefix), client: Box::new(client), stream: None}
+
+    }
+    async fn setup(&mut self, chunks_total: i64) 
+    {
+        let stream = self.client.object_store_client.retrieve_chunks(&self.prefix, chunks_total, ChunkType::Output).await;
+        let stream = stream.map_err(maybe_wrap_error);
+        let stream : Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
+        // SAFETY:
+        // What rust wants to prevent, is that `self.stream` outlives the passed `client` and `prefix`.
+        // It cannot figure out that by making sure we only use it with `self.client` and `self.prefix`
+        // and never take it out of the PyChunksIter struct, that it will indeed never outlive those.
+        // (because when PyChunksIter is dropped, all three of these fields are dropped (in declaration order))
+        //
+        // The normal way of indicating this (adding a lifetime bound to PyChunksIter itself; that way we won't even need to include the other fields in there)
+        // cannot cross the Python language border.
+        // Instead, we transmute the lifetime away.
+        // As long as we indeed never take the stream out of the PyChunksIter struct, this is safe!
+        let stream :Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = unsafe { std::mem::transmute(stream) };
+        self.stream = Some(Mutex::new(stream));
+    }
+}
+
+#[pymethods]
+impl PyChunksIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
+        slf.client.runtime.block_on(async {
+            let mut stream = slf.stream.as_ref().unwrap().lock().await;
+            stream.next().await.map(|r| r.map(VecAsPyBytes))
+        })
+        // slf.iter.next().map(|result| result.map(VecAsPyBytes))
+    }
+}
+
+
+
 
 async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>
 where
@@ -423,6 +487,64 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 // fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
 //     Ok((a + b).to_string())
 // }
+
+// #[pyclass]
+// pub struct PyChunksIter {
+//     iter: Box<dyn Iterator<Item = PyResult<Vec<u8>>> + Send>,
+// }
+
+// impl PyChunksIter {
+//     pub (crate) fn new_from_rust(iter: impl Iterator<Item = PyResult<Vec<u8>>> + Send + 'static) -> Self {
+//         Self{iter: Box::new(iter)}
+//     }
+// }
+
+// #[pymethods]
+// impl PyChunksIter {
+//     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+//         slf
+//     }
+
+//     fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
+//         slf.iter.next().map(|result| result.map(VecAsPyBytes))
+//     }
+// }
+// #[pyclass]
+// pub struct PyChunksStream {
+//     iter: Box<dyn Iterator<Item = PyResult<Vec<u8>>> + Send>,
+// }
+
+// impl PyChunksStream {
+//     pub (crate) fn new_from_rust<S>(stream: S, runtime: Arc<tokio::runtime::Runtime>) -> PyResult<Self> 
+//     where
+//     S: Stream<Item = PyResult<Vec<u8>>> + TryStream<Ok = Vec<u8>, Error = PyErr> + Send + 'static
+//     {
+//         // It's rather annoying that we need _two_ boxes here,
+//         // one for the box-pin and one to wrap the iterator.
+//         // TODO: Investigate if there is a better way.
+//         // One thing that comes to mind is to replace `from_fn` 
+//         // (which gives rise to a voldemort type and that is problematic as we cannot use generics with PyO3).
+//         // with a dedicated home-written iterator struct.
+//         let mut stream = Box::pin(stream);
+//         let iter = std::iter::from_fn(move || {
+//             runtime.block_on(stream.next())
+//         });
+//         Ok(Self{iter: Box::new(iter)})
+//     }
+// }
+
+// #[pymethods]
+// impl PyChunksStream {
+//     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+//         slf
+//     }
+
+//     fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
+//         slf.iter.next().map(|result| result.map(VecAsPyBytes))
+//     }
+// }
+
+
 
 /// A Python module implemented in Rust.
 #[pymodule]
