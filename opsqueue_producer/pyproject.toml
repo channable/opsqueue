@@ -5,6 +5,7 @@ build-backend = "maturin"
 [project]
 name = "opsqueue_producer"
 requires-python = ">=3.8"
+dependencies = ["cbor2"]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

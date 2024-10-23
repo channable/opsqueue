@@ -3,6 +3,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Protocol
 
 import itertools
+import cbor2
 import json
 
 from opsqueue_producer.opsqueue_producer_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
@@ -38,8 +39,9 @@ class Client:
     def run_submission(
         self,
         ops: Iterable[Any],
+        *,
         chunk_size: int,
-        serialization_format: SerializationFormat = json_as_bytes,
+        serialization_format: SerializationFormat = cbor2,
         metadata: None | bytes = None,
     ) -> Iterator[bytes]:
         """
@@ -51,7 +53,7 @@ class Client:
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
         """
         results_iter = self.run_submission_chunks(
-            _chunk_iterator(ops, chunk_size, serialization_format), metadata
+            _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
         )
         return _unchunk_iterator(results_iter, serialization_format)
 
@@ -59,8 +61,9 @@ class Client:
     def insert_submission(
         self,
         ops: Iterable[Any],
+        *,
         chunk_size: int,
-        serialization_format: SerializationFormat = json_as_bytes,
+        serialization_format: SerializationFormat = cbor2,
         metadata: None | bytes = None,
     ) -> SubmissionId:
         """
@@ -70,13 +73,14 @@ class Client:
         Chunking is done automatically, based on the provided chunk size.
         """
         return self.insert_submission_chunks(
-            _chunk_iterator(ops, chunk_size, serialization_format), metadata
+            _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
         )
 
     def stream_completed_submission(
         self,
         submission_id: SubmissionId,
-        serialization_format: SerializationFormat = json_as_bytes,
+        *,
+        serialization_format: SerializationFormat = cbor2,
     ) -> Iterator[Any]:
         """
         Returns the operation-results of a completed submission, as an iterator that lazily
@@ -90,7 +94,7 @@ class Client:
         )
 
     def run_submission_chunks(
-        self, chunk_contents: Iterable[bytes], metadata: None | bytes = None
+        self, chunk_contents: Iterable[bytes], *, metadata: None | bytes = None
     ) -> Iterator[bytes]:
         """
         Inserts an already-chunked submission into the queue, and blocks until it is completed.
@@ -101,7 +105,7 @@ class Client:
         return self.inner.run_submission_chunks(chunk_contents, metadata=metadata)  # type: ignore[no-any-return]
 
     def insert_submission_chunks(
-        self, chunk_contents: Iterable[bytes], metadata: None | bytes = None
+        self, chunk_contents: Iterable[bytes], *, metadata: None | bytes = None
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
