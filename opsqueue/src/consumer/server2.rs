@@ -1,0 +1,44 @@
+use axum::{extract::{State, WebSocketUpgrade}, routing::get, Router};
+use tokio_util::sync::CancellationToken;
+
+use crate::common::chunk::ChunkId;
+
+use super::reserver::Reserver;
+
+pub mod conn;
+pub mod state;
+
+pub async fn serve(pool: sqlx::SqlitePool, server_addr: Box<str>, cancellation_token: CancellationToken) {
+    let state = ServerState::new(pool, cancellation_token);
+    let router = ServerState::serve(state);
+    let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to consumer server address");
+
+    tracing::info!("Consumer WebSocket server listening at {server_addr}...");
+    axum::serve(listener, router).await.expect("Failed to start consumer server");
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerState {
+    pool: sqlx::SqlitePool,
+    cancellation_token: CancellationToken,
+    reserver: Reserver<ChunkId, ChunkId>,
+}
+
+impl ServerState {
+    pub fn new(pool: sqlx::SqlitePool, cancellation_token: CancellationToken) -> Self {
+        let heartbeating_interval = std::time::Duration::from_secs(5);
+        let reserver = Reserver::new(heartbeating_interval);
+        Self { pool, cancellation_token, reserver }
+    }
+
+    pub fn serve(server_state: ServerState) -> Router<()> {
+        Router::new().route("", get(ws_accept_handler)).with_state(server_state)
+    }
+}
+
+async fn ws_accept_handler(ws: WebSocketUpgrade, State(state): State<ServerState>) -> axum::response::Response {
+    ws.on_upgrade(|ws_stream| async move {
+        let res = conn::ConsumerConn::new(&state, ws_stream).run().await;
+        tracing::warn!("Closed websocket connection, reason: {:?}", &res);
+    })
+}
