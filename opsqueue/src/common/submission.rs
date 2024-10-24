@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use super::chunk::Chunk;
 use super::chunk::{self, ChunkIndex};
@@ -186,20 +186,20 @@ pub async fn insert_submission_raw(
 }
 
 #[tracing::instrument(skip(chunks))]
-pub async fn insert_submission(
+pub async fn insert_submission<Iter>(
     submission: Submission,
-    chunks: impl IntoIterator<Item = Chunk>,
+    chunks: Iter,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<()> {
-    query!("SAVEPOINT insert_submission;")
-        .execute(&mut *conn)
-        .await?;
-    insert_submission_raw(submission, &mut *conn).await?;
-    super::chunk::insert_many_chunks(chunks, &mut *conn).await?;
-    query!("RELEASE SAVEPOINT insert_submission;")
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
+) -> sqlx::Result<()>
+where
+    Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
+    <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
+{
+    conn.transaction(|tx| Box::pin(async move {
+        insert_submission_raw(submission, &mut **tx).await?;
+        super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
+        Ok(())
+    })).await
 }
 
 #[tracing::instrument(skip(metadata, chunks_contents, conn))]
@@ -220,7 +220,7 @@ pub async fn insert_submission_from_chunks(
     let iter = chunks_contents
         .into_iter()
         .enumerate()
-        .map(|(chunk_index, uri)| Chunk::new(submission_id, (chunk_index as i64).into(), uri));
+        .map(move |(chunk_index, uri)| Chunk::new(submission_id, (chunk_index as i64).into(), uri));
     insert_submission(submission, iter, conn).await?;
     Ok(submission_id)
 }
@@ -306,20 +306,17 @@ pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<bool> {
-    query!("SAVEPOINT maybe_complete_submission;")
-        .execute(&mut *conn)
-        .await?;
-    let submission = get_submission(id, &mut *conn).await?;
-    let res = if submission.chunks_done == submission.chunks_total {
-        complete_submission_raw(id, &mut *conn).await?;
-        Ok(true)
-    } else {
-        Ok(false)
-    };
-    query!("RELEASE SAVEPOINT maybe_complete_submission;")
-        .execute(&mut *conn)
-        .await?;
-    res
+    use sqlx::Connection;
+    conn.transaction(|tx| Box::pin(async move {
+        let submission = get_submission(id, &mut **tx).await?;
+
+        if submission.chunks_done == submission.chunks_total {
+            complete_submission_raw(id, &mut **tx).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })).await
 }
 
 #[tracing::instrument]
@@ -383,16 +380,12 @@ pub async fn fail_submission(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    // query!("SAVEPOINT fail_submission;")
-    //     .execute(&mut *conn)
-    //     .await?;
-    fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
-    super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut *conn).await?;
-    super::chunk::skip_remaining_chunks(id, &mut *conn).await?;
-    // query!("RELEASE SAVEPOINT fail_submission;")
-    //     .execute(&mut *conn)
-    //     .await?;
-    Ok(())
+    conn.transaction(|tx| Box::pin(async move {
+        fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
+        super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx).await?;
+        super::chunk::skip_remaining_chunks(id, &mut **tx).await?;
+        Ok(())
+    })).await
 }
 
 #[tracing::instrument]

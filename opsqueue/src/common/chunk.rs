@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use chrono::NaiveDateTime;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 
 use super::submission::SubmissionId;
@@ -111,17 +111,11 @@ pub async fn complete_chunk(
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    query!("SAVEPOINT complete_chunk;")
-        .execute(&mut *conn)
-        .await?;
-
-    complete_chunk_raw(full_chunk_id, output_content, &mut *conn).await?;
-    super::submission::maybe_complete_submission(full_chunk_id.0, &mut *conn).await?;
-    query!("RELEASE SAVEPOINT complete_chunk;")
-        .execute(&mut *conn)
-        .await?;
-
-    Ok(())
+    conn.transaction(|tx| Box::pin(async move {
+        complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
+        super::submission::maybe_complete_submission(full_chunk_id.0, tx).await?;
+        Ok(())
+    })).await
 }
 
 #[tracing::instrument]
@@ -163,27 +157,20 @@ pub async fn retry_or_fail_chunk(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    query!("SAVEPOINT retry_or_fail_chunk;")
-        .execute(&mut *conn)
-        .await?;
-
-    const MAX_RETRIES: i64 = 10;
-    let (submission_id, chunk_index) = full_chunk_id;
-    let fields = query!("
-    UPDATE chunks SET retries = retries + 1
-    WHERE submission_id = ? AND chunk_index = ?
-    RETURNING retries
-    ;
-    ", submission_id, chunk_index).fetch_one(&mut *conn).await?;
-    if fields.retries >= MAX_RETRIES {
-        super::submission::fail_submission(submission_id, chunk_index, failure, conn).await?
-    }
-
-    query!("RELEASE SAVEPOINT retry_or_fail_chunk;")
-        .execute(&mut *conn)
-        .await?;
-
+    conn.transaction(|tx| Box::pin(async move {
+        const MAX_RETRIES: i64 = 10;
+        let (submission_id, chunk_index) = full_chunk_id;
+        let fields = query!("
+        UPDATE chunks SET retries = retries + 1
+        WHERE submission_id = ? AND chunk_index = ?
+        RETURNING retries
+        ;
+        ", submission_id, chunk_index).fetch_one(&mut **tx).await?;
+        if fields.retries >= MAX_RETRIES {
+            super::submission::fail_submission(submission_id, chunk_index, failure, tx).await?
+        }
     Ok(())
+    })).await
 }
 
 
@@ -240,13 +227,16 @@ pub async fn get_chunk_completed(
 }
 
 #[tracing::instrument(skip(chunks, conn))]
-pub async fn insert_many_chunks<Tx, Conn>(
-    chunks: impl IntoIterator<Item = Chunk>,
+pub async fn insert_many_chunks<Tx, Conn, Iter>(
+    chunks: Iter,
     mut conn: Tx,
 ) -> sqlx::Result<()>
 where
     for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
     Tx: Deref<Target = Conn> + DerefMut,
+    Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
+    <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
+
 {
     let chunks_per_query = 1000;
 
