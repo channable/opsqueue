@@ -4,7 +4,7 @@ use axum::extract::ws::{Message, WebSocket};
 use tokio::{select, sync::mpsc::{UnboundedReceiver, UnboundedSender}};
 use tokio_util::sync::CancellationToken;
 
-use crate::{common::chunk::ChunkId, consumer::common::{ClientToServerMessage, Envelope, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS}};
+use crate::{common::chunk::ChunkId, consumer::common::{AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS}};
 
 use super::{state::ConsumerState, ServerState};
 
@@ -34,18 +34,29 @@ impl ConsumerConn {
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
         loop {
             select! {
+                // On shutdown, gracefully shut down and ignore any errors
                 () = self.cancellation_token.cancelled() => return Ok(self.graceful_shutdown().await),
+                // When the heartbeat interval elapsed, send the next one
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
+                // When a normal message is received, handle it
                 msg = self.ws_stream.recv() => {
                     match msg {
-                        // Socket closed (normal connection close)
+                        // Socket closed (stream closed before receiving WS 'close' message, ungraceful shutdown)
                         None => return Ok(()),
+                        // Socket received a close message (graceful WS shutdown)
+                        Some(Ok(Message::Close(_))) => return Ok(()),
                         // Socket had a problem (protocol violation, sending too much data, closed, etc.)
                         Some(Err(err)) => return Err(ConsumerConnError::LowLevelWebsocketError(err)),
-                        // Socket received a message
+                        // Socket received a normal message
                         Some(Ok(msg)) => self.handle_incoming_msg(msg).await?,
                     }
-                }
+                },
+                // When a message from elsewhere in the app is received, pass it forward
+                // (Currently there is only one kind of these, namely a chunk reservation having expired)
+                Some((submission_id, chunk_index)) = self.rx.recv() => {
+                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired((submission_id, chunk_index)));
+                    self.ws_stream.send(msg.into()).await?;
+                },
             }
         }
     }
@@ -54,6 +65,7 @@ impl ConsumerConn {
         const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
         select! {
             _ = self.ws_stream.close() => {},
+            // This branch is taken if things were taking too long:
             () = tokio::time::sleep(GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT) => {},
         }
         ()
