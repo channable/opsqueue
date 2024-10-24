@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use axum::body::Bytes;
 use axum::extract::ws;
-use bytes::{Buf, BufMut, BytesMut};
 
 use serde::{Deserialize, Serialize};
 
@@ -59,45 +57,6 @@ pub struct Envelope<T> {
     pub nonce: usize,
     pub contents: T,
 }
-
-impl TryFrom<tokio_websockets::Message> for Envelope<ClientToServerMessage> {
-    type Error = ciborium::de::Error<std::io::Error>;
-    fn try_from(value: tokio_websockets::Message) -> Result<Self, Self::Error> {
-        let msg: Bytes = value.into_payload().into();
-        let me: Envelope<ClientToServerMessage> = ciborium::from_reader(msg.reader())?;
-        Ok(me)
-    }
-}
-
-impl TryFrom<tokio_websockets::Message> for ServerToClientMessage {
-    type Error = ciborium::de::Error<std::io::Error>;
-    fn try_from(value: tokio_websockets::Message) -> Result<Self, Self::Error> {
-        let msg: Bytes = value.into_payload().into();
-        let me: ServerToClientMessage = ciborium::from_reader(msg.reader())?;
-        Ok(me)
-    }
-}
-
-// TODO: property test ensuring serialization never panics
-impl From<ServerToClientMessage> for tokio_websockets::Message {
-    fn from(val: ServerToClientMessage) -> Self {
-        let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ServerToClientMessage");
-
-        tokio_websockets::Message::binary(writer.into_inner())
-    }
-}
-
-// TODO: property test ensuring serialization never panics
-impl From<Envelope<ClientToServerMessage>> for tokio_websockets::Message {
-    fn from(val: Envelope<ClientToServerMessage>) -> Self {
-        let mut writer = BytesMut::new().writer();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ClientToServerMessage");
-
-        tokio_websockets::Message::binary(writer.into_inner())
-    }
-}
-
 
 impl TryFrom<ws::Message> for Envelope<ClientToServerMessage> {
     type Error = ciborium::de::Error<std::io::Error>;
