@@ -4,7 +4,7 @@ from typing import Any, Protocol, Callable
 
 import json
 
-from opsqueue_consumer.opsqueue_consumer_internal import Chunk, Strategy, SubmissionId # type: ignore[import-not-found]
+from opsqueue_consumer.opsqueue_consumer_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
 
 
 class json_as_bytes:
@@ -24,33 +24,65 @@ class json_as_bytes:
 
 DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
 
+
 class Client:
     """
     Opsqueue consumer client. Allows working on individual (chunks of) operations.
     """
+
     __slots__ = "inner"
+
     def __init__(self, opsqueue_url: str, object_store_url: str):
         self.inner = opsqueue_consumer_internal.Client(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
 
     def reserve_chunks(self, max: int, strategy: Strategy) -> list[Chunk]:
         self.inner.reserve_chunks(max, strategy)  # type: ignore[no-any-return]
 
-    def complete_chunk(self, submission_id: SubmissionId, submission_prefix: str, chunk_index: int, output_content: bytes):
-        self.inner.complete_chunk(submission_id, submission_prefix, chunk_index, output_content)  # type: ignore[no-any-return]
+    def complete_chunk(
+        self,
+        submission_id: SubmissionId,
+        submission_prefix: str,
+        chunk_index: int,
+        output_content: bytes,
+    ):
+        self.inner.complete_chunk(
+            submission_id, submission_prefix, chunk_index, output_content
+        )  # type: ignore[no-any-return]
 
-    def fail_chunk(self, submission_id: SubmissionId, submission_prefix: str, chunk_index: int, failure: str):
+    def fail_chunk(
+        self,
+        submission_id: SubmissionId,
+        submission_prefix: str,
+        chunk_index: int,
+        failure: str,
+    ):
         self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)  # type: ignore[no-any-return]
 
-    def run_per_chunk(self, strategy: Strategy, op_callback: Callable[[Chunk], bytes], *, serialization_format=DEFAULT_SERIALIZATION_FORMAT) -> None:
+    def run_each_op(
+        self,
+        strategy: Strategy,
+        op_callback: Callable[[Chunk], bytes],
+        *,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+    ):
         def chunk_callback(c: Chunk) -> bytes:
             ops = _decode_chunk(c.content, serialization_format)
             ops_results = [op_callback(op) for op in ops]
             return _encode_chunk(ops_results, serialization_format)
 
-        self.run_per_chunk(strategy, chunk_callback)
+        self.run_each_chunk_raw(strategy, chunk_callback)
 
-    def run_per_chunk(self, strategy: Strategy, chunk_callback: Callable[[Chunk], bytes], *, serialization_format=DEFAULT_SERIALIZATION_FORMAT) -> None:
-        self.inner.run_per_chunk(strategy, chunk_callback) # type: ignore[no-any-return]
+    # TODO: run_each_chunk
+
+    def run_each_chunk_raw(
+        self,
+        strategy: Strategy,
+        chunk_callback: Callable[[Chunk], bytes],
+        *,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+    ):
+        self.inner.run_per_chunk(strategy, chunk_callback)  # type: ignore[no-any-return]
+
 
 def _encode_chunk(
     chunk: Sequence[Any], serialization_format: SerializationFormat
@@ -71,4 +103,3 @@ def _decode_chunk(
 class SerializationFormat(Protocol):
     def dumps(self, obj: Any) -> bytes: ...
     def loads(self, data: bytes) -> Any: ...
-
