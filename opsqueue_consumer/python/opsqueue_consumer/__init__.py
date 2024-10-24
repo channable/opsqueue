@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 from typing import Any, Protocol, Callable
 
 import json
@@ -42,7 +42,7 @@ class Client:
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
-    ):
+    ) -> None:
         """
         Runs the given `op_callback` for each reservable operation in a loop.
 
@@ -67,7 +67,7 @@ class Client:
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
-    ):
+    ) -> None:
         """
         Runs the given `chunk_callback` for each chunk the consumer can reserve in a loop.
         This expects encoding/decoding of the chunk contents from/to bytes to be done manually by you.
@@ -77,8 +77,11 @@ class Client:
         `fail_chunk` to be called, with the loop afterwards continuing.
         Exceptions inheriting only from `BaseException` will cause the loop to terminate.
         """
-        self.inner.run_per_chunk(strategy, chunk_callback)  # type: ignore[no-any-return]
-    def reserve_chunks(self, max: int = 1, strategy: Strategy = Strategy.Newest) -> list[Chunk]:
+        self.inner.run_per_chunk(strategy, chunk_callback)
+
+    def reserve_chunks(
+        self, max: int = 1, strategy: Strategy = Strategy.Newest
+    ) -> list[Chunk]:
         """
         Low-level function to manually reserve one or more chunks for processing.
 
@@ -87,7 +90,7 @@ class Client:
 
         If your code crashes, all reserved chunks will automatically be marked as failed.
         """
-        self.inner.reserve_chunks(max, strategy)  # type: ignore[no-any-return]
+        return self.inner.reserve_chunks(max, strategy)  # type: ignore[no-any-return]
 
     def complete_chunk(
         self,
@@ -95,7 +98,7 @@ class Client:
         submission_prefix: str,
         chunk_index: int,
         output_content: bytes,
-    ):
+    ) -> None:
         """
         Low-level function to manually mark a chunk as completed,
         passing the output content bytes.
@@ -105,7 +108,7 @@ class Client:
         """
         self.inner.complete_chunk(
             submission_id, submission_prefix, chunk_index, output_content
-        )  # type: ignore[no-any-return]
+        )
 
     def fail_chunk(
         self,
@@ -113,7 +116,7 @@ class Client:
         submission_prefix: str,
         chunk_index: int,
         failure: str,
-    ):
+    ) -> None:
         """
         Low-level function to manually mark a chunk as completed,
         passing the failure message as a string.
@@ -124,7 +127,7 @@ class Client:
         The submission_id, submission_prefix and chunk_index can be found
         on the `Chunk` type originally received as part of `reserve_chunks`.
         """
-        self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)  # type: ignore[no-any-return]
+        self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)
 
 
 def _encode_chunk(
