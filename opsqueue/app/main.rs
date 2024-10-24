@@ -1,3 +1,4 @@
+use opsqueue::serve_producer_and_consumer;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::level_filters::LevelFilter;
 use std::time::Duration;
@@ -25,8 +26,9 @@ async fn main() {
     let db_pool = opsqueue::db_connect_pool(database_filename).await;
     opsqueue::ensure_db_migrated(&db_pool).await;
 
-    let producer_server_addr = Box::from("0.0.0.0:3999");
-    let consumer_server_addr = Box::from("0.0.0.0:3998");
+    let server_addr = Box::from("0.0.0.0:3999");
+    // let producer_server_addr = Box::from("0.0.0.0:3999");
+    // let consumer_server_addr = Box::from("0.0.0.0:3998");
     let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
 
     // let consumer_server = opsqueue::consumer::server::serve(
@@ -36,16 +38,17 @@ async fn main() {
     //     cancellation_token.clone(),
     //     task_tracker.clone(),
     // );
-    let consumer_server = opsqueue::consumer::server::serve(
-        db_pool.clone(),
-        consumer_server_addr,
-        cancellation_token.clone(),
-        reservation_expiration,
-    );
-    let producer_server = opsqueue::producer::server::serve(db_pool, producer_server_addr);
+    // let consumer_server = opsqueue::consumer::server::serve(
+    //     db_pool.clone(),
+    //     consumer_server_addr,
+    //     cancellation_token.clone(),
+    //     reservation_expiration,
+    // );
+    // let producer_server = opsqueue::producer::server::serve(db_pool, producer_server_addr);
 
-    task_tracker.spawn(consumer_server);
-    tokio::spawn(producer_server);
+    // task_tracker.spawn(consumer_server);
+    // tokio::spawn(producer_server);
+    task_tracker.spawn(opsqueue::serve_producer_and_consumer(server_addr, db_pool, cancellation_token.clone(), reservation_expiration));
 
     tokio::signal::ctrl_c()
         .await

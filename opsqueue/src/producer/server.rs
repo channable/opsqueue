@@ -31,7 +31,17 @@ impl ServerState {
         .on_response(tower_http::trace::DefaultOnResponse::new()
             .level(tracing::Level::INFO));
 
-        let app = Router::new()
+        let app = self.build_router() 
+           .layer(tracing_middleware);
+
+        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
+
+        tracing::info!("Producer HTTP server listening at {server_addr}...");
+        axum::serve(listener, app).await.expect("Failed to start producer server");
+    }
+
+    pub fn build_router(self) -> Router<()> {
+        Router::new()
             .route("/submissions", post(insert_submission))
             .route(
                 // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
@@ -43,12 +53,7 @@ impl ServerState {
             .route("/ping", get(ping))
             // TODO: Cancel a submission from the producer side
             .with_state(self)
-           .layer(tracing_middleware);
 
-        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
-
-        tracing::info!("Producer HTTP server listening at {server_addr}...");
-        axum::serve(listener, app).await.expect("Failed to start producer server");
     }
 }
 

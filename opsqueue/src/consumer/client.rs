@@ -136,13 +136,10 @@ pub struct Client {
 
 impl Client {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
-        let uri = Uri::from_str(url)?;
+        let endpoint_uri = Uri::from_str(&format!("{url}/consumer"))?;
         let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
-        let (websocket_conn, _resp) = tokio_tungstenite::connect_async(uri).await?;
-        // let (websocket_conn, _resp) = tokio_websockets::ClientBuilder::from_uri(uri)
-        //     .connect()
-        //     .await?;
+        let (websocket_conn, _resp) = tokio_tungstenite::connect_async(endpoint_uri).await?;
         let (ws_sink, ws_stream) = websocket_conn.split();
         let ws_sink = Arc::new(Mutex::new(ws_sink));
         let cancellation_token = CancellationToken::new();

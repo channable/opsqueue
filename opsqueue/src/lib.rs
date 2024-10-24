@@ -1,13 +1,47 @@
+use std::time::Duration;
+
+use axum::Router;
 use sqlx::{
     migrate::MigrateDatabase,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
     Connection, Sqlite, SqliteConnection, SqlitePool,
 };
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 
 pub mod common;
 pub mod consumer;
 pub mod producer;
 pub mod object_store;
+
+pub async fn serve_producer_and_consumer(server_addr: Box<str>, pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) {
+    let router = build_router(pool, cancellation_token.clone(), reservation_expiration);
+    let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to web server address");
+
+    select! {
+      _ = cancellation_token.cancelled() => {},
+      res = axum::serve(listener, router) => res.expect("Failed to start web server"),
+    }
+}
+
+pub fn build_router(pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) -> Router<()>{
+    let consumer_routes = consumer::server::ServerState::new(pool.clone(), cancellation_token.clone(), reservation_expiration).build_router();
+    let producer_routes = producer::server::ServerState::new(pool).build_router();
+    let routes = 
+        Router::new()
+        .nest("/producer", producer_routes)
+        .nest("/consumer", consumer_routes);
+
+    let tracing_middleware =
+        tower_http::trace::TraceLayer::new_for_http()
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new() )
+        .on_request(tower_http::trace::DefaultOnRequest::new()
+        )
+        .on_response(tower_http::trace::DefaultOnResponse::new()
+            .level(tracing::Level::INFO));
+
+    routes.layer(tracing_middleware)
+}
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()

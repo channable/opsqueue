@@ -11,8 +11,9 @@ pub struct Client {
 impl Client {
     pub fn new(endpoint_url: &str) -> Self {
         let http_client = reqwest::Client::new();
+        let endpoint_url = format!("{endpoint_url}/producer").into_boxed_str();
         Client {
-            endpoint_url: endpoint_url.into(),
+            endpoint_url,
             http_client,
         }
     }

@@ -13,7 +13,7 @@ pub mod state;
 
 pub async fn serve(pool: sqlx::SqlitePool, server_addr: Box<str>, cancellation_token: CancellationToken, reservation_expiration: Duration) {
     let state = ServerState::new(pool, cancellation_token.clone(), reservation_expiration);
-    let router = ServerState::serve(state);
+    let router = ServerState::build_router(state);
     let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to consumer server address");
 
     tracing::info!("Consumer WebSocket server listening at {server_addr}...");
@@ -36,8 +36,8 @@ impl ServerState {
         Self { pool, cancellation_token, reserver }
     }
 
-    pub fn serve(server_state: ServerState) -> Router<()> {
-        Router::new().route("/", get(ws_accept_handler)).with_state(server_state)
+    pub fn build_router(self: ServerState) -> Router<()> {
+        Router::new().route("/", get(ws_accept_handler)).with_state(self)
     }
 }
 

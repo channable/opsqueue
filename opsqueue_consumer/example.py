@@ -8,5 +8,5 @@ def my_operation(data: int) -> int:
     return data + 1
 
 
-client = Client("ws://localhost:3998", "file:///tmp/opsqueue/")
+client = Client("ws://localhost:3999", "file:///tmp/opsqueue/")
 client.run_each_op(my_operation, strategy=Strategy.Newest)
