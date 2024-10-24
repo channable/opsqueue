@@ -12,7 +12,7 @@ use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::client::OuterClient as ActualClient;
 use opsqueue::consumer::strategy;
 
-create_exception!(opsqueue_consumer, ConsumerClientError, PyException);
+create_exception!(opsqueue_consumer_internal, ConsumerClientError, PyException);
 
 // In development, check 10 times per second so we respond early to Ctrl+C
 // But in production, only once per second so we don't fight as much over the GIL
@@ -503,7 +503,7 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn opsqueue_consumer(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn opsqueue_consumer_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // We want Rust logs created by code called from this module
     // to be forwarded to Python's logging system
     pyo3_log::init();
