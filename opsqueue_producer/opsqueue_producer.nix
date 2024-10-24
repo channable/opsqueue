@@ -20,6 +20,7 @@ buildPythonPackage rec {
       "opsqueue_producer"
       "opsqueue_producer/Cargo.toml"
       "opsqueue_producer/src(/.*)?"
+      "opsqueue_producer/python(/.*)?"
       "opsqueue_producer/pyproject.toml"
 
       # Opsqueue is a dependency, so that needs to be included too

@@ -13,3 +13,5 @@ classifiers = [
 dynamic = ["version"]
 [tool.maturin]
 features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "opsqueue_producer.opsqueue_producer_internal"

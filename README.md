@@ -115,12 +115,3 @@ export LITESTREAM_SECRET_ACCESS_KEY=minioadmin
 
 * Finally, run `litestream replicate opsqueue.db s3://mybkt.localhost:9000/opsqueue.db`
 * And now, exercise the DB by running the main opsqueue binary and sending it work.
-
-## Upgrading this Repo's Python versions through Nix
-
-When you upgrade what Python version is in use by this repo itself,
-make sure to remove and re-create the `./opsqueue_producer/.venv` and `./opsqueue_consumer/.venv` Python virtual environments, by:
-
-- Going to the respective `./opsqueue_producer` or `./opsqueue_consumer` directory
-- Removing the `.venv` directory (and all its contents)
-- Run `python -m venv .venv` to re-create a new virtual environment with the newly updated store paths inside the `.venv/pyvenv.cfg`.
