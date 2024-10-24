@@ -3,7 +3,6 @@ from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Protocol
 
 import itertools
-import cbor2
 import json
 
 from opsqueue_producer.opsqueue_producer_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
@@ -24,6 +23,9 @@ class json_as_bytes:
         return json.loads(data.decode())
 
 
+DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
+
+
 class Client:
     """
     Opsqueue producer client. Allows sending of large collections of operations ('submissions')
@@ -41,7 +43,7 @@ class Client:
         ops: Iterable[Any],
         *,
         chunk_size: int,
-        serialization_format: SerializationFormat = cbor2,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
     ) -> Iterator[bytes]:
         """
@@ -63,7 +65,7 @@ class Client:
         ops: Iterable[Any],
         *,
         chunk_size: int,
-        serialization_format: SerializationFormat = cbor2,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
     ) -> SubmissionId:
         """
@@ -80,7 +82,7 @@ class Client:
         self,
         submission_id: SubmissionId,
         *,
-        serialization_format: SerializationFormat = cbor2,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
     ) -> Iterator[Any]:
         """
         Returns the operation-results of a completed submission, as an iterator that lazily
