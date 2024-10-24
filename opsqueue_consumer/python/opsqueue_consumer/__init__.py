@@ -38,7 +38,7 @@ class Client:
 
     def run_each_op(
         self,
-        op_callback: Callable[[Chunk], bytes],
+        op_callback: Callable[[Any], Any],
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
@@ -52,21 +52,32 @@ class Client:
         Exceptions inheriting only from `BaseException` will cause the loop to terminate.
         """
 
-        def chunk_callback(c: Chunk) -> bytes:
-            ops = _decode_chunk(c.input_content, serialization_format)
-            ops_results = [op_callback(op) for op in ops]
-            return _encode_chunk(ops_results, serialization_format)
+        def chunk_callback(chunk_ops: Sequence[Any], _chunk: Chunk) -> Any:
+            return [op_callback(op) for op in chunk_ops]
 
-        self.run_each_chunk_raw(chunk_callback, strategy=strategy)
+        self.run_each_chunk(
+            chunk_callback, strategy=strategy, serialization_format=serialization_format
+        )
 
-    # TODO: run_each_chunk
+    def run_each_chunk(
+        self,
+        chunk_callback: Callable[[Sequence[Any], Chunk], Sequence[Any]],
+        *,
+        strategy: Strategy = DEFAULT_STRATEGY,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+    ) -> None:
+        def raw_chunk_callback(chunk: Chunk) -> bytes:
+            chunk_contents = _decode_chunk(chunk.input_content, serialization_format)
+            chunk_result_contents = chunk_callback(chunk_contents, chunk)
+            return _encode_chunk(chunk_result_contents, serialization_format)
+
+        self.run_each_chunk_raw(raw_chunk_callback, strategy=strategy)
 
     def run_each_chunk_raw(
         self,
         chunk_callback: Callable[[Chunk], bytes],
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
-        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
     ) -> None:
         """
         Runs the given `chunk_callback` for each chunk the consumer can reserve in a loop.

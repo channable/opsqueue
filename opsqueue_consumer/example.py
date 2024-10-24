@@ -1,7 +1,8 @@
 import logging
 from opsqueue_consumer import Client, Strategy
+import pickle
 
-logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
 
 
 def my_operation(data: int) -> int:
@@ -10,4 +11,4 @@ def my_operation(data: int) -> int:
 
 
 client = Client("ws://localhost:3998", "file:///tmp/opsqueue/")
-client.run_each_op(my_operation, strategy=Strategy.Newest)
+client.run_each_op(my_operation, strategy=Strategy.Newest, serialization_format=pickle)
