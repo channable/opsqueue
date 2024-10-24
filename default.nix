@@ -17,7 +17,7 @@ let
   );
 
   defaultEnv = pkgs.buildEnv {
-    name = "rust-jobs-env-default";
+    name = "opsqueue-env-default";
     paths = with pkgs; [
       # For linting and formatting
       ruff
