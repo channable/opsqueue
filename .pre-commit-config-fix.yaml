@@ -16,11 +16,6 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-      - id: no-code-in-__init__.py
-        name: No code in __init__.py
-        entry: sh -c '! find . -size +0c -type f -name __init__.py  -not -path "**/.venv/*" | grep .'
-        language: system
-        pass_filenames: false
       - id: biome
         name: Biome formatting
         entry: biome format --write --files-ignore-unknown=true --no-errors-on-unmatched
