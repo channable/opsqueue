@@ -205,7 +205,9 @@ impl Client {
 type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 
 // TODO: This is ugly and painful.
-// At the very least, we should double-check the soundness with miri.
+// At the very least, we should double-check the soundness with miri,
+// but hopefully we can replace this by something else entirely.
+// https://github.com/channable/opsqueue/issues/62
 #[pyclass]
 struct PyChunksIter {
     stream: MaybeUninit<Mutex<PinfulStream<PyResult<Vec<u8>>>>>,
@@ -443,29 +445,6 @@ impl From<Vec<u8>> for VecAsPyBytes {
     }
 }
 
-// #[pyclass(frozen, get_all)]
-// #[derive(Debug, Clone)]
-// struct InsertSubmission {
-//     pub directory_uri: String,
-//     pub chunk_count: u32,
-//     pub metadata: Option<Metadata>,
-// }
-
-// #[pymethods]
-// impl InsertSubmission {
-//     #[new]
-//     #[pyo3(signature = (directory_uri, chunk_count, metadata=None))]
-//     fn new(directory_uri: String, chunk_count: u32, metadata: Option<Metadata>) -> Self {
-//         Self{directory_uri, chunk_count, metadata}
-//     }
-// }
-
-// impl Into<opsqueue::producer::server::InsertSubmission> for InsertSubmission {
-//     fn into(self) -> opsqueue::producer::server::InsertSubmission {
-//         opsqueue::producer::server::InsertSubmission {directory_uri: self.directory_uri, chunk_count: self.chunk_count, metadata: self.metadata}
-//     }
-// }
-
 fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -473,70 +452,6 @@ fn start_runtime() -> Arc<tokio::runtime::Runtime> {
         .expect("Failed to create Tokio runtime in opsqueue Producer client");
     Arc::new(runtime)
 }
-
-// /// Formats the sum of two numbers as string.
-// #[pyfunction]
-// fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-//     Ok((a + b).to_string())
-// }
-
-// #[pyclass]
-// pub struct PyChunksIter {
-//     iter: Box<dyn Iterator<Item = PyResult<Vec<u8>>> + Send>,
-// }
-
-// impl PyChunksIter {
-//     pub (crate) fn new_from_rust(iter: impl Iterator<Item = PyResult<Vec<u8>>> + Send + 'static) -> Self {
-//         Self{iter: Box::new(iter)}
-//     }
-// }
-
-// #[pymethods]
-// impl PyChunksIter {
-//     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-//         slf
-//     }
-
-//     fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
-//         slf.iter.next().map(|result| result.map(VecAsPyBytes))
-//     }
-// }
-// #[pyclass]
-// pub struct PyChunksStream {
-//     iter: Box<dyn Iterator<Item = PyResult<Vec<u8>>> + Send>,
-// }
-
-// impl PyChunksStream {
-//     pub (crate) fn new_from_rust<S>(stream: S, runtime: Arc<tokio::runtime::Runtime>) -> PyResult<Self>
-//     where
-//     S: Stream<Item = PyResult<Vec<u8>>> + TryStream<Ok = Vec<u8>, Error = PyErr> + Send + 'static
-//     {
-//         // It's rather annoying that we need _two_ boxes here,
-//         // one for the box-pin and one to wrap the iterator.
-//         // TODO: Investigate if there is a better way.
-//         // One thing that comes to mind is to replace `from_fn`
-//         // (which gives rise to a voldemort type and that is problematic as we cannot use generics with PyO3).
-//         // with a dedicated home-written iterator struct.
-//         let mut stream = Box::pin(stream);
-//         let iter = std::iter::from_fn(move || {
-//             runtime.block_on(stream.next())
-//         });
-//         Ok(Self{iter: Box::new(iter)})
-//     }
-// }
-
-// #[pymethods]
-// impl PyChunksStream {
-//     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-//         slf
-//     }
-
-//     fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
-//         slf.iter.next().map(|result| result.map(VecAsPyBytes))
-//     }
-// }
-
-
 
 /// A Python module implemented in Rust.
 #[pymodule]
