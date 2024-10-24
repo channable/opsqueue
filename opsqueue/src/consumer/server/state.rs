@@ -1,41 +1,31 @@
-use std::sync::Arc;
-use std::time::Duration;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::Stream;
+use futures::StreamExt;
+use futures::TryStreamExt;
 
-use tokio::net::TcpListener;
-
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-use tokio_websockets::ServerBuilder;
-
-use crate::common::chunk::{self, Chunk, ChunkId};
-use crate::common::submission::Submission;
-use crate::consumer::reserver::Reserver;
+use crate::common::chunk;
 use crate::consumer::strategy::Strategy;
+use crate::{common::{chunk::{Chunk, ChunkId}, submission::Submission}, consumer::reserver::Reserver};
 
-/// State for the consumer-side of the server.
-/// Cloning this structure is cheap, as its contents are Arc-like,
-/// with its internal (mutable, thread-safe) state being shared between clones.
+use super::ServerState;
+
+
+// TODO: We currently clone the arc-like pool and reserver,
+// but we could probably just give this struct a lifetime,
+// as it will never outlive the ServerState it is created from.
 #[derive(Debug, Clone)]
-pub struct ConsumerServerState {
+pub struct ConsumerState {
+    // NOTE: This is an arc-like field, referring to the same DB pool. 
     pool: sqlx::SqlitePool,
+    // NOTE: This is an arc-like field, referring to the same reserver as all other ConsumerStates.
     reserver: Reserver<ChunkId, ChunkId>,
-    pub server_addr: Arc<str>,
 }
 
-impl ConsumerServerState {
-    pub async fn new(
-        pool: sqlx::SqlitePool,
-        reservation_expiration: Duration,
-        server_addr: &str,
-    ) -> Self {
-        let reserver = Reserver::new(reservation_expiration);
-        ConsumerServerState {
-            pool,
-            reserver,
-            server_addr: Arc::from(server_addr),
-        }
+impl ConsumerState {
+    pub fn new(server_state: &ServerState) -> Self {
+        Self {pool: server_state.pool.clone(), 
+            reserver: server_state.reserver.clone()}
     }
+
 
     /// Select chunks, and store them in the reserver, to make sure that re-running the same selection returns different results as long as they are reserved.
     ///
@@ -103,100 +93,4 @@ impl ConsumerServerState {
         res
     }
 
-    pub(crate) async fn accept_one_conn(
-        &self,
-        listener: &TcpListener,
-    ) -> anyhow::Result<super::conn::ClientConn> {
-        tracing::info!("Waiting for a WS connection...");
-        let (stream, addr) = listener.accept().await?;
-        tracing::info!("Incoming consumer client HTTP connection from {}", &addr);
-        let ws_stream = ServerBuilder::new().accept(stream).await?;
-        tracing::info!("HTTP-> WS upgrade succeeded for {}", &addr);
-        Ok(super::conn::ClientConn::new(self.clone(), ws_stream))
-    }
-
-    pub async fn run(self, cancellation_token: CancellationToken, task_tracker: TaskTracker) -> anyhow::Result<()> {
-        let listener = TcpListener::bind(&*self.server_addr).await?;
-        tracing::info!(
-            "Consumer Websocket server listening at {}",
-            self.server_addr
-        );
-
-        // Make sure we run the reserver's cleanup loop every so often:
-        self.reserver.run_pending_tasks_periodically(cancellation_token.clone(), task_tracker.clone());
-
-        loop {
-            tokio::select! {
-                () = cancellation_token.cancelled() => {
-                    return Ok(())
-                }
-                Ok(conn) = self.accept_one_conn(&listener) => {
-                    task_tracker.spawn(conn.run(cancellation_token.clone()));
-                },
-            }
-        }
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub fn finish_reservation(&self, chunk_id: &ChunkId) {
-        self.reserver.finish_reservation(chunk_id);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::common::{chunk::Chunk, submission};
-
-    #[sqlx::test]
-    pub async fn test_fetch_and_reserve_chunks(pool: sqlx::SqlitePool) {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-        tokio::task::spawn(async move {
-            while let Some(_chunk) = rx.recv().await {
-                // println!("Cleaning up chunk: {:?}", chunk)
-            }
-        });
-
-        let url = "http://localhost:3333";
-
-        let state = ConsumerServerState::new(pool.clone(), Duration::from_secs(1), url).await;
-        // let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
-        let submission_id = 1.into();
-        let submission = Submission{id: submission_id, prefix: None, chunks_total: 4, chunks_done: 0, metadata: None};
-        submission::insert_submission_raw(submission.clone(), &mut *pool.acquire().await.unwrap()).await.unwrap();
-        let zero = Chunk::new(submission_id, 0.into(), None);
-        let one = Chunk::new(submission_id, 1.into(), None);
-        let two = Chunk::new(submission_id, 2.into(), None);
-        let three = Chunk::new(submission_id, 3.into(), None);
-        let four = Chunk::new(submission_id, 4.into(), None);
-        let chunks = vec![
-            zero.clone(),
-            one.clone(),
-            two.clone(),
-            three.clone(),
-            four.clone(),
-        ];
-        crate::common::chunk::insert_many_chunks(chunks.clone(), pool.acquire().await.unwrap())
-            .await
-            .unwrap();
-
-        // let fun = crate::chunk::select_oldest_chunks_stream2;
-        // let out = state.fetch_and_reserve_chunks(move |conn| {
-        //     // fun(conn)
-        //     crate::chunk::select_oldest_chunks_stream(conn)
-        // }, 3, &tx).await.unwrap();
-        let out = state
-            .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
-            .await
-            .unwrap();
-        assert_eq!(out, vec![(zero, submission.clone()), (one, submission.clone()), (two, submission.clone())]);
-
-        let out2 = state
-            .fetch_and_reserve_chunks(Strategy::Oldest, 3, &tx)
-            .await
-            .unwrap();
-        assert_eq!(out2, vec![(three, submission.clone()), (four, submission.clone())]);
-    }
 }

@@ -13,8 +13,9 @@ use tokio::{
     sync::{oneshot, Mutex},
     task::yield_now,
 };
+use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::{CancellationToken, DropGuard};
-use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
+// use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
 use crate::{
     common::{chunk::{self, Chunk, ChunkId}, submission::Submission},
@@ -138,9 +139,10 @@ impl Client {
         let uri = Uri::from_str(url)?;
         let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
-        let (websocket_conn, _resp) = tokio_websockets::ClientBuilder::from_uri(uri)
-            .connect()
-            .await?;
+        let (websocket_conn, _resp) = tokio_tungstenite::connect_async(uri).await?;
+        // let (websocket_conn, _resp) = tokio_websockets::ClientBuilder::from_uri(uri)
+        //     .connect()
+        //     .await?;
         let (ws_sink, ws_stream) = websocket_conn.split();
         let ws_sink = Arc::new(Mutex::new(ws_sink));
         let cancellation_token = CancellationToken::new();
@@ -191,7 +193,7 @@ impl Client {
                         break
                     } else {
                         log::debug!("Sending heartbeat");
-                        let _ = ws_sink.lock().await.send(Message::ping("heartbeat")).await;
+                        let _ = ws_sink.lock().await.send(Message::Ping("heartbeat".into())).await;
                         heartbeats_missed += 1;
                     }
                 },
@@ -322,8 +324,6 @@ mod tests {
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
-    use crate::consumer::server::ConsumerServerState;
-
     use super::*;
 
     #[sqlx::test]
@@ -351,9 +351,7 @@ mod tests {
         .unwrap();
 
         let _server_handle = task_tracker.spawn(
-            ConsumerServerState::new(pool.clone(), Duration::from_secs(60), uri)
-                .await
-                .run(cancellation_token, task_tracker.clone()),
+            crate::consumer::server::serve(pool.clone(), uri.into(), cancellation_token, Duration::from_secs(60))
         );
 
         yield_now().await;

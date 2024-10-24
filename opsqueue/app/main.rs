@@ -36,7 +36,7 @@ async fn main() {
     //     cancellation_token.clone(),
     //     task_tracker.clone(),
     // );
-    let consumer_server = opsqueue::consumer::server2::serve(
+    let consumer_server = opsqueue::consumer::server::serve(
         db_pool.clone(),
         consumer_server_addr,
         cancellation_token.clone(),

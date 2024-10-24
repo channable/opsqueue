@@ -1653,6 +1653,7 @@ dependencies = [
  "snowflaked",
  "sqlx",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tokio-websockets",
  "tower-http",

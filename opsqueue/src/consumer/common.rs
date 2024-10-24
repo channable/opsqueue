@@ -132,3 +132,42 @@ impl From<Envelope<ClientToServerMessage>> for ws::Message {
         ws::Message::Binary(writer)
     }
 }
+
+// NOTE: For the time being, we have to create from/into implementations for _both_
+// axum::extract::ws::Message and tokio_tungstenite::tungstenite::Message, even though the former is a wrapper for the latter.
+// The reason is that axum::extract::ws intentionally hides its underlying type.
+// An alternative crate called https://github.com/davidpdrsn/axum-tungstenite
+// exists, but it currently is not up-to-date enough with Axum.
+impl TryFrom<tokio_tungstenite::tungstenite::Message> for Envelope<ClientToServerMessage> {
+    type Error = ciborium::de::Error<std::io::Error>;
+    fn try_from(value: tokio_tungstenite::tungstenite::Message) -> Result<Self, Self::Error> {
+        ciborium::from_reader(&*value.into_data())
+    }
+}
+
+impl TryFrom<tokio_tungstenite::tungstenite::Message> for ServerToClientMessage {
+    type Error = ciborium::de::Error<std::io::Error>;
+    fn try_from(value: tokio_tungstenite::tungstenite::Message) -> Result<Self, Self::Error> {
+        ciborium::from_reader(&*value.into_data())
+    }
+}
+
+// TODO: property test ensuring serialization never panics
+impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
+    fn from(val: ServerToClientMessage) -> Self {
+        let mut writer = Vec::new();
+        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ServerToClientMessage");
+
+        tokio_tungstenite::tungstenite::Message::Binary(writer)
+    }
+}
+
+// TODO: property test ensuring serialization never panics
+impl From<Envelope<ClientToServerMessage>> for tokio_tungstenite::tungstenite::Message {
+    fn from(val: Envelope<ClientToServerMessage>) -> Self {
+        let mut writer = Vec::new();
+        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ClientToServerMessage");
+
+        tokio_tungstenite::tungstenite::Message::Binary(writer)
+    }
+}
