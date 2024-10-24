@@ -66,7 +66,7 @@ class Client:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
     ):
         def chunk_callback(c: Chunk) -> bytes:
-            ops = _decode_chunk(c.content, serialization_format)
+            ops = _decode_chunk(c.input_content, serialization_format)
             ops_results = [op_callback(op) for op in ops]
             return _encode_chunk(ops_results, serialization_format)
 
