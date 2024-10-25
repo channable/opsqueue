@@ -9,13 +9,26 @@ name = "opsqueue_python"
 crate-type = ["cdylib"]
 
 [dependencies]
+# Opsqueue itself:
+opsqueue = { path = "../../opsqueue/"}
+
+# General-purpose datatypes:
+uuid = {version = "1.11.0", features = [
+        "v4",                # Fully random UUIDs
+        "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    ]}
+chrono = { version = "0.4.38"}
+
+# Concurrency:
+tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
+futures = "0.3.30"
+
+# Error handling:
+anyhow = "1.0.86"
+
+# Python FFI:
 pyo3 = { version = "0.22.0", features = ["chrono"] }
+
+# Logging/tracing:
 pyo3-log = "0.11.0"
 log = {version = "0.4.22", features = ["std"] }
-# pyo3-asyncio = { version = "0.22", features = ["attributes", "tokio-runtime"] }
-tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
-chrono = { version = "0.4.38"}
-retry-if = "0.2.3"
-anyhow = "1.0.86"
-futures = "0.3.30"
-opsqueue = { path = "../../opsqueue/"}
