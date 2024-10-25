@@ -6,7 +6,7 @@
 }:
 
 buildPythonPackage rec {
-  pname = "opsqueue_python";
+  pname = "opsqueue";
   version = "0.1.0";
   pyproject = true;
 

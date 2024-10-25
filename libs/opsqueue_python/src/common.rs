@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::prelude::*;
