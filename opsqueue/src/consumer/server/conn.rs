@@ -35,7 +35,10 @@ impl ConsumerConn {
         loop {
             select! {
                 // On shutdown, gracefully shut down and ignore any errors
-                () = self.cancellation_token.cancelled() => return Ok(self.graceful_shutdown().await),
+                () = self.cancellation_token.cancelled() => return {
+                    self.graceful_shutdown().await;
+                    Ok(())
+                },
                 // When the heartbeat interval elapsed, send the next one
                 _ = self.heartbeat_interval.tick() => self.beat_heart().await?,
                 // When a normal message is received, handle it
@@ -68,7 +71,7 @@ impl ConsumerConn {
             // This branch is taken if things were taking too long:
             () = tokio::time::sleep(GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT) => {},
         }
-        ()
+
     }
 
 

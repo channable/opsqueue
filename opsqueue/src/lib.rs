@@ -1,4 +1,4 @@
-use std::{pin, time::Duration};
+use std::time::Duration;
 
 use axum::Router;
 use sqlx::{
@@ -15,16 +15,16 @@ pub mod object_store;
 
 pub async fn serve_producer_and_consumer(server_addr: &str, pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) {
     let router = build_router(pool, cancellation_token.clone(), reservation_expiration);
-    let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to web server address");
+    let listener = tokio::net::TcpListener::bind(server_addr).await.expect("Failed to bind to web server address");
 
-    let res = axum::serve(listener, router).with_graceful_shutdown(cancellation_token.cancelled_owned()).await; 
+    let res = axum::serve(listener, router).with_graceful_shutdown(cancellation_token.cancelled_owned()).await;
     res.expect("Failed to start web server")
 }
 
 pub fn build_router(pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) -> Router<()>{
     let consumer_routes = consumer::server::ServerState::new(pool.clone(), cancellation_token.clone(), reservation_expiration).build_router();
     let producer_routes = producer::server::ServerState::new(pool).build_router();
-    let routes = 
+    let routes =
         Router::new()
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);

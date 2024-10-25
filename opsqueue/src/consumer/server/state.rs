@@ -16,7 +16,7 @@ use super::ServerState;
 // as it will never outlive the ServerState it is created from.
 #[derive(Debug)]
 pub struct ConsumerState {
-    // NOTE: This is an arc-like field, referring to the same DB pool. 
+    // NOTE: This is an arc-like field, referring to the same DB pool.
     pool: sqlx::SqlitePool,
     // NOTE: This is an arc-like field, referring to the same reserver as all other ConsumerStates.
     reserver: Reserver<ChunkId, ChunkId>,
@@ -35,7 +35,7 @@ impl Drop for ConsumerState {
 impl ConsumerState {
     pub fn new(server_state: &ServerState) -> Self {
         Self {
-            pool: server_state.pool.clone(), 
+            pool: server_state.pool.clone(),
             reserver: server_state.reserver.clone(),
             reservations: HashSet::new(),
         }

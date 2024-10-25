@@ -1,6 +1,4 @@
-use opsqueue::serve_producer_and_consumer;
-use tokio::select;
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 use std::time::Duration;
 
