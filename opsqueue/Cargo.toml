@@ -65,13 +65,13 @@ criterion = {version = "0.3", features = ["async_tokio"]}
 [features]
 # Dependencies only in use by the server-logic:
 server-logic = [
-    "dep:sqlx", 
-    "dep:opentelemetry_sdk", 
-    "dep:opentelemetry-otlp", 
-    "dep:opentelemetry-semantic-conventions", 
-    "dep:tracing-opentelemetry", 
-    "dep:moka", 
-    "dep:axum", 
+    "dep:sqlx",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:moka",
+    "dep:axum",
     "dep:tower-http"
     ]
 # Dependencies only in use by the client libraries:

@@ -1,6 +1,8 @@
 pub mod common;
 pub mod consumer;
 pub mod producer;
+
+#[cfg(feature = "client-logic")]
 pub mod object_store;
 
 #[cfg(feature = "server-logic")]
