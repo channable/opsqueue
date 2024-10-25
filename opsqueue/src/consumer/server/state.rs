@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -12,18 +14,31 @@ use super::ServerState;
 // TODO: We currently clone the arc-like pool and reserver,
 // but we could probably just give this struct a lifetime,
 // as it will never outlive the ServerState it is created from.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConsumerState {
     // NOTE: This is an arc-like field, referring to the same DB pool. 
     pool: sqlx::SqlitePool,
     // NOTE: This is an arc-like field, referring to the same reserver as all other ConsumerStates.
     reserver: Reserver<ChunkId, ChunkId>,
+    // The following are the consumer-specific chunks that are currently reserved.
+    reservations: HashSet<ChunkId>,
+}
+
+impl Drop for ConsumerState {
+    fn drop(&mut self) {
+        for reservation in &self.reservations {
+            self.reserver.finish_reservation(reservation)
+        }
+    }
 }
 
 impl ConsumerState {
     pub fn new(server_state: &ServerState) -> Self {
-        Self {pool: server_state.pool.clone(), 
-            reserver: server_state.reserver.clone()}
+        Self {
+            pool: server_state.pool.clone(), 
+            reserver: server_state.reserver.clone(),
+            reservations: HashSet::new(),
+        }
     }
 
 
@@ -55,20 +70,24 @@ impl ConsumerState {
 
     #[tracing::instrument(skip(self, stale_chunks_notifier))]
     pub async fn fetch_and_reserve_chunks(
-        &self,
+        &mut self,
         strategy: Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
-        self.reserve_chunks(stream, limit, stale_chunks_notifier)
-            .await
+        let new_reservations = self.reserve_chunks(stream, limit, stale_chunks_notifier)
+            .await?;
+
+        self.reservations.extend(new_reservations.iter().map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)));
+
+        Ok(new_reservations)
     }
 
     #[tracing::instrument(skip(self, output_content))]
     pub async fn complete_chunk(
-        &self,
+        &mut self,
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), sqlx::Error> {
@@ -76,12 +95,13 @@ impl ConsumerState {
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
         let res = chunk::complete_chunk(id, output_content, &mut conn).await;
+        self.reservations.remove(&id);
         self.reserver.finish_reservation(&id);
         res
     }
 
     pub async fn fail_chunk(
-        &self,
+        &mut self,
         id: ChunkId,
         failure: String,
     ) -> Result<(), sqlx::Error> {
@@ -89,8 +109,8 @@ impl ConsumerState {
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
         let res = chunk::retry_or_fail_chunk(id, failure, &mut conn).await;
+        self.reservations.remove(&id);
         self.reserver.finish_reservation(&id);
         res
     }
-
 }
