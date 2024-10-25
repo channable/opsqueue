@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{pin, time::Duration};
 
 use axum::Router;
 use sqlx::{
@@ -6,7 +6,6 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
     Connection, Sqlite, SqliteConnection, SqlitePool,
 };
-use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 pub mod common;
@@ -14,14 +13,12 @@ pub mod consumer;
 pub mod producer;
 pub mod object_store;
 
-pub async fn serve_producer_and_consumer(server_addr: Box<str>, pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) {
+pub async fn serve_producer_and_consumer(server_addr: &str, pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) {
     let router = build_router(pool, cancellation_token.clone(), reservation_expiration);
     let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to web server address");
 
-    select! {
-      _ = cancellation_token.cancelled() => {},
-      res = axum::serve(listener, router) => res.expect("Failed to start web server"),
-    }
+    let res = axum::serve(listener, router).with_graceful_shutdown(cancellation_token.cancelled_owned()).await; 
+    res.expect("Failed to start web server")
 }
 
 pub fn build_router(pool: SqlitePool, cancellation_token: CancellationToken, reservation_expiration: Duration) -> Router<()>{

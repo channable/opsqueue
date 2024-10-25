@@ -7,7 +7,7 @@ logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 client = Client("localhost:3999", "file:///tmp/opsqueue/")
 
 input_iter = range(0, 100_000)
-output_iter = client.run_submission(input_iter, chunk_size=10)
+output_iter = client.run_submission(input_iter, chunk_size=1000)
 
 # Now do something with the output:
 for x in output_iter:
