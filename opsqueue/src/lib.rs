@@ -8,6 +8,7 @@ use sqlx::{
     Connection, Sqlite, SqliteConnection, SqlitePool,
 };
 use tokio_util::sync::CancellationToken;
+use tokio::select;
 
 pub mod common;
 pub mod consumer;
@@ -43,7 +44,7 @@ pub fn build_router(pool: SqlitePool, reservation_expiration: Duration, cancella
 }
 
 
-/// Used as a very simple health check by consul
+/// Used as a very simple health check by consul.
 async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
     async {
         if app_heatlhy_flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -52,6 +53,34 @@ async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
             (StatusCode::SERVICE_UNAVAILABLE, "unhealthy")
         }
     }.await
+}
+
+pub async fn app_watchdog(app_healthy_flag: Arc<AtomicBool>, pool: SqlitePool, cancellation_token: CancellationToken) {
+    loop {
+        // For now this is just a single check, but in the future
+        // we might have many checks; we first gather them and then write to the atomic bool once.
+        let is_app_healthy = is_db_healthy(&pool).await;
+        app_healthy_flag.store(is_app_healthy, std::sync::atomic::Ordering::Relaxed);
+
+        select! {
+            () = cancellation_token.cancelled() => break,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+        }
+    }
+    // Set to unhealthy when shutting down
+    app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// We check whether we can not only reach the DB but especially if we can run a transaction.
+///
+/// This handles the case where for whatever reason some other thing
+/// holds the write lock for the DB for a (too) long time.
+async fn is_db_healthy(pool: &SqlitePool) -> bool {
+    async move {
+        let mut tx = pool.begin().await?;
+        let _count = common::submission::count_submissions(&mut *tx).await?;
+        Ok::<_, anyhow::Error>(())
+    }.await.is_ok()
 }
 
 

@@ -24,10 +24,10 @@ async fn main() {
         let db_pool = opsqueue::db_connect_pool(database_filename).await;
         opsqueue::ensure_db_migrated(&db_pool).await;
 
-        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool, reservation_expiration, cancellation_token.clone(), app_healthy_flag.clone()));
+        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool.clone(), reservation_expiration, cancellation_token.clone(), app_healthy_flag.clone()));
 
-        // Set up complete. Mark app as healthy
-        app_healthy_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Set up complete. Start up watchdog, which will mark app healthy when appropriate
+        scope.spawn(opsqueue::app_watchdog(app_healthy_flag.clone(), db_pool, cancellation_token.clone()));
 
         tokio::signal::ctrl_c()
             .await
@@ -35,8 +35,7 @@ async fn main() {
 
         tracing::warn!("Opsqueue is shutting down");
 
-        // Mark app as unhealthy, and start graceful shutdown
-        app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        // Trigger graceful shutdown
         cancellation_token.cancel();
 
         // Gives things a little time to shut down, but not much :-)
