@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+#[cfg(feature = "server-logic")]
 use axum::extract::ws;
 
 use serde::{Deserialize, Serialize};
@@ -58,6 +59,7 @@ pub struct Envelope<T> {
     pub contents: T,
 }
 
+#[cfg(feature = "server-logic")]
 impl TryFrom<ws::Message> for Envelope<ClientToServerMessage> {
     type Error = ciborium::de::Error<std::io::Error>;
     fn try_from(value: ws::Message) -> Result<Self, Self::Error> {
@@ -65,6 +67,7 @@ impl TryFrom<ws::Message> for Envelope<ClientToServerMessage> {
     }
 }
 
+#[cfg(feature = "server-logic")]
 impl TryFrom<ws::Message> for ServerToClientMessage {
     type Error = ciborium::de::Error<std::io::Error>;
     fn try_from(value: ws::Message) -> Result<Self, Self::Error> {
@@ -73,6 +76,7 @@ impl TryFrom<ws::Message> for ServerToClientMessage {
 }
 
 // TODO: property test ensuring serialization never panics
+#[cfg(feature = "server-logic")]
 impl From<ServerToClientMessage> for ws::Message {
     fn from(val: ServerToClientMessage) -> Self {
         let mut writer = Vec::new();
@@ -83,6 +87,7 @@ impl From<ServerToClientMessage> for ws::Message {
 }
 
 // TODO: property test ensuring serialization never panics
+#[cfg(feature = "server-logic")]
 impl From<Envelope<ClientToServerMessage>> for ws::Message {
     fn from(val: Envelope<ClientToServerMessage>) -> Self {
         let mut writer = Vec::new();

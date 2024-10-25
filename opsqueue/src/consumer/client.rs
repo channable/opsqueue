@@ -315,6 +315,7 @@ impl Client {
 }
 
 #[cfg(test)]
+#[cfg(feature = "server-logic")]
 mod tests {
     use std::time::Duration;
 

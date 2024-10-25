@@ -1,9 +1,12 @@
+#[cfg(feature = "server-logic")]
 use std::ops::{Deref, DerefMut};
 
 use chrono::NaiveDateTime;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server-logic")]
 use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+#[cfg(feature = "server-logic")]
 use sqlx::{query_as, SqliteConnection};
 
 use super::submission::SubmissionId;
@@ -19,6 +22,7 @@ impl std::fmt::Display for ChunkIndex {
     }
 }
 
+#[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
     fn encode(
         self,
@@ -49,6 +53,7 @@ impl From<ChunkIndex> for i64 {
     }
 }
 
+#[cfg(feature = "server-logic")]
 impl sqlx::Type<Sqlite> for ChunkIndex {
     fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
         <i64 as sqlx::Type<Sqlite>>::compatible(ty)
@@ -89,6 +94,7 @@ impl Chunk {
 }
 
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn insert_chunk(
     chunk: Chunk,
@@ -105,6 +111,7 @@ pub async fn insert_chunk(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn complete_chunk(
     full_chunk_id: ChunkId,
@@ -118,6 +125,7 @@ pub async fn complete_chunk(
     })).await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// TODO: Complete submission automatically when all chunks are completed
 pub async fn complete_chunk_raw(
@@ -151,6 +159,7 @@ pub async fn complete_chunk_raw(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn retry_or_fail_chunk(
     full_chunk_id: ChunkId,
@@ -174,6 +183,7 @@ pub async fn retry_or_fail_chunk(
 }
 
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn move_chunk_to_failed_chunks(
     full_chunk_id: ChunkId,
@@ -203,6 +213,7 @@ pub async fn move_chunk_to_failed_chunks(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn get_chunk(
     full_chunk_id: ChunkId,
@@ -218,6 +229,7 @@ pub async fn get_chunk(
     .await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn get_chunk_completed(
     full_chunk_id: (i64, i64),
@@ -226,6 +238,7 @@ pub async fn get_chunk_completed(
     query_as!(ChunkCompleted, "SELECT submission_id, chunk_index, output_content, completed_at FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument(skip(chunks, conn))]
 pub async fn insert_many_chunks<Tx, Conn, Iter>(
     chunks: Iter,
@@ -260,6 +273,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn skip_remaining_chunks(
     submission_id: SubmissionId,
@@ -285,6 +299,7 @@ pub async fn skip_remaining_chunks(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
     // TODO: Document what we're doing here exactly
@@ -304,6 +319,7 @@ pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
     .unwrap()
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
@@ -312,6 +328,7 @@ pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32
     Ok(count.count)
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
@@ -320,6 +337,7 @@ pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::
     Ok(count.count)
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
@@ -329,6 +347,7 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 }
 
 #[cfg(test)]
+#[cfg(feature = "server-logic")]
 pub mod test {
     use crate::common::submission::{insert_submission_raw, Submission, SubmissionStatus};
 

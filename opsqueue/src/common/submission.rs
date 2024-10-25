@@ -2,10 +2,12 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+#[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
-use super::chunk::Chunk;
-use super::chunk::{self, ChunkIndex};
+#[cfg(feature = "server-logic")]
+use super::chunk::ChunkIndex;
+use super::chunk::{self, Chunk};
 use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
@@ -32,6 +34,7 @@ impl std::fmt::Debug for SubmissionId {
     }
 }
 
+#[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
     fn encode(
         self,
@@ -68,6 +71,7 @@ impl From<&SubmissionId> for std::time::SystemTime {
     }
 }
 
+#[cfg(feature = "server-logic")]
 impl sqlx::Type<Sqlite> for SubmissionId {
     fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
         <i64 as sqlx::Type<Sqlite>>::compatible(ty)
@@ -164,6 +168,7 @@ impl Submission {
     }
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn insert_submission_raw(
     submission: Submission,
@@ -185,6 +190,7 @@ pub async fn insert_submission_raw(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument(skip(chunks))]
 pub async fn insert_submission<Iter>(
     submission: Submission,
@@ -202,6 +208,7 @@ where
     })).await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument(skip(metadata, chunks_contents, conn))]
 pub async fn insert_submission_from_chunks(
     prefix: Option<String>,
@@ -225,6 +232,7 @@ pub async fn insert_submission_from_chunks(
     Ok(submission_id)
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn get_submission(
     id: SubmissionId,
@@ -249,6 +257,7 @@ pub enum SubmissionStatus {
     Failed(SubmissionFailed),
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn submission_status(
     id: SubmissionId,
@@ -300,6 +309,7 @@ pub async fn submission_status(
     }
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// Completes the submission, iff all chunks have been completed.
 pub async fn maybe_complete_submission(
@@ -319,6 +329,7 @@ pub async fn maybe_complete_submission(
     })).await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// TODO: Should only do the actual work iff chunks_done === chunks_total.
 pub async fn complete_submission_raw(
@@ -347,6 +358,7 @@ pub async fn complete_submission_raw(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn fail_submission_raw(
     id: SubmissionId,
@@ -373,6 +385,7 @@ pub async fn fail_submission_raw(
     Ok(())
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn fail_submission(
     id: SubmissionId,
@@ -388,6 +401,7 @@ pub async fn fail_submission(
     })).await
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
@@ -396,6 +410,7 @@ pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Resul
     Ok(count.count)
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
@@ -404,6 +419,7 @@ pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> s
     Ok(count.count)
 }
 
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
@@ -415,6 +431,7 @@ pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx
 /// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
 ///
 /// Submissions/chunks that are neither failed nor completed are not touched.
+#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn cleanup_old(
     conn: &mut SqliteConnection,
@@ -451,6 +468,7 @@ pub async fn cleanup_old(
 }
 
 #[cfg(test)]
+#[cfg(feature = "server-logic")]
 pub mod test {
 
     use chrono::Utc;

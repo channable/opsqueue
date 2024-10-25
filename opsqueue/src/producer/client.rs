@@ -1,6 +1,6 @@
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 
-use super::server::{InsertSubmission, InsertSubmissionResponse};
+use super::common::{InsertSubmission, InsertSubmissionResponse};
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -65,8 +65,9 @@ impl Client {
 }
 
 #[cfg(test)]
+#[cfg(feature = "server-logic")]
 mod tests {
-    use crate::{common::submission::{self, SubmissionStatus}, producer::server::ChunkContents};
+    use crate::{common::submission::{self, SubmissionStatus}, producer::common::ChunkContents};
 
     use super::*;
 

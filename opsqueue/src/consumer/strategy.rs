@@ -1,15 +1,21 @@
+
+#[cfg(feature = "server-logic")]
 use std::pin::Pin;
 
+#[cfg(feature = "server-logic")]
 use futures::Stream;
+#[cfg(feature = "server-logic")]
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "server-logic")]
 use sqlx::{SqliteConnection, SqliteExecutor};
 
+#[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
+#[cfg(feature = "server-logic")]
 use crate::common::submission::Submission;
 
-type ChunkStream<'a> =
-    Pin<Box<(dyn Stream<Item = Result<(Chunk,Submission), sqlx::Error>> + std::marker::Send + 'a)>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
@@ -26,6 +32,11 @@ pub enum Strategy {
 //     pub implementation: fn(&mut SqliteConnection) -> ChunkStream<'_>,
 // }
 
+#[cfg(feature = "server-logic")]
+type ChunkStream<'a> =
+    Pin<Box<(dyn Stream<Item = Result<(Chunk,Submission), sqlx::Error>> + std::marker::Send + 'a)>>;
+
+#[cfg(feature = "server-logic")]
 impl Strategy {
     pub fn execute<'c>(&self, db_conn: &'c mut SqliteConnection) -> ChunkStream<'c> {
         match self {
@@ -37,6 +48,7 @@ impl Strategy {
 }
 
 // #[tracing::instrument]
+#[cfg(feature = "server-logic")]
 pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
     sqlx::query!("
     SELECT * FROM chunks
@@ -60,6 +72,7 @@ pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl S
 }
 
 #[tracing::instrument]
+#[cfg(feature = "server-logic")]
 pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
     sqlx::query!(
         "SELECT * FROM chunks
