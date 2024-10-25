@@ -41,7 +41,6 @@ impl ServerState {
             )
             .route("/submissions/count", get(submissions_count))
             .route("/submissions/:submission_id", get(submission_status))
-            .route("/ping", get(ping))
             // TODO: Cancel a submission from the producer side
             .with_state(self)
 
@@ -77,11 +76,6 @@ async fn submission_status(
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
     let status = submission::submission_status(submission_id, &state.pool).await?;
     Ok(Json(status))
-}
-
-/// Used as a very simple health check by consul
-async fn ping(_: State<ServerState>) -> &'static str {
-    "pong"
 }
 
 async fn insert_submission(

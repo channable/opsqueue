@@ -1,6 +1,6 @@
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
-use std::time::Duration;
+use std::{sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
@@ -10,6 +10,7 @@ async fn main() {
 
     let server_addr = Box::from("0.0.0.0:3999");
     let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
+    let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
     moro_local::async_scope!(|scope| {
         let cancellation_token = CancellationToken::new();
@@ -23,7 +24,10 @@ async fn main() {
         let db_pool = opsqueue::db_connect_pool(database_filename).await;
         opsqueue::ensure_db_migrated(&db_pool).await;
 
-        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool, cancellation_token.clone(), reservation_expiration));
+        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool, reservation_expiration, cancellation_token.clone(), app_healthy_flag.clone()));
+
+        // Set up complete. Mark app as healthy
+        app_healthy_flag.store(true, std::sync::atomic::Ordering::Relaxed);
 
         tokio::signal::ctrl_c()
             .await
@@ -31,7 +35,11 @@ async fn main() {
 
         tracing::warn!("Opsqueue is shutting down");
 
+        // Mark app as unhealthy, and start graceful shutdown
+        app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
         cancellation_token.cancel();
+
+        // Gives things a little time to shut down, but not much :-)
         tokio::time::sleep(Duration::from_millis(100)).await;
     }).await;
 
