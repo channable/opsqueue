@@ -1,32 +1,20 @@
 from __future__ import annotations
-from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, Protocol
+from collections.abc import Iterable, Iterator
+from typing import Any
 
 import itertools
-import json
 
-from opsqueue_producer.opsqueue_producer_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
-
-
-class json_as_bytes:
-    """
-    JSON encoding as per the `json` module,
-    but making sure that the output type is `bytes` rather than `str`.
-    """
-
-    @classmethod
-    def dumps(cls, obj: Any) -> bytes:
-        return json.dumps(obj).encode()
-
-    @classmethod
-    def loads(cls, data: bytes) -> Any:
-        return json.loads(data.decode())
+from opsqueue.common import (
+    SerializationFormat,
+    encode_chunk,
+    decode_chunk,
+    DEFAULT_SERIALIZATION_FORMAT,
+)
+from . import opsqueue_internal
+from .opsqueue_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
 
 
-DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
-
-
-class Client:
+class ProducerClient:
     """
     Opsqueue producer client. Allows sending of large collections of operations ('submissions')
     and waiting for all of them to be done.
@@ -35,9 +23,8 @@ class Client:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
-        self.inner = opsqueue_producer_internal.Client(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
+        self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)
 
-    # TODO: Make serialization format customizable
     def run_submission(
         self,
         ops: Iterable[Any],
@@ -59,7 +46,6 @@ class Client:
         )
         return _unchunk_iterator(results_iter, serialization_format)
 
-    # TODO: Make serialization format customizable
     def insert_submission(
         self,
         ops: Iterable[Any],
@@ -159,7 +145,7 @@ def _chunk_iterator(
     iter: Iterable[Any], chunk_size: int, serialization_format: SerializationFormat
 ) -> Iterator[bytes]:
     return map(
-        lambda c: _encode_chunk(c, serialization_format),
+        lambda c: encode_chunk(c, serialization_format),
         itertools.batched(iter, chunk_size),
     )
 
@@ -168,31 +154,10 @@ def _unchunk_iterator(
     encoded_chunks_iter: Iterable[bytes], serialization_format: SerializationFormat
 ) -> Iterator[Any]:
     return _flatten_iterator(
-        map(lambda c: _decode_chunk(c, serialization_format), encoded_chunks_iter)
+        map(lambda c: decode_chunk(c, serialization_format), encoded_chunks_iter)
     )
-
-
-def _encode_chunk(
-    chunk: Sequence[Any], serialization_format: SerializationFormat
-) -> bytes:
-    return serialization_format.dumps(chunk)
-
-
-def _decode_chunk(
-    chunk: bytes, serialization_format: SerializationFormat
-) -> Sequence[Any]:
-    res = serialization_format.loads(chunk)
-    assert isinstance(
-        res, Sequence
-    ), f"Decoding a chunk should always return a sequence, got unexpected type {type(res)}"
-    return res
 
 
 def _flatten_iterator(iter_of_iters: Iterable[Iterable[bytes]]) -> Iterator[bytes]:
     "Flatten one level of nesting."
     return itertools.chain.from_iterable(iter_of_iters)
-
-
-class SerializationFormat(Protocol):
-    def dumps(self, obj: Any) -> bytes: ...
-    def loads(self, data: bytes) -> Any: ...

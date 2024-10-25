@@ -1,32 +1,20 @@
 from __future__ import annotations
 from collections.abc import Sequence
-from typing import Any, Protocol, Callable
+from typing import Any, Callable
 
-import json
+from . import opsqueue_internal
+from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
+from .common import (
+    SerializationFormat,
+    encode_chunk,
+    decode_chunk,
+    DEFAULT_SERIALIZATION_FORMAT,
+)
 
-from opsqueue_consumer.opsqueue_consumer_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
-
-
-class json_as_bytes:
-    """
-    JSON encoding as per the `json` module,
-    but making sure that the output type is `bytes` rather than `str`.
-    """
-
-    @classmethod
-    def dumps(cls, obj: Any) -> bytes:
-        return json.dumps(obj).encode()
-
-    @classmethod
-    def loads(cls, data: bytes) -> Any:
-        return json.loads(data.decode())
-
-
-DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
 DEFAULT_STRATEGY = Strategy.Newest
 
 
-class Client:
+class ConsumerClient:
     """
     Opsqueue consumer client. Allows working on individual (chunks of) operations.
     """
@@ -34,7 +22,7 @@ class Client:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
-        self.inner = opsqueue_consumer_internal.Client(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
+        self.inner = opsqueue_internal.ConsumerClient(opsqueue_url, object_store_url)
 
     def run_each_op(
         self,
@@ -67,9 +55,9 @@ class Client:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
     ) -> None:
         def raw_chunk_callback(chunk: Chunk) -> bytes:
-            chunk_contents = _decode_chunk(chunk.input_content, serialization_format)
+            chunk_contents = decode_chunk(chunk.input_content, serialization_format)
             chunk_result_contents = chunk_callback(chunk_contents, chunk)
-            return _encode_chunk(chunk_result_contents, serialization_format)
+            return encode_chunk(chunk_result_contents, serialization_format)
 
         self.run_each_chunk_raw(raw_chunk_callback, strategy=strategy)
 
@@ -139,24 +127,3 @@ class Client:
         on the `Chunk` type originally received as part of `reserve_chunks`.
         """
         self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)
-
-
-def _encode_chunk(
-    chunk: Sequence[Any], serialization_format: SerializationFormat
-) -> bytes:
-    return serialization_format.dumps(chunk)
-
-
-def _decode_chunk(
-    chunk: bytes, serialization_format: SerializationFormat
-) -> Sequence[Any]:
-    res = serialization_format.loads(chunk)
-    assert isinstance(
-        res, Sequence
-    ), f"Decoding a chunk should always return a sequence, got unexpected type {type(res)}"
-    return res
-
-
-class SerializationFormat(Protocol):
-    def dumps(self, obj: Any) -> bytes: ...
-    def loads(self, data: bytes) -> Any: ...

@@ -4,7 +4,7 @@
   # Building options
   buildType ? "release",
   # Testing options
-  checkType ? "release", # By this point we have it built, so just use it
+  checkType ? "debug",
   doCheck ? true,
   useNextest ? false, # Disabled for now. Re-enable as part of https://github.com/channable/opsqueue/issues/81
   perl,

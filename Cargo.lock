@@ -1505,28 +1505,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "opsqueue_consumer"
+name = "opsqueue_python"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "futures",
  "log",
- "opsqueue",
- "pyo3",
- "pyo3-log",
- "retry-if",
- "tokio",
-]
-
-[[package]]
-name = "opsqueue_producer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chrono",
- "futures",
  "opsqueue",
  "pyo3",
  "pyo3-log",

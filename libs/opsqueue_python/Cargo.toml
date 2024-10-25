@@ -1,0 +1,34 @@
+[package]
+name = "opsqueue_python"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "opsqueue_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Opsqueue itself:
+opsqueue = { path = "../../opsqueue/"}
+
+# General-purpose datatypes:
+uuid = {version = "1.11.0", features = [
+        "v4",                # Fully random UUIDs
+        "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    ]}
+chrono = { version = "0.4.38"}
+
+# Concurrency:
+tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
+futures = "0.3.30"
+
+# Error handling:
+anyhow = "1.0.86"
+
+# Python FFI:
+pyo3 = { version = "0.22.0", features = ["chrono"] }
+
+# Logging/tracing:
+pyo3-log = "0.11.0"
+log = {version = "0.4.22", features = ["std"] }

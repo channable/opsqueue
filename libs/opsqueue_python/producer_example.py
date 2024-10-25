@@ -1,10 +1,10 @@
 # It's recommended to just experiment with this in ipython
 import logging
-from opsqueue_producer import Client
+from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
-client = Client("localhost:3999", "file:///tmp/opsqueue/")
+client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/")
 
 input_iter = range(0, 100_000)
 output_iter = client.run_submission(input_iter, chunk_size=1000)
