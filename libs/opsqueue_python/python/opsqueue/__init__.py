@@ -4,7 +4,7 @@ from typing import Any, Protocol, Callable
 
 import json
 
-from opsqueue_consumer.opsqueue_consumer_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
+from opsqueue.opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
 
 
 class json_as_bytes:
@@ -34,7 +34,7 @@ class Client:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
-        self.inner = opsqueue_consumer_internal.Client(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
+        self.inner = opsqueue_internal.Client(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
 
     def run_each_op(
         self,

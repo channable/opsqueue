@@ -1,6 +1,6 @@
 # It's recommended to just experiment with this in ipython
 import logging
-from opsqueue_producer import Client
+from opsqueue import Client
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 

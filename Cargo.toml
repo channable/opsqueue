@@ -5,8 +5,7 @@ resolver = "2"
 
 members = [
     "opsqueue/",
-    "opsqueue_producer",
-    "opsqueue_consumer",
+    "libs/opsqueue_python",
 ]
 
 

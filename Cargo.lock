@@ -1505,7 +1505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "opsqueue_consumer"
+name = "opsqueue_python"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1517,21 +1517,6 @@ dependencies = [
  "pyo3-log",
  "retry-if",
  "tokio",
-]
-
-[[package]]
-name = "opsqueue_producer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chrono",
- "futures",
- "opsqueue",
- "pyo3",
- "pyo3-log",
- "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -3110,7 +3095,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
 dependencies = [
  "getrandom",
- "rand",
 ]
 
 [[package]]
