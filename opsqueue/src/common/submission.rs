@@ -420,37 +420,34 @@ pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    query!("SAVEPOINT cleanup_old;").execute(&mut *conn).await?;
-    query!(
-        "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
-        older_than
-    )
-    .execute(&mut *conn)
-    .await?;
-    query!(
-        "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
-        older_than
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    query!(
-        "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
-        older_than
-    )
-    .execute(&mut *conn)
-    .await?;
-    query!(
-        "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
-        older_than
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    query!("RELEASE SAVEPOINT cleanup_old;")
-        .execute(&mut *conn)
+    conn.transaction(|tx| Box::pin(async move {
+        query!(
+            "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
+            older_than
+        )
+        .execute(&mut **tx)
         .await?;
-    Ok(())
+        query!(
+            "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
+            older_than
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        query!(
+            "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
+            older_than
+        )
+        .execute(&mut **tx)
+        .await?;
+        query!(
+            "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
+            older_than
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    })).await
 }
 
 #[cfg(test)]

@@ -11,8 +11,9 @@ pub struct Client {
 impl Client {
     pub fn new(endpoint_url: &str) -> Self {
         let http_client = reqwest::Client::new();
+        let endpoint_url = format!("{endpoint_url}/producer").into_boxed_str();
         Client {
-            endpoint_url: endpoint_url.into(),
+            endpoint_url,
             http_client,
         }
     }
@@ -71,7 +72,7 @@ mod tests {
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         tokio::spawn(
-            super::super::server::ServerState::new(pool.clone()).serve(url.into()),
+            super::super::server::ServerState::new(pool.clone()).serve_for_tests(url.into()),
         );
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
         tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime

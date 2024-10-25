@@ -1,6 +1,6 @@
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
-use std::time::Duration;
+use std::{sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
@@ -8,48 +8,39 @@ pub const DATABASE_FILENAME: &str = "opsqueue.db";
 async fn main() {
     println!("Starting Opsqueue");
 
-    let task_tracker = TaskTracker::new();
-    let cancellation_token = CancellationToken::new();
-
-
-    // let subscriber = tracing_subscriber();
-    // tracing::subscriber::set_global_default(subscriber).expect("Error setting up global tracing subscriber");
-    let _ = setup_tracing();
-
-    tracing::info!("Finished setting up tracing subscriber");
-
-
-    let database_filename = DATABASE_FILENAME;
-
-    opsqueue::ensure_db_exists(database_filename).await;
-    let db_pool = opsqueue::db_connect_pool(database_filename).await;
-    opsqueue::ensure_db_migrated(&db_pool).await;
-
-    let producer_server_addr = Box::from("0.0.0.0:3999");
-    let consumer_server_addr = Box::from("0.0.0.0:3998");
+    let server_addr = Box::from("0.0.0.0:3999");
     let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
+    let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
-    let consumer_server = opsqueue::consumer::server::serve(
-        db_pool.clone(),
-        consumer_server_addr,
-        reservation_expiration,
-        cancellation_token.clone(),
-        task_tracker.clone(),
-    );
-    let producer_server = opsqueue::producer::server::serve(db_pool, producer_server_addr);
+    moro_local::async_scope!(|scope| {
+        let cancellation_token = CancellationToken::new();
+        let _ = setup_tracing();
 
-    task_tracker.spawn(consumer_server);
-    tokio::spawn(producer_server);
+        tracing::info!("Finished setting up tracing subscriber");
 
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to set up Ctrl+C signal handler");
+        let database_filename = DATABASE_FILENAME;
 
-    tracing::warn!("Opsqueue is shutting down");
+        opsqueue::ensure_db_exists(database_filename).await;
+        let db_pool = opsqueue::db_connect_pool(database_filename).await;
+        opsqueue::ensure_db_migrated(&db_pool).await;
 
-    task_tracker.close();
-    cancellation_token.cancel();
-    task_tracker.wait().await;
+        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool.clone(), reservation_expiration, cancellation_token.clone(), app_healthy_flag.clone()));
+
+        // Set up complete. Start up watchdog, which will mark app healthy when appropriate
+        scope.spawn(opsqueue::app_watchdog(app_healthy_flag.clone(), db_pool, cancellation_token.clone()));
+
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to set up Ctrl+C signal handler");
+
+        tracing::warn!("Opsqueue is shutting down");
+
+        // Trigger graceful shutdown
+        cancellation_token.cancel();
+
+        // Gives things a little time to shut down, but not much :-)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }).await;
 
     println!();
     println!("Opsqueue Stopped");
@@ -93,6 +84,7 @@ fn setup_tracing() -> OtelGuard {
 //
 // This is slightly suspect, as this usage of `log` might itself end up as a tracing event.
 // As such, it really is only intended for development mode.
+#[cfg(debug_assertions)]
 fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) {
     use opentelemetry::global::Error;
     match err.into() {

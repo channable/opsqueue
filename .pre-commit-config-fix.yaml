@@ -37,13 +37,13 @@ repos:
         language: system
         types: [nix]
         exclude: extra
-      - id: fix-whitespace
-        name: fix-whitespace
-        entry: fix-whitespace --config=.fix-whitespace.yaml
-        language: system
-        pass_filenames: false
       - id: clippy
         name: Cargo clippy
         entry: cargo clippy --no-deps --fix --allow-dirty -- -Dwarnings
+        language: system
+        pass_filenames: false
+      - id: fix-whitespace
+        name: fix-whitespace
+        entry: fix-whitespace --config=.fix-whitespace.yaml
         language: system
         pass_filenames: false

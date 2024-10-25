@@ -6,9 +6,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
-pub async fn serve(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
+pub async fn serve_for_tests(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
     ServerState::new(database_pool)
-        .serve(server_addr)
+        .serve_for_tests(server_addr)
         .await;
 }
 
@@ -22,16 +22,17 @@ impl ServerState {
     pub fn new(pool: sqlx::SqlitePool) -> Self {
         ServerState { pool }
     }
-    pub async fn serve(self, server_addr: Box<str>) {
-    let tracing_middleware =
-        tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new() )
-        .on_request(tower_http::trace::DefaultOnRequest::new()
-        )
-        .on_response(tower_http::trace::DefaultOnResponse::new()
-            .level(tracing::Level::INFO));
+    pub async fn serve_for_tests(self, server_addr: Box<str>) {
+        let app = Router::new().nest("/producer", self.build_router()) ;
 
-        let app = Router::new()
+        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
+
+        tracing::info!("Producer HTTP server listening at {server_addr}...");
+        axum::serve(listener, app).await.expect("Failed to start producer server");
+    }
+
+    pub fn build_router(self) -> Router<()> {
+        Router::new()
             .route("/submissions", post(insert_submission))
             .route(
                 // TODO: Probably should get folded into the main 'submissions/count' route (make it return the counts of 'inprogress', 'completed' and 'failed' at the same time)
@@ -40,15 +41,9 @@ impl ServerState {
             )
             .route("/submissions/count", get(submissions_count))
             .route("/submissions/:submission_id", get(submission_status))
-            .route("/ping", get(ping))
             // TODO: Cancel a submission from the producer side
             .with_state(self)
-           .layer(tracing_middleware);
 
-        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
-
-        tracing::info!("Producer HTTP server listening at {server_addr}...");
-        axum::serve(listener, app).await.expect("Failed to start producer server");
     }
 }
 
@@ -81,11 +76,6 @@ async fn submission_status(
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
     let status = submission::submission_status(submission_id, &state.pool).await?;
     Ok(Json(status))
-}
-
-/// Used as a very simple health check by consul
-async fn ping(_: State<ServerState>) -> &'static str {
-    "pong"
 }
 
 async fn insert_submission(

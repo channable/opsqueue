@@ -16,3 +16,4 @@ excluded-files:
   - "result/**"
   - ".ruff_cache/**"
   - ".direnv/**"
+  - "target/**"
