@@ -11,15 +11,16 @@ use super::reserver::Reserver;
 pub mod conn;
 pub mod state;
 
-pub async fn serve(pool: sqlx::SqlitePool, server_addr: Box<str>, cancellation_token: CancellationToken, reservation_expiration: Duration) {
+pub async fn serve_for_tests(pool: sqlx::SqlitePool, server_addr: Box<str>, cancellation_token: CancellationToken, reservation_expiration: Duration) {
     let state = ServerState::new(pool, cancellation_token.clone(), reservation_expiration);
     let router = ServerState::build_router(state);
+    let app = Router::new().nest("/consumer", router);
     let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to consumer server address");
 
     tracing::info!("Consumer WebSocket server listening at {server_addr}...");
     select! {
       _ = cancellation_token.cancelled() => {},
-      res = axum::serve(listener, router) => res.expect("Failed to start consumer server"),
+      res = axum::serve(listener, app) => res.expect("Failed to start consumer server"),
     }
 }
 

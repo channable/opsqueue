@@ -348,7 +348,7 @@ mod tests {
         .unwrap();
 
         let _server_handle = task_tracker.spawn(
-            crate::consumer::server::serve(pool.clone(), uri.into(), cancellation_token, Duration::from_secs(60))
+            crate::consumer::server::serve_for_tests(pool.clone(), uri.into(), cancellation_token, Duration::from_secs(60))
         );
 
         yield_now().await;

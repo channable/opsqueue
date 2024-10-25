@@ -6,9 +6,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
-pub async fn serve(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
+pub async fn serve_for_tests(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
     ServerState::new(database_pool)
-        .serve(server_addr)
+        .serve_for_tests(server_addr)
         .await;
 }
 
@@ -22,17 +22,8 @@ impl ServerState {
     pub fn new(pool: sqlx::SqlitePool) -> Self {
         ServerState { pool }
     }
-    pub async fn serve(self, server_addr: Box<str>) {
-    let tracing_middleware =
-        tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new() )
-        .on_request(tower_http::trace::DefaultOnRequest::new()
-        )
-        .on_response(tower_http::trace::DefaultOnResponse::new()
-            .level(tracing::Level::INFO));
-
-        let app = self.build_router() 
-           .layer(tracing_middleware);
+    pub async fn serve_for_tests(self, server_addr: Box<str>) {
+        let app = Router::new().nest("/producer", self.build_router()) ;
 
         let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
 
