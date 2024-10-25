@@ -15,7 +15,7 @@ buildPythonPackage rec {
     src = ../../.;
 
     # TODO: I couldn't get it to work with the filter enabled.
-    # We're now copying slightly too much to the Nix store. 
+    # We're now copying slightly too much to the Nix store.
     # Re-enable properly.
 
     # srcWhitelist = [

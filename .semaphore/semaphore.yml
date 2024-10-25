@@ -69,4 +69,4 @@ blocks:
 
         - name: "Build"
           commands:
-            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix pythonChannable.pkgs.opsqueue_consumer opsqueue pythonChannable.pkgs.opsqueue_producer | cachix push channable"
+            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix opsqueue pythonChannable.pkgs.opsqueue_python | cachix push channable"
