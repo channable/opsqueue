@@ -84,6 +84,7 @@ fn setup_tracing() -> OtelGuard {
 //
 // This is slightly suspect, as this usage of `log` might itself end up as a tracing event.
 // As such, it really is only intended for development mode.
+#[cfg(debug_assertions)]
 fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) {
     use opentelemetry::global::Error;
     match err.into() {
