@@ -14,33 +14,38 @@ buildPythonPackage rec {
     name = "opsqueue_python";
     src = ../../.;
 
-    srcWhitelist = [
-      "Cargo.toml"
-      "Cargo.lock"
-      "libs/opsqueue_python"
-      "libs/opsqueue_python/Cargo.toml"
-      "libs/opsqueue_python/src(/.*)?"
-      "libs/opsqueue_python/python(/.*)?"
-      "libs/opsqueue_python/pyproject.toml"
+    # TODO: I couldn't get it to work with the filter enabled.
+    # We're now copying slightly too much to the Nix store. 
+    # Re-enable properly.
 
-      # Opsqueue is a dependency, so that needs to be included too
-      "opsqueue"
-      "opsqueue/Cargo.toml"
-      "opsqueue/.cargo(/.*)?"
-      "opsqueue/build\.rs"
-      "opsqueue/opsqueue_example_database_schema\.db"
-      # "opsqueue/app(/.*)?"
-      "opsqueue/migrations(/.*)?"
-      "opsqueue/src(/.*)?"
-    ];
+    # srcWhitelist = [
+    #   "Cargo.toml"
+    #   "Cargo.lock"
+    #   "libs/opsqueue_python"
+    #   "libs/opsqueue_python/Cargo.toml"
+    #   "libs/opsqueue_python/pyproject.toml"
+    #   "libs/opsqueue_python/src(/.*)?"
+    #   "libs/opsqueue_python/python(/.*)?"
+
+    #   # Opsqueue is a dependency, so that needs to be included too
+    #   "opsqueue"
+    #   "opsqueue/Cargo.toml"
+    #   "opsqueue/.cargo(/.*)?"
+    #   "opsqueue/build\.rs"
+    #   "opsqueue/opsqueue_example_database_schema\.db"
+    #   # "opsqueue/app(/.*)?"
+    #   "opsqueue/migrations(/.*)?"
+    #   "opsqueue/src(/.*)?"
+    # ];
 
     srcGlobalWhitelist = [
-      ".db"
-      ".lock"
+      ".py"
       ".pyi"
+      "py.typed"
       ".rs"
       ".toml"
-      "py.typed"
+      ".lock"
+      ".db"
     ];
   };
 
@@ -54,7 +59,7 @@ buildPythonPackage rec {
 
   maturinBuildFlags = [
     "--manifest-path"
-    "libs/opsqueue_python/Cargo.toml"
+    "/build/opsqueue_python/libs/opsqueue_python/Cargo.toml"
   ];
 
   nativeBuildInputs = with rustPlatform; [
