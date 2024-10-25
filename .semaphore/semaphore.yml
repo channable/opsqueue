@@ -66,7 +66,9 @@ blocks:
         - name: "Type- and format-check"
           commands:
             - "./build.py check style"
-
-        - name: "Build"
+        - name: "Build Opsqueue binary (in release mode) & run unit tests"
           commands:
-            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix opsqueue pythonChannable.pkgs.opsqueue_python | cachix push channable"
+            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix opsqueue | cachix push channable"
+        - name: "Build Python library (in release mode)"
+          commands:
+            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix pythonChannable.pkgs.opsqueue_python | cachix push channable"
