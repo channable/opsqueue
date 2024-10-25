@@ -2,20 +2,16 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
-use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
 use opsqueue::consumer::strategy;
 
 use crate::common::{run_unless_interrupted, start_runtime};
 
 use super::common::{Chunk, ChunkIndex, Strategy, SubmissionId};
-
 
 create_exception!(opsqueue_internal, ConsumerClientError, PyException);
 
@@ -30,7 +26,7 @@ pub struct ConsumerClient {
 fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
     match e.downcast::<PyErr>() {
         Ok(py_err) => py_err,
-        Err(other) => ConsumerClientError::new_err(other.to_string())
+        Err(other) => ConsumerClientError::new_err(other.to_string()),
     }
 }
 
@@ -40,14 +36,24 @@ impl ConsumerClient {
     pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
         let runtime = start_runtime();
         let client = ActualConsumerClient::new(address);
-        let object_store_client = ObjectStoreClient::new(object_store_url).map_err(maybe_wrap_error)?;
+        let object_store_client =
+            ObjectStoreClient::new(object_store_url).map_err(maybe_wrap_error)?;
         log::info!("Opsqueue consumer client initialized");
 
-        Ok(ConsumerClient {client, object_store_client, runtime })
+        Ok(ConsumerClient {
+            client,
+            object_store_client,
+            runtime,
+        })
     }
 
-    pub fn reserve_chunks(&self, py: Python<'_>, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
-        py.allow_threads(|| { self.reserve_chunks_gilless(max, strategy)})
+    pub fn reserve_chunks(
+        &self,
+        py: Python<'_>,
+        max: usize,
+        strategy: Strategy,
+    ) -> PyResult<Vec<Chunk>> {
+        py.allow_threads(|| self.reserve_chunks_gilless(max, strategy))
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
@@ -59,7 +65,14 @@ impl ConsumerClient {
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
     ) -> PyResult<()> {
-        py.allow_threads(|| { self.complete_chunk_gilless(submission_id, submission_prefix, chunk_index, output_content)})
+        py.allow_threads(|| {
+            self.complete_chunk_gilless(
+                submission_id,
+                submission_prefix,
+                chunk_index,
+                output_content,
+            )
+        })
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, failure))]
@@ -71,12 +84,16 @@ impl ConsumerClient {
         chunk_index: ChunkIndex,
         failure: String,
     ) -> PyResult<()> {
-        py.allow_threads(|| { self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)})
+        py.allow_threads(|| {
+            self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)
+        })
     }
 
     pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
         if !fun.is_callable() {
-            return pyo3::exceptions::PyTypeError::new_err("Expected `fun` parameter to be __call__-able");
+            return pyo3::exceptions::PyTypeError::new_err(
+                "Expected `fun` parameter to be __call__-able",
+            );
         }
         // NOTE: We take care here to unlock the GIL for most of the loop,
         // and only re-lock it for the duration of each call to `fun`.
@@ -139,23 +156,24 @@ impl ConsumerClient {
             }
         })
     }
-
 }
 
 // What follows are internal helper functions
 // that are not available directly from Python
 impl ConsumerClient {
-    fn block_unless_interrupted<T, E>(&self, future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>
+    fn block_unless_interrupted<T, E>(
+        &self,
+        future: impl IntoFuture<Output = Result<T, E>>,
+    ) -> Result<T, E>
     where
-    E: From<PyErr>,
+        E: From<PyErr>,
     {
         self.runtime.block_on(run_unless_interrupted(future))
-
     }
 
     fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E>
     where
-        E: From<PyErr>
+        E: From<PyErr>,
     {
         self.block_unless_interrupted(async {
             tokio::time::sleep(duration).await;
@@ -163,15 +181,14 @@ impl ConsumerClient {
         })
     }
 
-
     fn reserve_chunks_gilless(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
         let strategy: strategy::Strategy = strategy.into();
         loop {
-            let res: Vec<Chunk> =
-                self.block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
+            let res: Vec<Chunk> = self
+                .block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
                 .map_err(maybe_wrap_error)?;
             if !res.is_empty() {
                 return Ok(res);
@@ -190,15 +207,20 @@ impl ConsumerClient {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(async move {
             match submission_prefix {
-                None =>
-                    self.client.complete_chunk(chunk_id, Some(output_content)).await,
+                None => {
+                    self.client
+                        .complete_chunk(chunk_id, Some(output_content))
+                        .await
+                }
                 Some(prefix) => {
-                    self.object_store_client.store_chunk(&prefix, chunk_id.1, ChunkType::Output, output_content).await?;
+                    self.object_store_client
+                        .store_chunk(&prefix, chunk_id.1, ChunkType::Output, output_content)
+                        .await?;
                     self.client.complete_chunk(chunk_id, None).await
                 }
             }
-    })
-            .map_err(maybe_wrap_error)
+        })
+        .map_err(maybe_wrap_error)
     }
 
     pub fn fail_chunk_gilless(
@@ -213,12 +235,16 @@ impl ConsumerClient {
             .map_err(maybe_wrap_error)
     }
 
-    async fn reserve_and_retrieve_chunks(&self, max: usize, strategy: opsqueue::consumer::strategy::Strategy) -> anyhow::Result<Vec<Chunk>>{
+    async fn reserve_and_retrieve_chunks(
+        &self,
+        max: usize,
+        strategy: opsqueue::consumer::strategy::Strategy,
+    ) -> anyhow::Result<Vec<Chunk>> {
         let chunks = self.client.reserve_chunks(max, strategy).await?;
-        let elems =
-            stream::iter(chunks)
+        let elems = stream::iter(chunks)
             .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
-            .try_collect().await?;
+            .try_collect()
+            .await?;
         Ok(elems)
     }
 }

@@ -4,9 +4,11 @@ from typing import Any, Protocol
 
 import json
 
+
 class SerializationFormat(Protocol):
     def dumps(self, obj: Any) -> bytes: ...
     def loads(self, data: bytes) -> Any: ...
+
 
 class json_as_bytes:
     """
@@ -22,7 +24,9 @@ class json_as_bytes:
     def loads(cls, data: bytes) -> Any:
         return json.loads(data.decode())
 
+
 DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
+
 
 def encode_chunk(
     chunk: Sequence[Any], serialization_format: SerializationFormat

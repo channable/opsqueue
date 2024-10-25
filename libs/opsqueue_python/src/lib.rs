@@ -2,20 +2,8 @@ pub mod common;
 pub mod consumer;
 pub mod producer;
 
-use std::future::IntoFuture;
-use std::sync::Arc;
-use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::common::submission::Metadata;
-use opsqueue::object_store::{ChunkType, ObjectStoreClient};
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
-
-use opsqueue::common::{chunk, submission};
-use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
-use opsqueue::consumer::strategy;
-
+use pyo3::prelude::*;
 
 
 /// A Python module implemented in Rust.

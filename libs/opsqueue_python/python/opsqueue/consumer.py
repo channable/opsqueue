@@ -1,12 +1,18 @@
 from __future__ import annotations
 from collections.abc import Sequence
-from typing import Any, Protocol, Callable
+from typing import Any, Callable
 
 from . import opsqueue_internal
 from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
-from .common import SerializationFormat, encode_chunk, decode_chunk, DEFAULT_SERIALIZATION_FORMAT
+from .common import (
+    SerializationFormat,
+    encode_chunk,
+    decode_chunk,
+    DEFAULT_SERIALIZATION_FORMAT,
+)
 
 DEFAULT_STRATEGY = Strategy.Newest
+
 
 class ConsumerClient:
     """
@@ -16,7 +22,7 @@ class ConsumerClient:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
-        self.inner = opsqueue_internal.ConsumerClient(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
+        self.inner = opsqueue_internal.ConsumerClient(opsqueue_url, object_store_url)
 
     def run_each_op(
         self,

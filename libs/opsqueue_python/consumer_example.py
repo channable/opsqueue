@@ -10,4 +10,3 @@ def my_operation(data: int) -> int:
 
 client = ConsumerClient("ws://localhost:3999", "file:///tmp/opsqueue/")
 client.run_each_op(my_operation, strategy=Strategy.Newest)
-

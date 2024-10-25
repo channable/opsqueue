@@ -3,14 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkType, ObjectStoreClient};
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use pyo3::prelude::*;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::strategy;
-
 
 // In development, check 10 times per second so we respond early to Ctrl+C
 // But in production, only once per second so we don't fight as much over the GIL
@@ -18,7 +17,6 @@ use opsqueue::consumer::strategy;
 pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(not(debug_assertions))]
 pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-
 
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,13 +117,20 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub async fn from_internal(c: chunk::Chunk, s: submission::Submission, object_store_client: &ObjectStoreClient) -> anyhow::Result<Self> {
+    pub async fn from_internal(
+        c: chunk::Chunk,
+        s: submission::Submission,
+        object_store_client: &ObjectStoreClient,
+    ) -> anyhow::Result<Self> {
         let (content, prefix) = match c.input_content {
             Some(bytes) => (bytes, None),
             None => {
                 let prefix = s.prefix.unwrap();
                 log::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
-                let res = object_store_client.retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input).await?.to_vec();
+                let res = object_store_client
+                    .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
+                    .await?
+                    .to_vec();
                 log::debug!("Fetched chunk content: {res:?}");
                 (res, Some(prefix))
             }
@@ -139,7 +144,6 @@ impl Chunk {
             submission_metadata: s.metadata,
         })
     }
-
 }
 
 #[pymethods]
@@ -167,7 +171,6 @@ impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompl
     }
 }
 
-
 impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     fn from(value: opsqueue::common::submission::SubmissionFailed) -> Self {
         Self {
@@ -179,8 +182,6 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
         }
     }
 }
-
-
 
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,8 +231,13 @@ impl From<opsqueue::common::submission::Submission> for Submission {
 #[pymethods]
 impl Submission {
     fn __repr__(&self) -> String {
-        format!("Submission(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?})",
-        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata)
+        format!(
+            "Submission(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?})",
+            self.id.__repr__(),
+            self.chunks_total,
+            self.chunks_done,
+            self.metadata
+        )
     }
 }
 
@@ -245,12 +251,15 @@ impl SubmissionStatus {
 #[pymethods]
 impl SubmissionCompleted {
     fn __repr__(&self) -> String {
-        format!("SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?})",
-        self.id.__repr__(), self.chunks_total, self.completed_at, self.metadata)
-
+        format!(
+            "SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?})",
+            self.id.__repr__(),
+            self.chunks_total,
+            self.completed_at,
+            self.metadata
+        )
     }
 }
-
 
 #[pymethods]
 impl SubmissionFailed {
@@ -294,10 +303,11 @@ impl From<Vec<u8>> for VecAsPyBytes {
     }
 }
 
-
-pub async fn run_unless_interrupted<T, E>(future: impl IntoFuture<Output = Result<T, E>>) -> Result<T, E>
+pub async fn run_unless_interrupted<T, E>(
+    future: impl IntoFuture<Output = Result<T, E>>,
+) -> Result<T, E>
 where
-E: From<PyErr>,
+    E: From<PyErr>,
 {
     tokio::select! {
         res = future => res,
@@ -306,15 +316,13 @@ E: From<PyErr>,
 }
 
 pub async fn check_signals_in_background() -> PyErr {
-
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
-        if let Err(err) = Python::with_gil(|py| {py.check_signals()}) {
+        if let Err(err) = Python::with_gil(|py| py.check_signals()) {
             return err;
         }
     }
 }
-
 
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_current_thread()

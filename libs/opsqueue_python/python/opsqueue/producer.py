@@ -1,10 +1,15 @@
 from __future__ import annotations
-from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, Protocol
+from collections.abc import Iterable, Iterator
+from typing import Any
 
 import itertools
 
-from opsqueue.common import SerializationFormat, encode_chunk, decode_chunk, DEFAULT_SERIALIZATION_FORMAT
+from opsqueue.common import (
+    SerializationFormat,
+    encode_chunk,
+    decode_chunk,
+    DEFAULT_SERIALIZATION_FORMAT,
+)
 from . import opsqueue_internal
 from .opsqueue_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
 
@@ -18,9 +23,8 @@ class ProducerClient:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
-        self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)  # type: ignore[name-defined] # noqa: F821
+        self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)
 
-    # TODO: Make serialization format customizable
     def run_submission(
         self,
         ops: Iterable[Any],
@@ -42,7 +46,6 @@ class ProducerClient:
         )
         return _unchunk_iterator(results_iter, serialization_format)
 
-    # TODO: Make serialization format customizable
     def insert_submission(
         self,
         ops: Iterable[Any],
