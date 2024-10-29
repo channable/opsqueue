@@ -18,7 +18,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 // use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
 use crate::{
-    common::{chunk::{self, Chunk, ChunkId}, submission::Submission},
+    common::{chunk::{self, Chunk, ChunkId}, errors::{DBErrorOr, IncorrectUsage, LimitIsZero}, submission::Submission},
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
 };
 
@@ -47,7 +47,7 @@ impl OuterClient {
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
     }
-    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> Result<Vec<(Chunk, Submission)>, anyhow::Error> {
+    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> anyhow::Result<Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
         self.ensure_initialized().await;
         let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").reserve_chunks(max, strategy).await;
         if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
@@ -275,7 +275,7 @@ impl Client {
         &self,
         max: usize,
         strategy: Strategy,
-    ) -> anyhow::Result<Vec<(Chunk, Submission)>> {
+    ) -> anyhow::Result<Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
         let resp = self
             .request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;

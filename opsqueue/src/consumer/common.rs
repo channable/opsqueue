@@ -11,6 +11,7 @@ use crate::common::chunk::{Chunk, ChunkId};
 
 use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
+use crate::common::errors::{DBErrorOr, LimitIsZero, IncorrectUsage};
 
 // TODO: Make configurable
 pub const MAX_MISSABLE_HEARTBEATS: usize = 3;
@@ -33,16 +34,16 @@ pub enum ClientToServerMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerToClientMessage {
     Sync(Envelope<SyncServerToClientResponse>),
     Async(AsyncServerToClientMessage),
 }
 
 /// Responses to earlier ClientToServerMessages
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
-    ChunksReserved(Vec<(Chunk, Submission)>),
+    ChunksReserved(Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>>),
     ChunkCompleted,
     ChunkFailed,
 }

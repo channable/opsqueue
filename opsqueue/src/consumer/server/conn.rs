@@ -117,8 +117,8 @@ impl ConsumerConn {
         use SyncServerToClientResponse::*;
         let maybe_response = match msg.contents {
             WantToReserveChunks { max, strategy } => {
-                let chunks = self.consumer_state.fetch_and_reserve_chunks(strategy, max, &self.tx).await?;
-                Some(ChunksReserved(chunks))
+                let chunks_or_err = self.consumer_state.fetch_and_reserve_chunks(strategy, max, &self.tx).await;
+                Some(ChunksReserved(chunks_or_err))
             },
             CompleteChunk {id, output_content} => {
                 self.consumer_state.complete_chunk(id, output_content).await.map_err(|e| anyhow::Error::from(e))?;

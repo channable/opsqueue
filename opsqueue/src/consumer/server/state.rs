@@ -10,7 +10,7 @@ use crate::{common::{chunk::{Chunk, ChunkId}, submission::Submission}, consumer:
 
 use super::ServerState;
 use either::Either;
-use crate::common::errors::{DBErrorOr, ChunkNotFound, SubmissionNotFound};
+use crate::common::errors::{DBErrorOr, ChunkNotFound, SubmissionNotFound, IncorrectUsage, LimitIsZero};
 
 
 // TODO: We currently clone the arc-like pool and reserver,
@@ -76,7 +76,10 @@ impl ConsumerState {
         strategy: Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
-    ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
+    ) -> Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>> {
+        if limit == 0 {
+            return Err(DBErrorOr::Other(IncorrectUsage(LimitIsZero())));
+        }
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
         let new_reservations = self.reserve_chunks(stream, limit, stale_chunks_notifier)

@@ -1,10 +1,17 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::{chunk::ChunkId, submission::SubmissionId};
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Serialize, Deserialize)]
 #[error("Low-level database error: {0}")]
-pub struct DatabaseError(#[from] pub sqlx::Error);
+pub struct DatabaseError(#[from] pub serde_error::Error);
+
+impl From<sqlx::Error> for DatabaseError {
+    fn from(value: sqlx::Error) -> Self {
+        DatabaseError(serde_error::Error::new(&value))
+    }
+}
 
 #[derive(Error, Debug)]
 #[error("Chunk not found for ID {0:?}")]
@@ -25,7 +32,7 @@ impl<T> From<DatabaseError> for Either<DatabaseError, T> {
 /// to be able to use an error type inside a closure passed to `SqliteConnection.transaction()`.
 /// 
 /// For all intents and purposes, treat it as `Either<DatabaseError, T>`.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Serialize, Deserialize)]
 pub enum DBErrorOr<T> {
     #[error(transparent)]
     Database(#[from] DatabaseError),
@@ -53,3 +60,11 @@ impl<L, R> From<Either<L, R>> for DBErrorOr<Either<L, R>> {
         Self::Other(value)
     }
 }
+
+#[derive(Error, Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[error("You are using Opsqueue incorrectly. Details: {0}")]
+pub struct IncorrectUsage<E>(#[from] pub E);
+
+#[derive(Error, Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[error("You passed a 0 as reservation maximum limit. Please provide a positive integer")]
+pub struct LimitIsZero();
