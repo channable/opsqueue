@@ -121,7 +121,7 @@ impl ConsumerConn {
                 Some(ChunksReserved(chunks))
             },
             CompleteChunk {id, output_content} => {
-                self.consumer_state.complete_chunk(id, output_content).await?;
+                self.consumer_state.complete_chunk(id, output_content).await.map_err(|e| anyhow::Error::from(e))?;
                 Some(ChunkCompleted)
             },
             FailChunk {id, failure} => {
@@ -139,7 +139,8 @@ impl ConsumerConn {
     }
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
+#[error("Error while handling a consumer connection")]
 pub enum ConsumerConnError {
     HeartbeatFailure,
     DbError(sqlx::Error),
@@ -147,6 +148,7 @@ pub enum ConsumerConnError {
     UnparsableServerToClientMessage(ciborium::ser::Error<std::io::Error>),
     UnexpectedWSMessageType(anyhow::Error),
     LowLevelWebsocketError(axum::Error),
+    Other(#[from] anyhow::Error),
 }
 
 impl From<sqlx::Error> for ConsumerConnError {

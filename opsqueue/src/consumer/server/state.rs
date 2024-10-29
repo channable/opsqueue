@@ -9,6 +9,8 @@ use crate::consumer::strategy::Strategy;
 use crate::{common::{chunk::{Chunk, ChunkId}, submission::Submission}, consumer::reserver::Reserver};
 
 use super::ServerState;
+use either::Either;
+use crate::common::errors::{DBErrorOr, ChunkNotFound, SubmissionNotFound};
 
 
 // TODO: We currently clone the arc-like pool and reserver,
@@ -90,7 +92,7 @@ impl ConsumerState {
         &mut self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), DBErrorOr<Either<SubmissionNotFound, ChunkNotFound>>> {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved

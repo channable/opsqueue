@@ -8,6 +8,8 @@ use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, Sqli
 #[cfg(feature = "server-logic")]
 use super::chunk::ChunkIndex;
 use super::chunk::{self, Chunk};
+use super::errors::{DatabaseError, SubmissionNotFound, DBErrorOr};
+use either::Either;
 use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
@@ -173,7 +175,7 @@ impl Submission {
 pub async fn insert_submission_raw(
     submission: Submission,
     conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<()> {
+) -> Result<(), DatabaseError> {
     sqlx::query!(
         "
         INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata)
@@ -196,11 +198,12 @@ pub async fn insert_submission<Iter>(
     submission: Submission,
     chunks: Iter,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<()>
+) -> Result<(), DatabaseError>
 where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
+
     conn.transaction(|tx| Box::pin(async move {
         insert_submission_raw(submission, &mut **tx).await?;
         super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
@@ -215,7 +218,7 @@ pub async fn insert_submission_from_chunks(
     chunks_contents: Vec<chunk::Content>,
     metadata: Option<Metadata>,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<SubmissionId> {
+) -> Result<SubmissionId, DatabaseError> {
     let submission_id = Submission::generate_id();
     let submission = Submission {
         id: submission_id,
@@ -237,11 +240,13 @@ pub async fn insert_submission_from_chunks(
 pub async fn get_submission(
     id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<Submission> {
-    query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
+) -> Result<Submission, DBErrorOr<SubmissionNotFound>> {
+    let submission = query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
         .fetch_one(conn)
-        .await
+        .await?;
+    Ok(submission)
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatusTag {
@@ -262,7 +267,7 @@ pub enum SubmissionStatus {
 pub async fn submission_status(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
-) -> sqlx::Result<Option<SubmissionStatus>> {
+) -> Result<Option<SubmissionStatus>, DatabaseError> {
     let maybe_row = query!("
         SELECT 0 as status, id, prefix, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
         UNION ALL
@@ -276,7 +281,7 @@ pub async fn submission_status(
     ).fetch_one(conn).await;
     match maybe_row {
         Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(other) => Err(other),
+        Err(other) => Err(other.into()),
         Ok(row) => match row.status {
             // TODO: Cleaner error handling than unwrap_or_default
             0 => Ok(Some(SubmissionStatus::InProgress(Submission {
@@ -304,7 +309,7 @@ pub async fn submission_status(
             idx => Err(sqlx::Error::ColumnIndexOutOfBounds {
                 index: 0,
                 len: idx as usize,
-            }),
+            }.into()),
         },
     }
 }
@@ -315,7 +320,7 @@ pub async fn submission_status(
 pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<bool> {
+) -> Result<bool, DBErrorOr<SubmissionNotFound>> {
     use sqlx::Connection;
     conn.transaction(|tx| Box::pin(async move {
         let submission = get_submission(id, &mut **tx).await?;
@@ -335,7 +340,7 @@ pub async fn maybe_complete_submission(
 pub async fn complete_submission_raw(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
-) -> sqlx::Result<()> {
+) -> Result<(), DBErrorOr<SubmissionNotFound>> {
     let now = chrono::prelude::Utc::now();
     query!(
         "

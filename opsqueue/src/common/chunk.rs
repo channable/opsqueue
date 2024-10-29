@@ -10,6 +10,8 @@ use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 
 use super::submission::SubmissionId;
+use super::errors::{DBErrorOr, SubmissionNotFound, ChunkNotFound};
+use either::Either;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
@@ -117,10 +119,10 @@ pub async fn complete_chunk(
     full_chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<()> {
+) -> Result<(), DBErrorOr<Either<SubmissionNotFound, ChunkNotFound>>> {
     conn.transaction(|tx| Box::pin(async move {
         complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
-        super::submission::maybe_complete_submission(full_chunk_id.0, tx).await?;
+        super::submission::maybe_complete_submission(full_chunk_id.0, tx).await.map_err(|e| e.map_other(Either::Left))?;
         Ok(())
     })).await
 }
