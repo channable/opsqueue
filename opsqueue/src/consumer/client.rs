@@ -16,9 +16,10 @@ use tokio::{
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::{CancellationToken, DropGuard};
 // use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
+use either::Either;
 
 use crate::{
-    common::{chunk::{self, Chunk, ChunkId}, errors::{DBErrorOr, IncorrectUsage, LimitIsZero}, submission::Submission},
+    common::{chunk::{self, Chunk, ChunkId}, errors::{DBErrorOr, IncorrectUsage, LimitIsZero, UnexpectedOpsqueueConsumerServerResponse}, submission::Submission},
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
 };
 
@@ -73,7 +74,7 @@ impl OuterClient {
         &self,
         id: ChunkId,
         failure: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>> {
         self.ensure_initialized().await;
         let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").fail_chunk(id, failure).await;
         if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
@@ -303,13 +304,13 @@ impl Client {
         &self,
         id: ChunkId,
         failure: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>> {
         let resp = self
             .request(ClientToServerMessage::FailChunk { id, failure })
-            .await?;
+            .await.map_err(Either::Right)?;
         match resp {
             SyncServerToClientResponse::ChunkFailed => Ok(()),
-            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+            other => Err(Either::Left(UnexpectedOpsqueueConsumerServerResponse(other))),
         }
     }
 }

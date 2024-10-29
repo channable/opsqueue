@@ -1,12 +1,11 @@
-use std::{error::Error, future::IntoFuture};
+use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
 use either::Either;
 use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::common::errors::SubmissionNotFound;
-use opsqueue::{common::errors::{DBErrorOr, IncorrectUsage, LimitIsZero}, object_store::{ChunkType, ObjectStoreClient}};
-use pyo3::{create_exception, exceptions::{PyException, PyTypeError}, prelude::*};
+use opsqueue::{common::errors::{DBErrorOr, IncorrectUsage, LimitIsZero, UnexpectedOpsqueueConsumerServerResponse}, object_store::{ChunkType, ObjectStoreClient}};
+use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
 use opsqueue::consumer::strategy;
@@ -87,7 +86,7 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> PyResult<()> {
+    ) -> CPyResult<(), Either<PyErr, Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>>>  {
         py.allow_threads(|| {
             self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)
         })
@@ -239,10 +238,11 @@ impl ConsumerClient {
         _submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> PyResult<()> {
+    ) -> CPyResult<(), Either<PyErr, Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>>> {
         let chunk_id = (submission_id.into(), chunk_index.into());
-        self.block_unless_interrupted(self.client.fail_chunk(chunk_id, failure))
-            .map_err(maybe_wrap_error)
+        self.block_unless_interrupted(async {
+            self.client.fail_chunk(chunk_id, failure).await.map_err(Either::Right).map_err(CError)
+    })
     }
 
     async fn reserve_and_retrieve_chunks(
@@ -250,7 +250,6 @@ impl ConsumerClient {
         max: usize,
         strategy: opsqueue::consumer::strategy::Strategy,
     ) -> anyhow::Result<Result<Vec<Chunk>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
-        // TODO: Forward error handling here
         let chunks = self.client.reserve_chunks(max, strategy).await?;
         match chunks {
             Err(e) => Ok(Err(e).into()),

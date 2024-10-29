@@ -1,12 +1,13 @@
 use std::error::Error;
 
 use either::Either;
-use opsqueue::common::errors::{ChunkNotFound, DBErrorOr, IncorrectUsage, SubmissionNotFound};
+use opsqueue::common::errors::{ChunkNotFound, DBErrorOr, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse};
 use pyo3::{create_exception, IntoPy, PyObject};
 use pyo3::exceptions::{PyException, PyTypeError};
 use pyo3::PyErr;
 
 create_exception!(opsqueue_internal, DatabaseError, PyException);
+create_exception!(opsqueue_internal, UnexpectedOpsqueueConsumerServerResponseError, PyException);
 create_exception!(opsqueue_internal, IncorrectUsageError, PyTypeError);
 create_exception!(opsqueue_internal, SubmissionNotFoundError, IncorrectUsageError);
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
@@ -61,6 +62,20 @@ impl From<CError<SubmissionNotFound>> for PyErr {
 impl From<CError<ChunkNotFound>> for PyErr {
     fn from(value: CError<ChunkNotFound>) -> Self {
         ChunkNotFoundError::new_err(value.0.to_string()).into()
+    }
+}
+
+// TODO: Only temporary. We want to get rid of all usage of anyhow
+// in the boundary to PyO3
+impl From<CError<anyhow::Error>> for PyErr {
+    fn from(value: CError<anyhow::Error>) -> Self {
+        PyException::new_err(value.0.to_string()).into()
+    }
+}
+
+impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
+    fn from(value: CError<UnexpectedOpsqueueConsumerServerResponse>) -> Self {
+        UnexpectedOpsqueueConsumerServerResponseError::new_err(value.0.to_string()).into()
     }
 }
 
