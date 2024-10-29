@@ -357,7 +357,7 @@ mod tests {
         let client = Client::new(ws_uri).await.unwrap();
         yield_now().await;
 
-        let chunks = client.reserve_chunks(3, Strategy::Oldest).await.unwrap();
+        let chunks = client.reserve_chunks(3, Strategy::Oldest).await.expect("No network failure").expect("Correct usage");
         yield_now().await;
 
         assert_eq!(

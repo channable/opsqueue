@@ -1,4 +1,5 @@
 pub mod common;
+pub mod errors;
 pub mod consumer;
 pub mod producer;
 

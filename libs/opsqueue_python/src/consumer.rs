@@ -1,19 +1,23 @@
-use std::future::IntoFuture;
+use std::{error::Error, future::IntoFuture};
 use std::sync::Arc;
 use std::time::Duration;
 
+use either::Either;
 use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::object_store::{ChunkType, ObjectStoreClient};
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use opsqueue::common::errors::SubmissionNotFound;
+use opsqueue::{common::errors::{DBErrorOr, IncorrectUsage, LimitIsZero}, object_store::{ChunkType, ObjectStoreClient}};
+use pyo3::{create_exception, exceptions::{PyException, PyTypeError}, prelude::*};
 
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
 use opsqueue::consumer::strategy;
 
 use crate::common::{run_unless_interrupted, start_runtime};
+use crate::errors::*;
 
 use super::common::{Chunk, ChunkIndex, Strategy, SubmissionId};
 
 create_exception!(opsqueue_internal, ConsumerClientError, PyException);
+
 
 #[pyclass]
 #[derive(Debug)]
@@ -52,7 +56,7 @@ impl ConsumerClient {
         py: Python<'_>,
         max: usize,
         strategy: Strategy,
-    ) -> PyResult<Vec<Chunk>> {
+    ) -> CPyResult<Vec<Chunk>, Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
         py.allow_threads(|| self.reserve_chunks_gilless(max, strategy))
     }
 
@@ -89,11 +93,11 @@ impl ConsumerClient {
         })
     }
 
-    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> PyErr {
+    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> CError<Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
         if !fun.is_callable() {
             return pyo3::exceptions::PyTypeError::new_err(
                 "Expected `fun` parameter to be __call__-able",
-            );
+            ).into();
         }
         // NOTE: We take care here to unlock the GIL for most of the loop,
         // and only re-lock it for the duration of each call to `fun`.
@@ -101,7 +105,7 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
-                let chunk_outcome: PyResult<()> = (|| {
+                let chunk_outcome: CPyResult<(), Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> = (|| {
                     let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
                     log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
@@ -126,7 +130,7 @@ impl ConsumerClient {
                                 // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
                                 // otherwise, continue with next chunk
                                 if !Python::with_gil(|py| {failure.is_instance_of::<PyException>(py)}) {
-                                    return Err(failure)
+                                    return Err(failure.into())
                                 }
                             }
                         }
@@ -145,12 +149,17 @@ impl ConsumerClient {
                 match chunk_outcome {
                     Ok(()) => {}
                     // In essence we 'catch `Exception` (but _not_ `BaseException` here)
-                    Err(e) if Python::with_gil(|py| {e.is_instance_of::<PyException>(py)}) => {
-                        log::warn!("Opsqueue consumer encountered an error, but will continue: {}", e);
+                    Err(CError(Either::Left(py_err))) if Python::with_gil(|py| {py_err.is_instance_of::<PyException>(py)}) => {
+                        log::warn!("Opsqueue consumer encountered a Python exception, but will continue: {}", py_err);
                     }
-                    Err(e) => {
+                    Err(CError(Either::Left(e))) => {
+                        // A Python exception that doesn't inherit from `Exception` was raised.
+                        // Since these are used for cleanup on exit mostly, we quit when they happen.
                         log::info!("Opsqueue consumer closing because of exception: {e:?}");
-                        return e
+                        return CError(Either::Left(e))
+                    }
+                    Err(CError(Either::Right(err))) => {
+                        log::warn!("Opsqueue consumer encountered a Rust error, but will continue: {}", err);
                     }
                 }
             }
@@ -181,19 +190,20 @@ impl ConsumerClient {
         })
     }
 
-    fn reserve_chunks_gilless(&self, max: usize, strategy: Strategy) -> PyResult<Vec<Chunk>> {
+    fn reserve_chunks_gilless(&self, max: usize, strategy: Strategy) -> CPyResult<Vec<Chunk>, Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
         let strategy: strategy::Strategy = strategy.into();
         loop {
-            let res: Vec<Chunk> = self
+            let res = self
                 .block_unless_interrupted(self.reserve_and_retrieve_chunks(max, strategy.clone()))
                 .map_err(maybe_wrap_error)?;
-            if !res.is_empty() {
-                return Ok(res);
+            match res {
+                Err(e) => return Err(Either::Right(e).into()),
+                Ok(chunks) if chunks.is_empty() => self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?,
+                Ok(chunks) => return Ok(chunks),
             }
-            self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?;
         }
     }
 
@@ -239,12 +249,18 @@ impl ConsumerClient {
         &self,
         max: usize,
         strategy: opsqueue::consumer::strategy::Strategy,
-    ) -> anyhow::Result<Vec<Chunk>> {
+    ) -> anyhow::Result<Result<Vec<Chunk>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+        // TODO: Forward error handling here
         let chunks = self.client.reserve_chunks(max, strategy).await?;
-        let elems = stream::iter(chunks)
-            .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
-            .try_collect()
-            .await?;
-        Ok(elems)
+        match chunks {
+            Err(e) => Ok(Err(e).into()),
+            Ok(chunks) => {
+                let elems = stream::iter(chunks)
+                    .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
+                    .try_collect()
+                    .await?;
+                Ok(Ok(elems))
+            }
+        }
     }
 }
