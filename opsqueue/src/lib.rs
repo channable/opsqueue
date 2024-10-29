@@ -1,20 +1,31 @@
+pub mod common;
+pub mod consumer;
+pub mod producer;
+
+#[cfg(feature = "client-logic")]
+pub mod object_store;
+
+#[cfg(feature = "server-logic")]
 use std::{sync::{atomic::AtomicBool, Arc}, time::Duration};
 
+#[cfg(feature = "server-logic")]
 use axum::{routing::get, Router};
+#[cfg(feature = "server-logic")]
 use http::StatusCode;
+
+#[cfg(feature = "server-logic")]
 use sqlx::{
     migrate::MigrateDatabase,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
     Connection, Sqlite, SqliteConnection, SqlitePool,
 };
+#[cfg(feature = "server-logic")]
 use tokio_util::sync::CancellationToken;
+#[cfg(feature = "server-logic")]
 use tokio::select;
 
-pub mod common;
-pub mod consumer;
-pub mod producer;
-pub mod object_store;
 
+#[cfg(feature = "server-logic")]
 pub async fn serve_producer_and_consumer(server_addr: &str, pool: SqlitePool, reservation_expiration: Duration, cancellation_token: CancellationToken, app_healthy_flag: Arc<AtomicBool>) {
     let router = build_router(pool, reservation_expiration, cancellation_token.clone(), app_healthy_flag);
     let listener = tokio::net::TcpListener::bind(server_addr).await.expect("Failed to bind to web server address");
@@ -23,6 +34,7 @@ pub async fn serve_producer_and_consumer(server_addr: &str, pool: SqlitePool, re
     res.expect("Failed to start web server")
 }
 
+#[cfg(feature = "server-logic")]
 pub fn build_router(pool: SqlitePool, reservation_expiration: Duration, cancellation_token: CancellationToken, app_healthy_flag: Arc<AtomicBool>) -> Router<()>{
     let consumer_routes = consumer::server::ServerState::new(pool.clone(), cancellation_token.clone(), reservation_expiration).build_router();
     let producer_routes = producer::server::ServerState::new(pool).build_router();
@@ -45,6 +57,7 @@ pub fn build_router(pool: SqlitePool, reservation_expiration: Duration, cancella
 
 
 /// Used as a very simple health check by consul.
+#[cfg(feature = "server-logic")]
 async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
     async {
         if app_heatlhy_flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -55,6 +68,7 @@ async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
     }.await
 }
 
+#[cfg(feature = "server-logic")]
 pub async fn app_watchdog(app_healthy_flag: Arc<AtomicBool>, pool: SqlitePool, cancellation_token: CancellationToken) {
     loop {
         // For now this is just a single check, but in the future
@@ -75,6 +89,7 @@ pub async fn app_watchdog(app_healthy_flag: Arc<AtomicBool>, pool: SqlitePool, c
 ///
 /// This handles the case where for whatever reason some other thing
 /// holds the write lock for the DB for a (too) long time.
+#[cfg(feature = "server-logic")]
 async fn is_db_healthy(pool: &SqlitePool) -> bool {
     async move {
         let mut tx = pool.begin().await?;
@@ -84,6 +99,7 @@ async fn is_db_healthy(pool: &SqlitePool) -> bool {
 }
 
 
+#[cfg(feature = "server-logic")]
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(database_filename)
@@ -91,18 +107,21 @@ pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
         .synchronous(SqliteSynchronous::Normal) // Full is not needed because we use WAL mode
 }
 
+#[cfg(feature = "server-logic")]
 pub async fn db_connect_pool(database_filename: &str) -> SqlitePool {
     SqlitePool::connect_with(db_options(database_filename))
         .await
         .expect("Could not connect to sqlite DB")
 }
 
+#[cfg(feature = "server-logic")]
 pub async fn db_connect_single(database_filename: &str) -> SqliteConnection {
     SqliteConnection::connect_with(&db_options(database_filename))
         .await
         .expect("Could not connect to sqlite DB")
 }
 
+#[cfg(feature = "server-logic")]
 pub async fn ensure_db_exists(database_filename: &str) {
     if !Sqlite::database_exists(database_filename)
         .await
@@ -118,6 +137,7 @@ pub async fn ensure_db_exists(database_filename: &str) {
     }
 }
 
+#[cfg(feature = "server-logic")]
 pub async fn ensure_db_migrated(db: &SqlitePool) {
     tracing::info!("Migrating backing DB");
     sqlx::migrate!("./migrations")

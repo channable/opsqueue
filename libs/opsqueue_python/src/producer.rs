@@ -12,7 +12,7 @@ use opsqueue::producer::client::Client as ActualClient;
 use opsqueue::{
     common::{chunk, submission},
     object_store::ChunkType,
-    producer::server::ChunkContents,
+    producer::common::ChunkContents,
 };
 use tokio::sync::Mutex;
 
@@ -107,7 +107,7 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
     ) -> PyResult<SubmissionId> {
         py.allow_threads(|| {
-            let submission = opsqueue::producer::server::InsertSubmission {
+            let submission = opsqueue::producer::common::InsertSubmission {
                 chunk_contents: ChunkContents::Direct {
                     contents: chunk_contents,
                 },
@@ -144,7 +144,7 @@ impl ProducerClient {
             })?;
 
             self.block_unless_interrupted(async move {
-                let submission = opsqueue::producer::server::InsertSubmission {
+                let submission = opsqueue::producer::common::InsertSubmission {
                     chunk_contents: ChunkContents::SeeObjectStorage {
                         prefix,
                         count: chunk_count,

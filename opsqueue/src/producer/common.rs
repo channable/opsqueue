@@ -1,0 +1,26 @@
+use crate::common::{chunk, submission::{Metadata, SubmissionId}};
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct InsertSubmission {
+    pub chunk_contents: ChunkContents,
+    pub metadata: Option<Metadata>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum ChunkContents {
+    /// Use the `prefix` + the indexes 0..count
+    /// to recover the contents of a chunk in the consumer.
+    ///
+    /// This is what you should use in production.
+    SeeObjectStorage{prefix: String, count: i64},
+    /// Directly pass the contents of each chunk in Opsqueue itself.
+    ///
+    /// NOTE: This is useful for small tests/examples,
+    /// but significantly less scalable than using `SeeObjectStorage`.
+    Direct{contents: Vec<chunk::Content>},
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct InsertSubmissionResponse {
+    pub id: SubmissionId,
+}

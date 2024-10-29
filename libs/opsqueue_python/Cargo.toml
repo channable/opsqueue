@@ -10,7 +10,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Opsqueue itself:
-opsqueue = { path = "../../opsqueue/"}
+# NOTE: We compile without the default `sqlx` feature, reducing the amount of dependencies
+opsqueue = {path = "../../opsqueue/", default-features = false, features = ["client-logic"] }
 
 # General-purpose datatypes:
 uuid = {version = "1.11.0", features = [
