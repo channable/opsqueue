@@ -153,7 +153,7 @@ impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
 
 impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
-        let submission_id = value.0.0;
+        let submission_id = value.0 .0;
         SubmissionNotFoundError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
             .into()
     }
@@ -161,9 +161,12 @@ impl From<CError<SubmissionNotFound>> for PyErr {
 
 impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
     fn from(value: CError<crate::producer::SubmissionNotCompletedYetError>) -> Self {
-        let submission_id = value.0.0;
-        SubmissionNotCompletedYetError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
-            .into()
+        let submission_id = value.0 .0;
+        SubmissionNotCompletedYetError::new_err((
+            value.0.to_string(),
+            SubmissionId::from(submission_id),
+        ))
+        .into()
     }
 }
 
