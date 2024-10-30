@@ -187,6 +187,7 @@ impl ProducerClient {
         py: Python<'_>,
         id: SubmissionId,
     ) -> PyResult<PyChunksIter> {
+        // TODO: Use CPyResult instead
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 match self.maybe_stream_completed_submission(id).await? {
