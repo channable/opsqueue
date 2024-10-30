@@ -71,10 +71,10 @@ class ConsumerClient:
         Runs the given `chunk_callback` for each chunk the consumer can reserve in a loop.
         This expects encoding/decoding of the chunk contents from/to bytes to be done manually by you.
 
-        This function blocks 'forever', except when 'special' exceptions like KeyboardInterrupt are raised.
+        This function blocks 'forever', except when 'fatal' exceptions like KeyboardInterrupt are raised.
         Specifically, normal exceptions (inheriting from `Exception`) will be caught and cause
         `fail_chunk` to be called, with the loop afterwards continuing.
-        Exceptions inheriting only from `BaseException` will cause the loop to terminate.
+        Only Exceptions not inheriting from `Exception` will cause the loop to terminate.
         """
         self.inner.run_per_chunk(strategy, chunk_callback)
 
@@ -88,6 +88,10 @@ class ConsumerClient:
         using `complete_chunk` resp. `fail_chunk`.
 
         If your code crashes, all reserved chunks will automatically be marked as failed.
+
+        Raises:
+        - IncorrectUsageError when the `max` parameter is not a positive integer.
+        - InternalConsumerClientError if there is a low-level internal error
         """
         return self.inner.reserve_chunks(max, strategy)  # type: ignore[no-any-return]
 
@@ -104,6 +108,9 @@ class ConsumerClient:
 
         The submission_id, submission_prefix and chunk_index can be found
         on the `Chunk` type originally received as part of `reserve_chunks`.
+
+        Raises:
+        - InternalConsumerClientError if there is a low-level internal error
         """
         self.inner.complete_chunk(
             submission_id, submission_prefix, chunk_index, output_content
@@ -125,5 +132,8 @@ class ConsumerClient:
 
         The submission_id, submission_prefix and chunk_index can be found
         on the `Chunk` type originally received as part of `reserve_chunks`.
+
+        Raises:
+        - InternalConsumerClientError if there is a low-level internal error
         """
         self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)
