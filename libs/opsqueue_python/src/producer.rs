@@ -10,7 +10,7 @@ use pyo3::{
 use futures::{Stream, StreamExt, TryStreamExt};
 use opsqueue::{
     common::errors::Either,
-    object_store::ChunksStorageError,
+    object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
 use opsqueue::{
@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes},
-    errors::{CError, CPyResult},
+    errors::{CError, CPyResult, FatalPythonException},
 };
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
@@ -57,11 +57,10 @@ impl ProducerClient {
     ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
     ///   Note that other GCS settings are read from environment variables, using the steps outlined here: https://cloud.google.com/docs/authentication/application-default-credentials.
     #[new]
-    pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
+    pub fn new(address: &str, object_store_url: &str) -> CPyResult<Self, NewObjectStoreClientError> {
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
-        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)
-            .map_err(maybe_wrap_error)?;
+        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)?;
         Ok(ProducerClient {
             producer_client,
             object_store_client,
@@ -110,7 +109,7 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
-    ) -> CPyResult<SubmissionId, Either<PyErr, InternalProducerClientError>> {
+    ) -> CPyResult<SubmissionId, Either<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
                 chunk_contents: ChunkContents::Direct {
@@ -136,7 +135,7 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
     ) -> CPyResult<
         SubmissionId,
-        Either<PyErr, Either<ChunksStorageError, InternalProducerClientError>>,
+        Either<FatalPythonException, Either<ChunksStorageError, InternalProducerClientError>>,
     > {
         // This function is split into two parts.
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
@@ -221,20 +220,10 @@ impl ProducerClient {
         future: impl IntoFuture<Output = Result<T, E>>,
     ) -> Result<T, E>
     where
-        E: From<PyErr>,
+        E: From<FatalPythonException>,
     {
         self.runtime.block_on(run_unless_interrupted(future))
     }
-
-    // fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E>
-    // where
-    //     E: From<PyErr>
-    // {
-    //     self.block_unless_interrupted(async {
-    //         tokio::time::sleep(duration).await;
-    //         Ok(())
-    //     })
-    // }
 
     async fn maybe_stream_completed_submission(
         &self,

@@ -15,6 +15,7 @@ create_exception!(
     IncorrectUsageError
 );
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
+create_exception!(opsqueue_internal, NewObjectStoreClientError, IncorrectUsageError);
 
 create_exception!(opsqueue_internal, OpsqueueInternalError, PyException);
 create_exception!(
@@ -65,26 +66,29 @@ impl<T> From<T> for CError<T> {
 /// The 'C' stands for 'Convertible'.
 pub type CPyResult<T, E> = Result<T, CError<E>>;
 
-// impl<T> From<CError<DBErrorOr<T>>> for PyErr
-// where
-//   CError<T>: Into<PyErr>,
-// {
-//     fn from(value: CError<DBErrorOr<T>>) -> Self {
-//         match value.0 {
-//             DBErrorOr::Database(e) => DatabaseError::new_err(e.to_string()).into(),
-//             DBErrorOr::Other(e) => CError(e).into(),
-//         }
-//     }
-// }
-
-/// Indicates a PyErr which is _not_ a subclass of `PyException`
-/// but only a subclass of `PyBaseException`.
+/// Indicates a 'fatal' PyErr: Any Python exception which is _not_ a subclass of `PyException`.
+/// 
+/// These are known as 'fatal' exceptions in Python.
+/// c.f. https://docs.python.org/3/tutorial/errors.html#tut-userexceptions
 ///
-/// We usually don't consume these errors but propagate them,
-/// allowing things like KeyboardInterrupt to do proper cleanup and exit.
+/// We don't consume/wrap these errors but propagate them,
+/// allowing things like KeyboardInterrupt, SystemExit or MemoryError, 
+/// to trigger cleanup-and-exit.
 #[derive(thiserror::Error, Debug)]
-#[error("Special Python exception: {0}")]
-pub struct BaseExceptionIsh(#[from] pub PyErr);
+#[error("Fatal Python exception: {0}")]
+pub struct FatalPythonException(#[from] pub PyErr);
+
+impl From<CError<FatalPythonException>> for PyErr {
+    fn from(value: CError<FatalPythonException>) -> Self {
+        value.0.0
+    }
+}
+
+impl From<FatalPythonException> for PyErr {
+    fn from(value: FatalPythonException) -> Self {
+        value.0
+    }
+}
 
 impl From<CError<opsqueue::common::errors::DatabaseError>> for PyErr {
     fn from(value: CError<opsqueue::common::errors::DatabaseError>) -> Self {
@@ -134,6 +138,12 @@ impl From<CError<ChunkNotFound>> for PyErr {
     }
 }
 
+impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
+    fn from(value: CError<opsqueue::object_store::NewObjectStoreClientError>) -> Self {
+        NewObjectStoreClientError::new_err(value.0.to_string()).into()
+    }
+}
+
 // TODO: Only temporary. We want to get rid of all usage of anyhow
 // in the boundary to PyO3
 impl From<CError<anyhow::Error>> for PyErr {
@@ -148,8 +158,14 @@ impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
     }
 }
 
-impl<T> From<PyErr> for CError<Either<PyErr, T>> {
+impl<T> From<PyErr> for CError<Either<FatalPythonException, T>> {
     fn from(value: PyErr) -> Self {
+        CError(Either::Left(FatalPythonException(value)))
+    }
+}
+
+impl<T> From<FatalPythonException> for CError<Either<FatalPythonException, T>> {
+    fn from(value: FatalPythonException) -> Self {
         CError(Either::Left(value))
     }
 }
