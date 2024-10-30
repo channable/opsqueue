@@ -5,6 +5,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::DynObjectStore;
 use reqwest::Url;
+use ux_serde::u63;
 
 /// A client for interacting with an object store.
 ///
@@ -108,10 +109,10 @@ impl ObjectStoreClient {
         submission_prefix: &str,
         chunk_type: ChunkType,
         chunk_contents: impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error>,
-    ) -> Result<i64, ChunksStorageError> {
+    ) -> Result<u63, ChunksStorageError> {
         use ChunksStorageError::*;
         let chunk_count = chunk_contents
-            .try_fold(0, |chunk_index, chunk_content| async move {
+            .try_fold(u63::new(0), |chunk_index, chunk_content| async move {
                 self.store_chunk(
                     submission_prefix,
                     chunk_index.into(),
@@ -123,7 +124,7 @@ impl ObjectStoreClient {
                     "Upladed chunk {}",
                     self.chunk_path(submission_prefix, chunk_index.into(), chunk_type)
                 );
-                Ok(chunk_index + 1)
+                Ok(chunk_index + u63::new(1))
             })
             .await
             .map_err(|e| ChunkContentsEvalError {

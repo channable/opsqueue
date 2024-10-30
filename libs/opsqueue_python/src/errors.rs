@@ -4,9 +4,12 @@ use opsqueue::common::errors::{
     ChunkNotFound, Either, IncorrectUsage, SubmissionNotFound,
     UnexpectedOpsqueueConsumerServerResponse,
 };
+use opsqueue::common::NonZeroIsZero;
 use pyo3::exceptions::{PyException, PyTypeError};
 use pyo3::PyErr;
 use pyo3::{create_exception, IntoPy, PyObject};
+
+use crate::common::{ChunkIndex, SubmissionId};
 
 create_exception!(opsqueue_internal, IncorrectUsageError, PyTypeError);
 create_exception!(
@@ -15,7 +18,21 @@ create_exception!(
     IncorrectUsageError
 );
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
-create_exception!(opsqueue_internal, NewObjectStoreClientError, IncorrectUsageError);
+create_exception!(
+    opsqueue_internal,
+    InvalidChunkIndexError,
+    IncorrectUsageError
+);
+create_exception!(
+    opsqueue_internal,
+    ChunkCountIsZeroError,
+    IncorrectUsageError
+);
+create_exception!(
+    opsqueue_internal,
+    NewObjectStoreClientError,
+    IncorrectUsageError
+);
 
 create_exception!(opsqueue_internal, OpsqueueInternalError, PyException);
 create_exception!(
@@ -39,9 +56,6 @@ create_exception!(
     InternalProducerClientError,
     OpsqueueInternalError
 );
-
-// TODO: remove?
-create_exception!(opsqueue_internal, DatabaseError, PyException);
 
 /// A newtype so we can write From/Into implementations turning various error types
 /// into PyErr, including those defined in other crates.
@@ -67,12 +81,12 @@ impl<T> From<T> for CError<T> {
 pub type CPyResult<T, E> = Result<T, CError<E>>;
 
 /// Indicates a 'fatal' PyErr: Any Python exception which is _not_ a subclass of `PyException`.
-/// 
+///
 /// These are known as 'fatal' exceptions in Python.
 /// c.f. https://docs.python.org/3/tutorial/errors.html#tut-userexceptions
 ///
 /// We don't consume/wrap these errors but propagate them,
-/// allowing things like KeyboardInterrupt, SystemExit or MemoryError, 
+/// allowing things like KeyboardInterrupt, SystemExit or MemoryError,
 /// to trigger cleanup-and-exit.
 #[derive(thiserror::Error, Debug)]
 #[error("Fatal Python exception: {0}")]
@@ -80,7 +94,7 @@ pub struct FatalPythonException(#[from] pub PyErr);
 
 impl From<CError<FatalPythonException>> for PyErr {
     fn from(value: CError<FatalPythonException>) -> Self {
-        value.0.0
+        value.0 .0
     }
 }
 
@@ -90,9 +104,9 @@ impl From<FatalPythonException> for PyErr {
     }
 }
 
-impl From<CError<opsqueue::common::errors::DatabaseError>> for PyErr {
-    fn from(value: CError<opsqueue::common::errors::DatabaseError>) -> Self {
-        DatabaseError::new_err(value.0.to_string()).into()
+impl From<CError<opsqueue::common::chunk::InvalidChunkIndexError>> for PyErr {
+    fn from(value: CError<opsqueue::common::chunk::InvalidChunkIndexError>) -> Self {
+        InvalidChunkIndexError::new_err((value.0.to_string(), value.0 .0)).into()
     }
 }
 
@@ -120,6 +134,12 @@ impl From<CError<opsqueue::object_store::ChunksStorageError>> for PyErr {
     }
 }
 
+impl From<CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>> for PyErr {
+    fn from(value: CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>) -> Self {
+        ChunkCountIsZeroError::new_err(value.0.to_string()).into()
+    }
+}
+
 impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
     fn from(value: CError<IncorrectUsage<T>>) -> Self {
         IncorrectUsageError::new_err(value.0.to_string()).into()
@@ -128,13 +148,23 @@ impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
 
 impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
-        SubmissionNotFoundError::new_err(value.0.to_string()).into()
+        let submission_id = value.0 .0;
+        SubmissionNotFoundError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
+            .into()
     }
 }
 
 impl From<CError<ChunkNotFound>> for PyErr {
     fn from(value: CError<ChunkNotFound>) -> Self {
-        ChunkNotFoundError::new_err(value.0.to_string()).into()
+        let (submission_id, chunk_index) = value.0 .0;
+        ChunkNotFoundError::new_err((
+            value.0.to_string(),
+            (
+                SubmissionId::from(submission_id),
+                ChunkIndex::from(chunk_index),
+            ),
+        ))
+        .into()
     }
 }
 

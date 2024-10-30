@@ -3,14 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use opsqueue::common::chunk::InvalidChunkIndexError;
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use pyo3::prelude::*;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::strategy;
+use ux_serde::u63;
 
-use crate::errors::FatalPythonException;
+use crate::errors::{CError, CPyResult, FatalPythonException};
 
 // In development, check 10 times per second so we respond early to Ctrl+C
 // But in production, only once per second so we don't fight as much over the GIL
@@ -58,8 +60,9 @@ pub struct ChunkIndex {
 #[pymethods]
 impl ChunkIndex {
     #[new]
-    fn new(id: i64) -> Self {
-        Self { id }
+    fn new(id: i64) -> CPyResult<Self, InvalidChunkIndexError> {
+        let _is_inner_valid = opsqueue::common::chunk::ChunkIndex::new(id).map_err(CError)?;
+        Ok(ChunkIndex { id })
     }
 
     fn __repr__(&self) -> String {
@@ -75,7 +78,15 @@ impl From<ChunkIndex> for chunk::ChunkIndex {
 
 impl From<chunk::ChunkIndex> for ChunkIndex {
     fn from(val: chunk::ChunkIndex) -> Self {
-        ChunkIndex { id: val.into() }
+        ChunkIndex::from(u63::from(val))
+    }
+}
+
+impl From<u63> for ChunkIndex {
+    fn from(value: u63) -> Self {
+        ChunkIndex {
+            id: u64::from(value) as i64,
+        }
     }
 }
 

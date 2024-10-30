@@ -9,14 +9,14 @@ use pyo3::{
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::errors::Either,
-    object_store::{ChunksStorageError, NewObjectStoreClientError},
-    producer::client::{Client as ActualClient, InternalProducerClientError},
-};
-use opsqueue::{
     common::{chunk, submission},
     object_store::ChunkType,
     producer::common::ChunkContents,
+};
+use opsqueue::{
+    common::{errors::Either, NonZero, NonZeroIsZero},
+    object_store::{ChunksStorageError, NewObjectStoreClientError},
+    producer::client::{Client as ActualClient, InternalProducerClientError},
 };
 use tokio::sync::Mutex;
 
@@ -57,7 +57,10 @@ impl ProducerClient {
     ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
     ///   Note that other GCS settings are read from environment variables, using the steps outlined here: https://cloud.google.com/docs/authentication/application-default-credentials.
     #[new]
-    pub fn new(address: &str, object_store_url: &str) -> CPyResult<Self, NewObjectStoreClientError> {
+    pub fn new(
+        address: &str,
+        object_store_url: &str,
+    ) -> CPyResult<Self, NewObjectStoreClientError> {
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
         let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)?;
@@ -135,7 +138,13 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
     ) -> CPyResult<
         SubmissionId,
-        Either<FatalPythonException, Either<ChunksStorageError, InternalProducerClientError>>,
+        Either<
+            FatalPythonException,
+            Either<
+                NonZeroIsZero<chunk::ChunkIndex>,
+                Either<ChunksStorageError, InternalProducerClientError>,
+            >,
+        >,
     > {
         // This function is split into two parts.
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
@@ -150,9 +159,11 @@ impl ProducerClient {
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
-                        .map_err(|e| CError(Either::Right(Either::Left(e))))
+                        .map_err(|e| CError(Either::Right(Either::Right(Either::Left(e)))))
                 })
             })?;
+            let chunk_count = NonZero::try_from(chunk::ChunkIndex::from(chunk_count))
+                .map_err(|e| Either::Right(Either::Left(e)))?;
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
@@ -166,7 +177,7 @@ impl ProducerClient {
                     .insert_submission(&submission)
                     .await
                     .map(|submission_id| submission_id.into())
-                    .map_err(|e| Either::Right(Either::Right(e)).into())
+                    .map_err(|e| Either::Right(Either::Right(Either::Right(e))).into())
             })
         })
     }

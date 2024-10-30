@@ -8,14 +8,36 @@ use serde::{Deserialize, Serialize};
 use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 #[cfg(feature = "server-logic")]
 use sqlx::{query_as, SqliteConnection};
+use ux_serde::u63;
 
 use super::errors::{ChunkNotFound, DatabaseError, Either, SubmissionNotFound};
 use super::submission::SubmissionId;
+use super::MayBeZero;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct ChunkIndex(i64);
+
+#[derive(thiserror::Error, Debug)]
+#[error("{0} is not a valid chunk index")]
+pub struct InvalidChunkIndexError(pub i64);
+
+impl ChunkIndex {
+    pub fn new(index: i64) -> Result<Self, InvalidChunkIndexError> {
+        if index < 0 {
+            Err(InvalidChunkIndexError(index))
+        } else {
+            Ok(ChunkIndex(index))
+        }
+    }
+}
+
+impl MayBeZero for ChunkIndex {
+    fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+}
 
 impl std::fmt::Display for ChunkIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,15 +64,24 @@ impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
     }
 }
 
+/// NOTE: Only exists to please SQLx! Do not use directly!
+///
+/// Use the u63 conversion instead.
 impl From<i64> for ChunkIndex {
     fn from(value: i64) -> Self {
         ChunkIndex(value)
     }
 }
 
-impl From<ChunkIndex> for i64 {
+impl From<ChunkIndex> for u63 {
     fn from(value: ChunkIndex) -> Self {
-        value.0
+        u63::new(value.0 as u64)
+    }
+}
+
+impl From<u63> for ChunkIndex {
+    fn from(value: u63) -> Self {
+        ChunkIndex(u64::from(value) as i64)
     }
 }
 

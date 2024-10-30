@@ -23,6 +23,11 @@ class ProducerClient:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
+        """
+        Creates a new producer client.
+
+        Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
+        """
         self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)
 
     def run_submission(
@@ -59,6 +64,9 @@ class ProducerClient:
         returning an ID you can use to track the submission's progress afterwards.
 
         Chunking is done automatically, based on the provided chunk size.
+
+        Raises:
+        - InternalProducerClientError if there is a low-level internal error
         """
         return self.insert_submission_chunks(
             _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
