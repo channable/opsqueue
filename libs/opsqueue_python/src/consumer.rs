@@ -7,6 +7,7 @@ use opsqueue::{
     common::errors::{Either, IncorrectUsage, LimitIsZero},
     consumer::client::InternalConsumerClientError,
     object_store::{ChunkRetrievalError, ChunkType, NewObjectStoreClientError, ObjectStoreClient},
+    E,
 };
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
@@ -64,13 +65,12 @@ impl ConsumerClient {
         strategy: Strategy,
     ) -> CPyResult<
         Vec<Chunk>,
-        Either<
+        E![
             FatalPythonException,
-            Either<
-                ChunkRetrievalError,
-                Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-            >,
-        >,
+            ChunkRetrievalError,
+            InternalConsumerClientError,
+            IncorrectUsage<LimitIsZero>,
+        ],
     > {
         py.allow_threads(|| self.reserve_chunks_gilless(max, strategy))
     }
@@ -113,13 +113,12 @@ impl ConsumerClient {
         strategy: Strategy,
         fun: &Bound<'_, PyAny>,
     ) -> CError<
-        Either<
+        E![
             FatalPythonException,
-            Either<
-                ChunkRetrievalError,
-                Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-            >,
-        >,
+            ChunkRetrievalError,
+            InternalConsumerClientError,
+            IncorrectUsage<LimitIsZero>,
+        ],
     > {
         if !fun.is_callable() {
             return pyo3::exceptions::PyTypeError::new_err(
@@ -133,7 +132,7 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
-                let chunk_outcome: CPyResult<(), Either<FatalPythonException, Either<ChunkRetrievalError, Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>>> = (|| {
+                let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
                     let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
                     log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {

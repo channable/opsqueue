@@ -33,39 +33,6 @@ impl<T> From<DatabaseError> for Either<DatabaseError, T> {
     }
 }
 
-/// This explicit named type is introduced because we _need_ a `From<sqlx::Error>` instance
-/// to be able to use an error type inside a closure passed to `SqliteConnection.transaction()`.
-///
-/// For all intents and purposes, treat it as `Either<DatabaseError, T>`.
-#[derive(Error, Debug, Clone, Serialize, Deserialize)]
-pub enum DBErrorOr<T> {
-    #[error(transparent)]
-    Database(#[from] DatabaseError),
-    #[error(transparent)]
-    Other(T),
-}
-
-// impl<T> DBErrorOr<T> {
-//     pub fn map_other<R>(self, f: impl FnOnce(T) -> R) -> DBErrorOr<R> {
-//         match self {
-//             DBErrorOr::Database(e) => DBErrorOr::Database(e),
-//             DBErrorOr::Other(t) => DBErrorOr::Other(f(t)),
-//         }
-//     }
-// }
-
-// impl<T> From<sqlx::Error> for DBErrorOr<T> {
-//     fn from(value: sqlx::Error) -> Self {
-//         Self::Database(DatabaseError::from(value))
-//     }
-// }
-
-// impl<L, R> From<Either<L, R>> for DBErrorOr<Either<L, R>> {
-//     fn from(value: Either<L, R>) -> Self {
-//         Self::Other(value)
-//     }
-// }
-
 /// We roll our own version of `either::Either` so that we're not limited by the orphan rule.
 ///
 /// We only use this particular Either type for error handling in the case we have a result returning two or more
@@ -76,6 +43,16 @@ pub enum Either<L, R> {
     Left(L),
     #[error(transparent)]
     Right(R),
+}
+
+/// Builds a nested `Either` from two or more (error) types.
+/// - `E![A, B]` is the same as `Either<A, B>`
+/// - `E![A, B, C]` is the same as `Either<A, Either<B, C>>`
+/// - etc.
+#[macro_export]
+macro_rules! E {
+    ($tl: ty, $tr: ty) => ($crate::common::errors::Either<$tl, $tr>);
+    ($h:ty, $($t:ty),+ $(,)?) => ($crate::common::errors::Either<$h, $crate::E!($($t),+)>);
 }
 
 /// Allows you to run the same expression on both halves of an Either,

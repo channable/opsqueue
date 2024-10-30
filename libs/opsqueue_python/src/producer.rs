@@ -1,17 +1,13 @@
 use std::{future::IntoFuture, mem::MaybeUninit, pin::Pin, sync::Arc, time::Duration};
 
-use pyo3::{
-    create_exception,
-    exceptions::{PyException, PyTypeError},
-    prelude::*,
-    types::PyIterator,
-};
+use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyIterator};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use opsqueue::{
     common::{chunk, submission},
     object_store::{ChunkRetrievalError, ChunkType},
     producer::common::ChunkContents,
+    E,
 };
 use opsqueue::{
     common::{errors::Either, NonZero, NonZeroIsZero},
@@ -36,13 +32,6 @@ pub struct ProducerClient {
     producer_client: ActualClient,
     object_store_client: opsqueue::object_store::ObjectStoreClient,
     runtime: Arc<tokio::runtime::Runtime>,
-}
-
-fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
-    match e.downcast::<PyErr>() {
-        Ok(py_err) => py_err,
-        Err(other) => ProducerClientError::new_err(other.to_string()),
-    }
 }
 
 #[pymethods]
@@ -153,13 +142,12 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
     ) -> CPyResult<
         SubmissionId,
-        Either<
+        E![
             FatalPythonException,
-            Either<
-                NonZeroIsZero<chunk::ChunkIndex>,
-                Either<ChunksStorageError, InternalProducerClientError>,
-            >,
-        >,
+            NonZeroIsZero<chunk::ChunkIndex>,
+            ChunksStorageError,
+            InternalProducerClientError,
+        ],
     > {
         // This function is split into two parts.
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
@@ -203,10 +191,11 @@ impl ProducerClient {
         id: SubmissionId,
     ) -> CPyResult<
         PyChunksIter,
-        Either<
+        E![
             FatalPythonException,
-            Either<SubmissionNotCompletedYetError, InternalProducerClientError>,
-        >,
+            SubmissionNotCompletedYetError,
+            InternalProducerClientError,
+        ],
     > {
         // TODO: Use CPyResult instead
         py.allow_threads(|| {
@@ -233,13 +222,12 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
     ) -> CPyResult<
         PyChunksIter,
-        Either<
+        E![
             FatalPythonException,
-            Either<
-                NonZeroIsZero<chunk::ChunkIndex>,
-                Either<ChunksStorageError, InternalProducerClientError>,
-            >,
-        >,
+            NonZeroIsZero<chunk::ChunkIndex>,
+            ChunksStorageError,
+            InternalProducerClientError,
+        ],
     > {
         let submission_id = self.insert_submission_chunks(py, chunk_contents, metadata)?;
         py.allow_threads(|| {
