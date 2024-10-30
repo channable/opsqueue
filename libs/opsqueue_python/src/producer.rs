@@ -81,10 +81,11 @@ impl ProducerClient {
     /// Counts the number of ongoing submissions in the queue.
     ///
     /// Completed and failed submissions are not included in the count.
-    pub fn count_submissions(&self, py: Python<'_>) -> PyResult<u32> {
+    pub fn count_submissions(&self, py: Python<'_>) -> CPyResult<u32, Either<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
-            self.block_unless_interrupted(self.producer_client.count_submissions())
-                .map_err(|e| PyTypeError::new_err(e.to_string()))
+            self.block_unless_interrupted(async {
+                self.producer_client.count_submissions().await.map_err(|e| CError(Either::Right(e)))
+        })
         })
     }
 
@@ -98,11 +99,13 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> PyResult<Option<SubmissionStatus>> {
+    ) -> CPyResult<Option<SubmissionStatus>, Either<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
-            self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
-                .map(|opt| opt.map(Into::into))
-                .map_err(|e| ProducerClientError::new_err(e.to_string()))
+            self.block_unless_interrupted(async {
+                self.producer_client.get_submission(id.into()).await.map_err(|e| CError(Either::Right(e)))
+            })
+            .map(|opt| opt.map(Into::into))
+                // .map_err(|e| ProducerClientError::new_err(e.to_string()))
         })
     }
 
@@ -186,14 +189,13 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> PyResult<PyChunksIter> {
+    ) -> CPyResult<PyChunksIter, Either<FatalPythonException, Either<SubmissionNotCompletedYetError, InternalProducerClientError>>> {
         // TODO: Use CPyResult instead
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
-                match self.maybe_stream_completed_submission(id).await? {
-                    None => Err(ProducerClientError::new_err(
-                        "Submission not completed yet".to_string(),
-                    ))?,
+                match self.maybe_stream_completed_submission(id).await
+                .map_err(|CError(e)| CError(Either::Right(Either::Right(e))))? {
+                    None => Err(CError(Either::Right(Either::Left(SubmissionNotCompletedYetError(id)))))?,
                     Some(py_iter) => Ok(py_iter),
                 }
             })
@@ -206,14 +208,22 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
-    ) -> PyResult<PyChunksIter> {
+    ) -> CPyResult<PyChunksIter,
+        Either<
+            FatalPythonException,
+            Either<
+                NonZeroIsZero<chunk::ChunkIndex>,
+                Either<ChunksStorageError, InternalProducerClientError>,
+            >,
+        >>
+    {
         let submission_id = self.insert_submission_chunks(py, chunk_contents, metadata)?;
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 loop {
                     if let Some(py_stream) = self
                         .maybe_stream_completed_submission(submission_id)
-                        .await?
+                        .await.map_err(|CError(e)| CError(Either::Right(Either::Right(Either::Right(e)))))?
                     {
                         return Ok(py_stream);
                     }
@@ -223,6 +233,10 @@ impl ProducerClient {
         })
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+#[error("The submission with ID {0:?} is not completed yet. ")]
+pub struct SubmissionNotCompletedYetError(pub SubmissionId);
 
 // What follows are internal helper functions
 // that are not available from Python
@@ -240,12 +254,11 @@ impl ProducerClient {
     async fn maybe_stream_completed_submission(
         &self,
         id: SubmissionId,
-    ) -> PyResult<Option<PyChunksIter>> {
+    ) -> CPyResult<Option<PyChunksIter>, InternalProducerClientError> {
         match self
             .producer_client
             .get_submission(id.into())
-            .await
-            .map_err(maybe_wrap_error)?
+            .await?
         {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();

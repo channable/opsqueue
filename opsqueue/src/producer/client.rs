@@ -18,7 +18,7 @@ impl Client {
         }
     }
 
-    pub async fn count_submissions(&self) -> anyhow::Result<u32> {
+    pub async fn count_submissions(&self) -> Result<u32, InternalProducerClientError> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -47,20 +47,15 @@ impl Client {
     pub async fn get_submission(
         &self,
         submission_id: SubmissionId,
-    ) -> anyhow::Result<Option<SubmissionStatus>> {
+    ) -> Result<Option<SubmissionStatus>, InternalProducerClientError> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
             .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
             .send()
             .await?;
-        if resp.status().is_success() {
-            let body: Option<SubmissionStatus> = resp.json().await?;
-            Ok(body)
-        } else {
-            let body: String = resp.text().await?;
-            anyhow::bail!(body)
-        }
+        let body: Option<SubmissionStatus> = resp.json().await?;
+        Ok(body)
     }
 }
 
