@@ -10,7 +10,7 @@ use pyo3::{
 use futures::{Stream, StreamExt, TryStreamExt};
 use opsqueue::{
     common::{chunk, submission},
-    object_store::ChunkType,
+    object_store::{ChunkRetrievalError, ChunkType},
     producer::common::ChunkContents,
 };
 use opsqueue::{
@@ -280,7 +280,7 @@ type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 // https://github.com/channable/opsqueue/issues/62
 #[pyclass]
 pub struct PyChunksIter {
-    stream: MaybeUninit<Mutex<PinfulStream<PyResult<Vec<u8>>>>>,
+    stream: MaybeUninit<Mutex<PinfulStream<CPyResult<Vec<u8>, ChunkRetrievalError>>>>,
     // SAFETY:
     // The following fields _have_ to be boxed so they won't move in memory once the struct itself moves.
     // They also _have_ to be after the `stream` field, ensuring they are dropped _after_ stream is dropped.
@@ -301,7 +301,7 @@ impl PyChunksIter {
             .object_store_client
             .retrieve_chunks(&me.self_borrows.0, chunks_total, ChunkType::Output)
             .await;
-        let stream = stream.map_err(|e| CError(e).into());
+        let stream = stream.map_err(|e| CError(e));
         // SAFETY:
         // Welcome in self-referential struct land.
         //
@@ -312,8 +312,8 @@ impl PyChunksIter {
         //
         // We have to resort to a self-referential struct because lifetimes cannot cross over to Python,
         // so we have to pack the stream with all of its dependencies.
-        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
-        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> =
+        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> = Box::pin(stream);
+        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> =
             unsafe { std::mem::transmute(stream) };
         me.stream = MaybeUninit::new(Mutex::new(stream));
 
@@ -327,7 +327,7 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
+    fn __next__(slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
         slf.self_borrows.1.runtime.block_on(async {
             // SAFETY: The MaybeUninit is always initialized once `PyChunksIter::new` returns.
             let mut stream = unsafe { slf.stream.assume_init_ref() }.lock().await;
