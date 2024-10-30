@@ -1519,6 +1519,7 @@ dependencies = [
  "opsqueue",
  "pyo3",
  "pyo3-log",
+ "thiserror",
  "tokio",
  "uuid",
 ]

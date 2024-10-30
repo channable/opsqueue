@@ -32,7 +32,7 @@ impl Client {
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
-    ) -> anyhow::Result<SubmissionId> {
+    ) -> Result<SubmissionId, InternalProducerClientError> {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -64,10 +64,19 @@ impl Client {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum InternalProducerClientError {
+    #[error("HTTP request failed")]
+    HTTPClientError(#[from] reqwest::Error),
+}
+
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use crate::{common::submission::{self, SubmissionStatus}, producer::common::ChunkContents};
+    use crate::{
+        common::submission::{self, SubmissionStatus},
+        producer::common::ChunkContents,
+    };
 
     use super::*;
 
@@ -110,7 +119,9 @@ mod tests {
         assert_eq!(count, 0);
 
         let submission = InsertSubmission {
-            chunk_contents: ChunkContents::Direct{contents: vec![None, None, None]},
+            chunk_contents: ChunkContents::Direct {
+                contents: vec![None, None, None],
+            },
             metadata: None,
         };
         client
@@ -149,7 +160,9 @@ mod tests {
         let client = Client::new(url);
 
         let submission = InsertSubmission {
-            chunk_contents: ChunkContents::Direct {contents: vec![None, None, None] },
+            chunk_contents: ChunkContents::Direct {
+                contents: vec![None, None, None],
+            },
             metadata: None,
         };
         let submission_id = client

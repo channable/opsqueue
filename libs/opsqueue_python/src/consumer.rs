@@ -2,9 +2,15 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use either::Either;
 use futures::{stream, StreamExt, TryStreamExt};
-use opsqueue::{common::errors::{DBErrorOr, IncorrectUsage, LimitIsZero, UnexpectedOpsqueueConsumerServerResponse}, object_store::{ChunkType, ObjectStoreClient}};
+use opsqueue::{
+    common::errors::{
+        DatabaseError, Either, IncorrectUsage, LimitIsZero,
+        UnexpectedOpsqueueConsumerServerResponse,
+    },
+    consumer::client::InternalConsumerClientError,
+    object_store::{ChunkType, ObjectStoreClient},
+};
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
@@ -16,7 +22,6 @@ use crate::errors::*;
 use super::common::{Chunk, ChunkIndex, Strategy, SubmissionId};
 
 create_exception!(opsqueue_internal, ConsumerClientError, PyException);
-
 
 #[pyclass]
 #[derive(Debug)]
@@ -55,7 +60,8 @@ impl ConsumerClient {
         py: Python<'_>,
         max: usize,
         strategy: Strategy,
-    ) -> CPyResult<Vec<Chunk>, Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    ) -> CPyResult<Vec<Chunk>, Either<PyErr, Either<DatabaseError, IncorrectUsage<LimitIsZero>>>>
+    {
         py.allow_threads(|| self.reserve_chunks_gilless(max, strategy))
     }
 
@@ -86,17 +92,22 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> CPyResult<(), Either<PyErr, Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>>>  {
+    ) -> CPyResult<(), Either<PyErr, InternalConsumerClientError>> {
         py.allow_threads(|| {
             self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)
         })
     }
 
-    pub fn run_per_chunk(&self, strategy: Strategy, fun: &Bound<'_, PyAny>) -> CError<Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    pub fn run_per_chunk(
+        &self,
+        strategy: Strategy,
+        fun: &Bound<'_, PyAny>,
+    ) -> CError<Either<PyErr, Either<DatabaseError, IncorrectUsage<LimitIsZero>>>> {
         if !fun.is_callable() {
             return pyo3::exceptions::PyTypeError::new_err(
                 "Expected `fun` parameter to be __call__-able",
-            ).into();
+            )
+            .into();
         }
         // NOTE: We take care here to unlock the GIL for most of the loop,
         // and only re-lock it for the duration of each call to `fun`.
@@ -104,7 +115,7 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
-                let chunk_outcome: CPyResult<(), Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> = (|| {
+                let chunk_outcome: CPyResult<(), Either<PyErr, Either<DatabaseError, Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>>> = (|| {
                     let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
                     log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
@@ -124,7 +135,13 @@ impl ConsumerClient {
                             },
                             Err(failure) => {
                                 log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure:?}", submission_id, chunk_index, &submission_prefix);
-                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}"))?;
+                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}")).map_err(|e| 
+                                    match e {
+                                        CError(Either::Left(py_err)) => CError(Either::Left(py_err)),
+                                        CError(Either::Right(e)) => CError(Either::Right(Either::Right(Either::Left(e)))),
+                                    }
+
+                                );
                                 log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
                                 // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
                                 // otherwise, continue with next chunk
@@ -189,7 +206,12 @@ impl ConsumerClient {
         })
     }
 
-    fn reserve_chunks_gilless(&self, max: usize, strategy: Strategy) -> CPyResult<Vec<Chunk>, Either<PyErr, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    fn reserve_chunks_gilless(
+        &self,
+        max: usize,
+        strategy: Strategy,
+    ) -> CPyResult<Vec<Chunk>, Either<PyErr, Either<DatabaseError, IncorrectUsage<LimitIsZero>>>>
+    {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -200,7 +222,9 @@ impl ConsumerClient {
                 .map_err(maybe_wrap_error)?;
             match res {
                 Err(e) => return Err(Either::Right(e).into()),
-                Ok(chunks) if chunks.is_empty() => self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?,
+                Ok(chunks) if chunks.is_empty() => {
+                    self.sleep_unless_interrupted::<PyErr>(POLL_INTERVAL)?
+                }
                 Ok(chunks) => return Ok(chunks),
             }
         }
@@ -238,28 +262,27 @@ impl ConsumerClient {
         _submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> CPyResult<(), Either<PyErr, Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>>> {
+    ) -> CPyResult<(), Either<PyErr, InternalConsumerClientError>> {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(async {
-            self.client.fail_chunk(chunk_id, failure).await.map_err(Either::Right).map_err(CError)
-    })
+            self.client
+                .fail_chunk(chunk_id, failure)
+                .await
+                .map_err(Either::Right)
+                .map_err(CError)
+        })
     }
 
     async fn reserve_and_retrieve_chunks(
         &self,
         max: usize,
         strategy: opsqueue::consumer::strategy::Strategy,
-    ) -> anyhow::Result<Result<Vec<Chunk>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    ) -> Result<Vec<Chunk>, Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>> {
         let chunks = self.client.reserve_chunks(max, strategy).await?;
-        match chunks {
-            Err(e) => Ok(Err(e).into()),
-            Ok(chunks) => {
-                let elems = stream::iter(chunks)
-                    .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
-                    .try_collect()
-                    .await?;
-                Ok(Ok(elems))
-            }
-        }
+        let elems = stream::iter(chunks)
+            .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
+            .try_collect()
+            .await?;
+        Ok(elems)
     }
 }

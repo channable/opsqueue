@@ -27,7 +27,6 @@ pub struct ChunkNotFound(pub ChunkId);
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
 
-use either::Either;
 impl<T> From<DatabaseError> for Either<DatabaseError, T> {
     fn from(e: DatabaseError) -> Self {
         Either::Left(e)
@@ -36,7 +35,7 @@ impl<T> From<DatabaseError> for Either<DatabaseError, T> {
 
 /// This explicit named type is introduced because we _need_ a `From<sqlx::Error>` instance
 /// to be able to use an error type inside a closure passed to `SqliteConnection.transaction()`.
-/// 
+///
 /// For all intents and purposes, treat it as `Either<DatabaseError, T>`.
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]
 pub enum DBErrorOr<T> {
@@ -46,24 +45,87 @@ pub enum DBErrorOr<T> {
     Other(T),
 }
 
-impl<T> DBErrorOr<T> {
-    pub fn map_other<R>(self, f: impl FnOnce(T) -> R) -> DBErrorOr<R> {
-        match self {
-            DBErrorOr::Database(e) => DBErrorOr::Database(e),
-            DBErrorOr::Other(t) => DBErrorOr::Other(f(t)),
+// impl<T> DBErrorOr<T> {
+//     pub fn map_other<R>(self, f: impl FnOnce(T) -> R) -> DBErrorOr<R> {
+//         match self {
+//             DBErrorOr::Database(e) => DBErrorOr::Database(e),
+//             DBErrorOr::Other(t) => DBErrorOr::Other(f(t)),
+//         }
+//     }
+// }
+
+// impl<T> From<sqlx::Error> for DBErrorOr<T> {
+//     fn from(value: sqlx::Error) -> Self {
+//         Self::Database(DatabaseError::from(value))
+//     }
+// }
+
+// impl<L, R> From<Either<L, R>> for DBErrorOr<Either<L, R>> {
+//     fn from(value: Either<L, R>) -> Self {
+//         Self::Other(value)
+//     }
+// }
+
+/// We roll our own version of `either::Either` so that we're not limited by the orphan rule.
+///
+/// We only use this particular Either type for error handling in the case we have a result returning two or more
+/// potential errors.
+#[derive(Error, Debug, Clone, Serialize, Deserialize)]
+pub enum Either<L, R> {
+    #[error(transparent)]
+    Left(L),
+    #[error(transparent)]
+    Right(R),
+}
+
+/// Allows you to run the same expression on both halves of an Either,
+/// without the types necessarily having to match.
+///
+/// For example, to run `Into::into` on both halves, we cannot just pass a single function
+/// because that would restrict L and R to be the same type.
+///
+/// Instead, you can use
+///
+/// ```rust
+/// map_both!(either, variant => variant.into())
+/// ```
+/// which will desugar to
+/// ```rust
+/// match either {
+///   Either::Left(variant) => Either::Left(variant.into()),
+///   Either::Right(variant) => Either::Right(variant.into()),
+/// }
+/// ```
+#[macro_export]
+macro_rules! map_both {
+    ($value:expr, $pattern:pat => $result:expr) => {
+        match $value {
+            $crate::common::errors::Either::Left($pattern) => Either::Left($result),
+            $crate::common::errors::Either::Right($pattern) => Either::Right($result),
         }
-    }
+    };
 }
 
-impl<T> From<sqlx::Error> for DBErrorOr<T> {
+/// Similar to `map_both` but doesn't wrap the result back in the respective Left/Right variant.
+#[macro_export]
+macro_rules! fold_both {
+    ($value:expr, $pattern:pat => $result:expr) => {
+        match $value {
+            $crate::common::errors::Either::Left($pattern) => $result,
+            $crate::common::errors::Either::Right($pattern) => $result,
+        }
+    };
+}
+
+impl<R> From<sqlx::Error> for Either<DatabaseError, R> {
     fn from(value: sqlx::Error) -> Self {
-        Self::Database(DatabaseError::from(value))
+        Either::Left(DatabaseError::from(value))
     }
 }
 
-impl<L, R> From<Either<L, R>> for DBErrorOr<Either<L, R>> {
-    fn from(value: Either<L, R>) -> Self {
-        Self::Other(value)
+impl<L, R1, R2> From<Either<R1, R2>> for Either<L, Either<R1, R2>> {
+    fn from(value: Either<R1, R2>) -> Self {
+        Either::Right(value)
     }
 }
 

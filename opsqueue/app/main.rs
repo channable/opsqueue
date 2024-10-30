@@ -1,6 +1,9 @@
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
-use std::{sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
@@ -24,10 +27,20 @@ async fn main() {
         let db_pool = opsqueue::db_connect_pool(database_filename).await;
         opsqueue::ensure_db_migrated(&db_pool).await;
 
-        scope.spawn(opsqueue::serve_producer_and_consumer(&server_addr, db_pool.clone(), reservation_expiration, cancellation_token.clone(), app_healthy_flag.clone()));
+        scope.spawn(opsqueue::serve_producer_and_consumer(
+            &server_addr,
+            db_pool.clone(),
+            reservation_expiration,
+            cancellation_token.clone(),
+            app_healthy_flag.clone(),
+        ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
-        scope.spawn(opsqueue::app_watchdog(app_healthy_flag.clone(), db_pool, cancellation_token.clone()));
+        scope.spawn(opsqueue::app_watchdog(
+            app_healthy_flag.clone(),
+            db_pool,
+            cancellation_token.clone(),
+        ));
 
         tokio::signal::ctrl_c()
             .await
@@ -40,7 +53,8 @@ async fn main() {
 
         // Gives things a little time to shut down, but not much :-)
         tokio::time::sleep(Duration::from_millis(100)).await;
-    }).await;
+    })
+    .await;
 
     println!();
     println!("Opsqueue Stopped");
@@ -65,16 +79,23 @@ fn setup_tracing() -> OtelGuard {
     //
     // c.f. https://docs.rs/env_logger/latest/env_logger/#enabling-logging
     // and https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
-    let log_filter = tracing_subscriber::EnvFilter::builder().with_default_directive(LevelFilter::INFO.into()).from_env_lossy();
+    let log_filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
 
     tracing_subscriber::registry()
         .with(log_filter)
-        .with(tracing_subscriber::fmt::layer().with_line_number(true).with_thread_ids(true).with_target(true))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_line_number(true)
+                .with_thread_ids(true)
+                .with_target(true),
+        )
         // .with(MetricsLayer::new(meter_provider.clone()))
         .with(tracing_opentelemetry::OpenTelemetryLayer::new(otel_tracer()))
         .init();
 
-    OtelGuard{}
+    OtelGuard {}
 }
 
 // We override the default error handler to log errors at a lower logging level,
@@ -88,12 +109,12 @@ fn setup_tracing() -> OtelGuard {
 fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) {
     use opentelemetry::global::Error;
     match err.into() {
-            Error::Trace(err) => log::debug!("OpenTelemetry trace error occurred. {}", err),
-            Error::Propagation(err) => {
-                log::debug!("OpenTelemetry propagation error occurred. {}", err)
-            }
-            other => log::debug!("OpenTelemetry error occurred. {}", other),
+        Error::Trace(err) => log::debug!("OpenTelemetry trace error occurred. {}", err),
+        Error::Propagation(err) => {
+            log::debug!("OpenTelemetry propagation error occurred. {}", err)
         }
+        other => log::debug!("OpenTelemetry error occurred. {}", other),
+    }
 }
 
 /// Builds the tracer configuration for OpenTelemetry,
@@ -104,9 +125,9 @@ fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
         .tracing()
         .with_trace_config(
             opentelemetry_sdk::trace::Config::default()
-                .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
-                    0.01,
-                ))))
+                .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+                    opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(0.01),
+                )))
                 .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
                 .with_resource(opentelemetry_resource()),
         )

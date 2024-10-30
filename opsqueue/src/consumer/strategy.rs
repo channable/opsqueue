@@ -1,4 +1,3 @@
-
 #[cfg(feature = "server-logic")]
 use std::pin::Pin;
 
@@ -16,7 +15,6 @@ use crate::common::chunk::Chunk;
 #[cfg(feature = "server-logic")]
 use crate::common::submission::Submission;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     Oldest,
@@ -33,8 +31,9 @@ pub enum Strategy {
 // }
 
 #[cfg(feature = "server-logic")]
-type ChunkStream<'a> =
-    Pin<Box<(dyn Stream<Item = Result<(Chunk,Submission), sqlx::Error>> + std::marker::Send + 'a)>>;
+type ChunkStream<'a> = Pin<
+    Box<(dyn Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + std::marker::Send + 'a)>,
+>;
 
 #[cfg(feature = "server-logic")]
 impl Strategy {
@@ -49,36 +48,20 @@ impl Strategy {
 
 // #[tracing::instrument]
 #[cfg(feature = "server-logic")]
-pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
-    sqlx::query!("
+pub fn oldest_chunks_stream<'c>(
+    db_conn: impl SqliteExecutor<'c> + 'c,
+) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
+    sqlx::query!(
+        "
     SELECT * FROM chunks
     INNER JOIN submissions ON submissions.id = chunks.submission_id
     ORDER BY submission_id ASC
-    ").fetch(db_conn).map(|res| res.map(|row| (
-            Chunk {
-                submission_id: row.submission_id.into(),
-                chunk_index: row.chunk_index.into(),
-                input_content: row.input_content,
-                retries: row.retries,
-            },
-            Submission {
-                id: row.submission_id.into(),
-                prefix: row.prefix,
-                chunks_total: row.chunks_total,
-                chunks_done: row.chunks_done,
-                metadata: row.metadata,
-            }
-    )))
-}
-
-#[tracing::instrument]
-#[cfg(feature = "server-logic")]
-pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
-    sqlx::query!(
-        "SELECT * FROM chunks
-        INNER JOIN submissions ON submissions.id = chunks.submission_id
-        ORDER BY submission_id ASC
-    ").fetch(db_conn).map(|res| res.map(|row| (
+    "
+    )
+    .fetch(db_conn)
+    .map(|res| {
+        res.map(|row| {
+            (
                 Chunk {
                     submission_id: row.submission_id.into(),
                     chunk_index: row.chunk_index.into(),
@@ -91,6 +74,41 @@ pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> impl S
                     chunks_total: row.chunks_total,
                     chunks_done: row.chunks_done,
                     metadata: row.metadata,
-                }
-        )))
+                },
+            )
+        })
+    })
+}
+
+#[tracing::instrument]
+#[cfg(feature = "server-logic")]
+pub fn newest_chunks_stream<'c>(
+    db_conn: impl SqliteExecutor<'c> + 'c,
+) -> impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>> + Send + 'c {
+    sqlx::query!(
+        "SELECT * FROM chunks
+        INNER JOIN submissions ON submissions.id = chunks.submission_id
+        ORDER BY submission_id ASC
+    "
+    )
+    .fetch(db_conn)
+    .map(|res| {
+        res.map(|row| {
+            (
+                Chunk {
+                    submission_id: row.submission_id.into(),
+                    chunk_index: row.chunk_index.into(),
+                    input_content: row.input_content,
+                    retries: row.retries,
+                },
+                Submission {
+                    id: row.submission_id.into(),
+                    prefix: row.prefix,
+                    chunks_total: row.chunks_total,
+                    chunks_done: row.chunks_done,
+                    metadata: row.metadata,
+                },
+            )
+        })
+    })
 }

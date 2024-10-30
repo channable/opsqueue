@@ -1,11 +1,9 @@
 pub mod common;
-pub mod errors;
 pub mod consumer;
+pub mod errors;
 pub mod producer;
 
-
 use pyo3::prelude::*;
-
 
 /// A Python module implemented in Rust.
 #[pymodule]

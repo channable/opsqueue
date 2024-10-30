@@ -83,7 +83,11 @@ where
     /// that will call `run_pending_tasks` periodically.
     ///
     /// Do not call this in tests.
-    pub fn run_pending_tasks_periodically(&self, cancellation_token: CancellationToken, task_tracker: TaskTracker) {
+    pub fn run_pending_tasks_periodically(
+        &self,
+        cancellation_token: CancellationToken,
+        task_tracker: TaskTracker,
+    ) {
         let bg_reserver_handle = self.clone();
         task_tracker.spawn(async move {
             loop {

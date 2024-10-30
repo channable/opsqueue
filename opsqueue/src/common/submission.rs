@@ -8,8 +8,7 @@ use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, Sqli
 #[cfg(feature = "server-logic")]
 use super::chunk::ChunkIndex;
 use super::chunk::{self, Chunk};
-use super::errors::{DatabaseError, SubmissionNotFound, DBErrorOr};
-use either::Either;
+use super::errors::{DatabaseError, Either, SubmissionNotFound};
 use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
@@ -30,9 +29,9 @@ impl Display for SubmissionId {
 impl std::fmt::Debug for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubmissionId")
-        .field("id", &self.0)
-        .field("timestamp", &self.timestamp())
-        .finish()
+            .field("id", &self.0)
+            .field("timestamp", &self.timestamp())
+            .finish()
     }
 }
 
@@ -84,10 +83,13 @@ impl sqlx::Type<Sqlite> for SubmissionId {
 }
 
 impl SubmissionId {
-    pub fn system_time(self)  -> std::time::SystemTime {
+    pub fn system_time(self) -> std::time::SystemTime {
         let unix_timestamp_ms = self.0.timestamp();
         let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
-        ID_GENERATOR.epoch().checked_add(unix_timestamp).expect("Invalid timestamp extracted from snowflake ID")
+        ID_GENERATOR
+            .epoch()
+            .checked_add(unix_timestamp)
+            .expect("Invalid timestamp extracted from snowflake ID")
     }
 
     pub fn timestamp(self) -> chrono::DateTime<Utc> {
@@ -203,12 +205,14 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-
-    conn.transaction(|tx| Box::pin(async move {
-        insert_submission_raw(submission, &mut **tx).await?;
-        super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
-        Ok(())
-    })).await
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            insert_submission_raw(submission, &mut **tx).await?;
+            super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -240,13 +244,12 @@ pub async fn insert_submission_from_chunks(
 pub async fn get_submission(
     id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
-) -> Result<Submission, DBErrorOr<SubmissionNotFound>> {
+) -> Result<Submission, Either<DatabaseError, SubmissionNotFound>> {
     let submission = query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
         .fetch_one(conn)
         .await?;
     Ok(submission)
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatusTag {
@@ -309,7 +312,8 @@ pub async fn submission_status(
             idx => Err(sqlx::Error::ColumnIndexOutOfBounds {
                 index: 0,
                 len: idx as usize,
-            }.into()),
+            }
+            .into()),
         },
     }
 }
@@ -320,18 +324,21 @@ pub async fn submission_status(
 pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
-) -> Result<bool, DBErrorOr<SubmissionNotFound>> {
+) -> Result<bool, Either<DatabaseError, SubmissionNotFound>> {
     use sqlx::Connection;
-    conn.transaction(|tx| Box::pin(async move {
-        let submission = get_submission(id, &mut **tx).await?;
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            let submission = get_submission(id, &mut **tx).await?;
 
-        if submission.chunks_done == submission.chunks_total {
-            complete_submission_raw(id, &mut **tx).await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    })).await
+            if submission.chunks_done == submission.chunks_total {
+                complete_submission_raw(id, &mut **tx).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    })
+    .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -340,7 +347,7 @@ pub async fn maybe_complete_submission(
 pub async fn complete_submission_raw(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
-) -> Result<(), DBErrorOr<SubmissionNotFound>> {
+) -> Result<(), Either<DatabaseError, SubmissionNotFound>> {
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -359,7 +366,11 @@ pub async fn complete_submission_raw(
         id,
     )
     .fetch_one(conn)
-    .await?;
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::RowNotFound => Either::Right(SubmissionNotFound(id)),
+        e => Either::Left(DatabaseError::from(e)),
+    })?;
     Ok(())
 }
 
@@ -398,12 +409,16 @@ pub async fn fail_submission(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| Box::pin(async move {
-        fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
-        super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx).await?;
-        super::chunk::skip_remaining_chunks(id, &mut **tx).await?;
-        Ok(())
-    })).await
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
+            super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx)
+                .await?;
+            super::chunk::skip_remaining_chunks(id, &mut **tx).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -442,34 +457,37 @@ pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| Box::pin(async move {
-        query!(
-            "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
-            older_than
-        )
-        .execute(&mut **tx)
-        .await?;
-        query!(
-            "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
-            older_than
-        )
-        .execute(&mut **tx)
-        .await?;
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            query!(
+                "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
+                older_than
+            )
+            .execute(&mut **tx)
+            .await?;
+            query!(
+                "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
+                older_than
+            )
+            .execute(&mut **tx)
+            .await?;
 
-        query!(
-            "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
-            older_than
-        )
-        .execute(&mut **tx)
-        .await?;
-        query!(
-            "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
-            older_than
-        )
-        .execute(&mut **tx)
-        .await?;
-        Ok(())
-    })).await
+            query!(
+                "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
+                older_than
+            )
+            .execute(&mut **tx)
+            .await?;
+            query!(
+                "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
+                older_than
+            )
+            .execute(&mut **tx)
+            .await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -566,9 +584,10 @@ pub mod test {
         let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
             .await
             .unwrap();
-        let old_three = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-            .await
-            .unwrap();
+        let old_three =
+            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
+                .await
+                .unwrap();
         let old_four_unfailed =
             insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
                 .await
@@ -586,16 +605,18 @@ pub mod test {
 
         let cutoff_timestamp = Utc::now();
 
-        let too_new_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-            .await
-            .unwrap();
+        let too_new_one =
+            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
+                .await
+                .unwrap();
         let _too_new_two_unfailed =
             insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
                 .await
                 .unwrap();
-        let too_new_three = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-            .await
-            .unwrap();
+        let too_new_three =
+            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
+                .await
+                .unwrap();
 
         fail_submission(too_new_one, 0.into(), "Broken new one".into(), &mut conn)
             .await

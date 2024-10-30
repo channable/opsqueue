@@ -1,13 +1,21 @@
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use tokio::{select, sync::mpsc::{UnboundedReceiver, UnboundedSender}};
+use tokio::{
+    select,
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::{common::chunk::ChunkId, consumer::common::{AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS}};
+use crate::{
+    common::chunk::ChunkId,
+    consumer::common::{
+        AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
+        SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS,
+    },
+};
 
 use super::{state::ConsumerState, ServerState};
-
 
 pub struct ConsumerConn {
     consumer_state: ConsumerState,
@@ -28,7 +36,15 @@ impl ConsumerConn {
         let consumer_state = ConsumerState::new(server_state);
         let cancellation_token = server_state.cancellation_token.clone();
 
-        Self {consumer_state, ws_stream, heartbeat_interval, heartbeats_missed, tx, rx, cancellation_token}
+        Self {
+            consumer_state,
+            ws_stream,
+            heartbeat_interval,
+            heartbeats_missed,
+            tx,
+            rx,
+            cancellation_token,
+        }
     }
 
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
@@ -71,9 +87,7 @@ impl ConsumerConn {
             // This branch is taken if things were taking too long:
             () = tokio::time::sleep(GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT) => {},
         }
-
     }
-
 
     // Manages heartbeating:
     // Sends the next heartbeat, or exits with an error if too many were already missed.
@@ -98,41 +112,58 @@ impl ConsumerConn {
             Message::Ping(_) => {
                 tracing::trace!("Received heartbeat");
                 // NOTE: Not manually sending 'pong', this is done automatically.
-            },
+            }
             Message::Pong(_) => {
                 tracing::trace!("Received pong reply to earlier heartbeat, nice.");
             }
             Message::Binary(_) => {
                 self.handle_incoming_client_message(msg.try_into()?).await?;
-
             }
-            _ => return Err(ConsumerConnError::UnexpectedWSMessageType(anyhow::format_err!("Unexpected message format  {:?}", msg))),
+            _ => {
+                return Err(ConsumerConnError::UnexpectedWSMessageType(
+                    anyhow::format_err!("Unexpected message format  {:?}", msg),
+                ))
+            }
         }
 
         Ok(())
     }
 
-    async fn handle_incoming_client_message(&mut self, msg: Envelope<ClientToServerMessage>) -> Result<(), ConsumerConnError> {
+    async fn handle_incoming_client_message(
+        &mut self,
+        msg: Envelope<ClientToServerMessage>,
+    ) -> Result<(), ConsumerConnError> {
         use ClientToServerMessage::*;
         use SyncServerToClientResponse::*;
         let maybe_response = match msg.contents {
             WantToReserveChunks { max, strategy } => {
-                let chunks_or_err = self.consumer_state.fetch_and_reserve_chunks(strategy, max, &self.tx).await;
+                let chunks_or_err = self
+                    .consumer_state
+                    .fetch_and_reserve_chunks(strategy, max, &self.tx)
+                    .await;
                 Some(ChunksReserved(chunks_or_err))
-            },
-            CompleteChunk {id, output_content} => {
-                self.consumer_state.complete_chunk(id, output_content).await.map_err(|e| anyhow::Error::from(e))?;
+            }
+            CompleteChunk { id, output_content } => {
+                self.consumer_state
+                    .complete_chunk(id, output_content)
+                    .await
+                    .map_err(|e| anyhow::Error::from(e))?;
                 Some(ChunkCompleted)
-            },
-            FailChunk {id, failure} => {
+            }
+            FailChunk { id, failure } => {
                 self.consumer_state.fail_chunk(id, failure).await?;
                 Some(ChunkFailed)
-            },
+            }
         };
 
         if let Some(response) = maybe_response {
-            let enveloped_response = Envelope {nonce: msg.nonce, contents: response };
-            self.ws_stream.send(ServerToClientMessage::Sync(enveloped_response).into()).await?
+            let enveloped_response = Envelope {
+                nonce: msg.nonce,
+                contents: response,
+            };
+            self.ws_stream
+                .send(ServerToClientMessage::Sync(enveloped_response).into())
+                .await?
         }
 
         Ok(())

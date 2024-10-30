@@ -1,4 +1,9 @@
-use std::{collections::HashMap, str::FromStr, sync::{atomic::AtomicBool, Arc}, time::Duration};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
 use arc_swap::ArcSwapOption;
 use futures::{
@@ -7,7 +12,7 @@ use futures::{
 };
 use http::Uri;
 use retry_if::ExponentialBackoffConfig;
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::oneshot::error::RecvError};
 use tokio::{
     select,
     sync::{oneshot, Mutex},
@@ -16,15 +21,22 @@ use tokio::{
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::{CancellationToken, DropGuard};
 // use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
-use either::Either;
 
 use crate::{
-    common::{chunk::{self, Chunk, ChunkId}, errors::{DBErrorOr, IncorrectUsage, LimitIsZero, UnexpectedOpsqueueConsumerServerResponse}, submission::Submission},
+    common::{
+        chunk::{self, Chunk, ChunkId},
+        errors::{DatabaseError, Either, IncorrectUsage, LimitIsZero},
+        submission::Submission,
+    },
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
+    map_both,
 };
 
 use super::{
-    common::{ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse, HEARTBEAT_INTERVAL},
+    common::{
+        ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse,
+        HEARTBEAT_INTERVAL,
+    },
     strategy::Strategy,
 };
 
@@ -48,10 +60,24 @@ impl OuterClient {
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
     }
-    pub async fn reserve_chunks(&self, max: usize, strategy: Strategy) -> anyhow::Result<Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    pub async fn reserve_chunks(
+        &self,
+        max: usize,
+        strategy: Strategy,
+    ) -> Result<
+        Vec<(Chunk, Submission)>,
+        Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+    > {
         self.ensure_initialized().await;
-        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").reserve_chunks(max, strategy).await;
-        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+        let res = self
+            .0
+            .load()
+            .as_ref()
+            .expect("Should always be initialized after `.ensure_initialized()")
+            .reserve_chunks(max, strategy)
+            .await;
+        if res.is_err() {
+            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -63,8 +89,15 @@ impl OuterClient {
         output_content: chunk::Content,
     ) -> anyhow::Result<()> {
         self.ensure_initialized().await;
-        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").complete_chunk(id, output_content).await;
-        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+        let res = self
+            .0
+            .load()
+            .as_ref()
+            .expect("Should always be initialized after `.ensure_initialized()")
+            .complete_chunk(id, output_content)
+            .await;
+        if res.is_err() {
+            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -74,10 +107,17 @@ impl OuterClient {
         &self,
         id: ChunkId,
         failure: String,
-    ) -> Result<(), Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>> {
+    ) -> Result<(), InternalConsumerClientError> {
         self.ensure_initialized().await;
-        let res = self.0.load().as_ref().expect("Should always be initialized after `.ensure_initialized()").fail_chunk(id, failure).await;
-        if res.is_err() { // TODO: Only throw away inner client on connection failure style errors
+        let res = self
+            .0
+            .load()
+            .as_ref()
+            .expect("Should always be initialized after `.ensure_initialized()")
+            .fail_chunk(id, failure)
+            .await;
+        if res.is_err() {
+            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -120,9 +160,11 @@ const BACKOFF_CONFIG: ExponentialBackoffConfig = ExponentialBackoffConfig {
 fn retry_errs<T>(result: &anyhow::Result<T>) -> bool {
     match result {
         Err(err) => {
-            log::debug!("Error establishing consumer client WS connection. (Will retry). Details: {err:?}");
+            log::debug!(
+                "Error establishing consumer client WS connection. (Will retry). Details: {err:?}"
+            );
             true
-        },
+        }
         Ok(_) => false,
     }
 }
@@ -251,7 +293,7 @@ impl Client {
     async fn request(
         &self,
         request: ClientToServerMessage,
-    ) -> anyhow::Result<SyncServerToClientResponse> {
+    ) -> Result<SyncServerToClientResponse, InternalConsumerClientError> {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
         {
             let mut in_flight_requests = self.in_flight_requests.lock().await;
@@ -261,12 +303,7 @@ impl Client {
                 contents: request,
             };
             in_flight_requests.1.insert(nonce, oneshot_sender);
-            let () = self
-                .ws_sink
-                .lock()
-                .await
-                .send(envelope.into())
-                .await?;
+            let () = self.ws_sink.lock().await.send(envelope.into()).await?;
         }
         let resp = oneshot_receiver.await?;
         Ok(resp)
@@ -276,13 +313,24 @@ impl Client {
         &self,
         max: usize,
         strategy: Strategy,
-    ) -> anyhow::Result<Result<Vec<(Chunk, Submission)>, DBErrorOr<IncorrectUsage<LimitIsZero>>>> {
+    ) -> Result<
+        Vec<(Chunk, Submission)>,
+        Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+    > {
+        use InternalConsumerClientError::*;
         let resp = self
             .request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
         match resp {
-            SyncServerToClientResponse::ChunksReserved(chunks) => Ok(chunks),
-            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+            SyncServerToClientResponse::ChunksReserved(chunks_res) => {
+                let chunks = chunks_res.map_err(|err| map_both!(err, e => e.into()))?;
+                Ok(chunks)
+            }
+            other => Err(UnexpectedSyncResponse {
+                actual: other,
+                expected: "ChunksReserved".into(),
+            }
+            .into()),
         }
     }
 
@@ -304,14 +352,39 @@ impl Client {
         &self,
         id: ChunkId,
         failure: String,
-    ) -> Result<(), Either<UnexpectedOpsqueueConsumerServerResponse, anyhow::Error>> {
+    ) -> Result<(), InternalConsumerClientError> {
+        use InternalConsumerClientError::*;
         let resp = self
             .request(ClientToServerMessage::FailChunk { id, failure })
-            .await.map_err(Either::Right)?;
+            .await?;
         match resp {
             SyncServerToClientResponse::ChunkFailed => Ok(()),
-            other => Err(Either::Left(UnexpectedOpsqueueConsumerServerResponse(other))),
+            other => Err(UnexpectedSyncResponse {
+                actual: other,
+                expected: "ChunkFailed".into(),
+            }),
         }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum InternalConsumerClientError {
+    #[error("Low-level error in the websocket connection: {0}")]
+    LowLevelWebsocketError(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("The oneshot channel to receive a sync response to an earlier request was dropped before a response was received: {0}")]
+    OneshotSenderDropped(#[from] RecvError),
+    #[error("Expected the sync response of kind {expected} but received {actual:?}")]
+    UnexpectedSyncResponse {
+        actual: SyncServerToClientResponse,
+        expected: Box<str>,
+    },
+    #[error("Low-level database error: {0}")]
+    DatabaseError(#[from] DatabaseError),
+}
+
+impl<R> From<InternalConsumerClientError> for Either<InternalConsumerClientError, R> {
+    fn from(value: InternalConsumerClientError) -> Self {
+        Either::Left(InternalConsumerClientError::from(value))
     }
 }
 
@@ -349,16 +422,22 @@ mod tests {
         .await
         .unwrap();
 
-        let _server_handle = task_tracker.spawn(
-            crate::consumer::server::serve_for_tests(pool.clone(), uri.into(), cancellation_token, Duration::from_secs(60))
-        );
+        let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
+            pool.clone(),
+            uri.into(),
+            cancellation_token,
+            Duration::from_secs(60),
+        ));
 
         yield_now().await;
 
         let client = Client::new(ws_uri).await.unwrap();
         yield_now().await;
 
-        let chunks = client.reserve_chunks(3, Strategy::Oldest).await.expect("No network failure").expect("Correct usage");
+        let chunks = client
+            .reserve_chunks(3, Strategy::Oldest)
+            .await
+            .expect("No internal error");
         yield_now().await;
 
         assert_eq!(
