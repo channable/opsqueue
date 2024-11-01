@@ -312,7 +312,7 @@ impl PyChunksIter {
             .object_store_client
             .retrieve_chunks(&me.self_borrows.0, chunks_total, ChunkType::Output)
             .await;
-        let stream = stream.map_err(|e| CError(e));
+        let stream = stream.map_err(CError);
         // SAFETY:
         // Welcome in self-referential struct land.
         //

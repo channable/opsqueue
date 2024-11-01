@@ -255,7 +255,7 @@ impl ConsumerClient {
             let res = self.block_unless_interrupted(async {
                 self.reserve_and_retrieve_chunks(max, strategy.clone())
                     .await
-                    .map_err(|e| CError(R(e.into())))
+                    .map_err(|e| CError(R(e)))
             });
             match res {
                 Err(e) => return Err(e),
@@ -331,6 +331,6 @@ impl ConsumerClient {
             .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
             .try_collect()
             .await
-            .map_err(|e| L(e))
+            .map_err(L)
     }
 }

@@ -112,49 +112,49 @@ impl From<FatalPythonException> for PyErr {
 
 impl From<CError<opsqueue::common::chunk::InvalidChunkIndexError>> for PyErr {
     fn from(value: CError<opsqueue::common::chunk::InvalidChunkIndexError>) -> Self {
-        InvalidChunkIndexError::new_err((value.0.to_string(), value.0 .0)).into()
+        InvalidChunkIndexError::new_err((value.0.to_string(), value.0 .0))
     }
 }
 
 impl From<CError<opsqueue::consumer::client::InternalConsumerClientError>> for PyErr {
     fn from(value: CError<opsqueue::consumer::client::InternalConsumerClientError>) -> Self {
-        InternalConsumerClientError::new_err(value.0.to_string()).into()
+        InternalConsumerClientError::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<opsqueue::producer::client::InternalProducerClientError>> for PyErr {
     fn from(value: CError<opsqueue::producer::client::InternalProducerClientError>) -> Self {
-        InternalProducerClientError::new_err(value.0.to_string()).into()
+        InternalProducerClientError::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<opsqueue::object_store::ChunkRetrievalError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::ChunkRetrievalError>) -> Self {
-        ChunkRetrievalError::new_err(value.0.to_string()).into()
+        ChunkRetrievalError::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<opsqueue::object_store::ChunksStorageError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::ChunksStorageError>) -> Self {
-        ChunksStorageError::new_err(value.0.to_string()).into()
+        ChunksStorageError::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<opsqueue::object_store::ChunkStorageError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::ChunkStorageError>) -> Self {
-        ChunkStorageError::new_err(value.0.to_string()).into()
+        ChunkStorageError::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>> for PyErr {
     fn from(value: CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>) -> Self {
-        ChunkCountIsZeroError::new_err(value.0.to_string()).into()
+        ChunkCountIsZeroError::new_err(value.0.to_string())
     }
 }
 
 impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
     fn from(value: CError<IncorrectUsage<T>>) -> Self {
-        IncorrectUsageError::new_err(value.0.to_string()).into()
+        IncorrectUsageError::new_err(value.0.to_string())
     }
 }
 
@@ -162,7 +162,6 @@ impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
         let submission_id = value.0 .0;
         SubmissionNotFoundError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
-            .into()
     }
 }
 
@@ -171,9 +170,8 @@ impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
         let submission_id = value.0 .0;
         SubmissionNotCompletedYetError::new_err((
             value.0.to_string(),
-            SubmissionId::from(submission_id),
+            submission_id,
         ))
-        .into()
     }
 }
 
@@ -187,13 +185,12 @@ impl From<CError<ChunkNotFound>> for PyErr {
                 ChunkIndex::from(chunk_index),
             ),
         ))
-        .into()
     }
 }
 
 impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::NewObjectStoreClientError>) -> Self {
-        NewObjectStoreClientError::new_err(value.0.to_string()).into()
+        NewObjectStoreClientError::new_err(value.0.to_string())
     }
 }
 
@@ -201,13 +198,13 @@ impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
 // in the boundary to PyO3
 impl From<CError<anyhow::Error>> for PyErr {
     fn from(value: CError<anyhow::Error>) -> Self {
-        PyException::new_err(value.0.to_string()).into()
+        PyException::new_err(value.0.to_string())
     }
 }
 
 impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
     fn from(value: CError<UnexpectedOpsqueueConsumerServerResponse>) -> Self {
-        UnexpectedOpsqueueConsumerServerResponseError::new_err(value.0.to_string()).into()
+        UnexpectedOpsqueueConsumerServerResponseError::new_err(value.0.to_string())
     }
 }
 
