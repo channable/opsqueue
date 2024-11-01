@@ -293,7 +293,7 @@ pub struct PyChunksIter {
 
 impl PyChunksIter {
     pub(crate) async fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
-        let stream = client.object_store_client.retrieve_chunks(&prefix, chunks_total, ChunkType::Output).await.map_err(CError).boxed();
+        let stream = client.object_store_client.retrieve_chunks(prefix, chunks_total, ChunkType::Output).await.map_err(CError).boxed();
         Self {stream, runtime: client.runtime.clone()}
     }
 }

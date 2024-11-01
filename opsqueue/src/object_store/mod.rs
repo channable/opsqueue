@@ -193,13 +193,13 @@ impl ObjectStoreClient {
             chunk_type,
         })
     }
-    pub async fn retrieve_chunks(
+    pub async fn retrieve_chunks<Prefix: Into<String>>(
         &self,
-        submission_prefix: &str,
+        submission_prefix: Prefix,
         chunk_count: u63,
         chunk_type: ChunkType,
     ) -> impl TryStreamExt<Ok = Vec<u8>, Error = ChunkRetrievalError> + 'static {
-        let submission_prefix: Box<str> = submission_prefix.into();
+        let submission_prefix: String = submission_prefix.into();
         let initial_state = (self.clone(), submission_prefix, u63::new(0));
         stream::unfold(initial_state, move |(client, prefix, index)| async move {
             if index >= chunk_count {
