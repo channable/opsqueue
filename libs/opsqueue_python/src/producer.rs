@@ -14,7 +14,6 @@ use opsqueue::{
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
-use tokio::sync::Mutex;
 use ux_serde::u63;
 
 use crate::{
@@ -277,7 +276,7 @@ impl ProducerClient {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
-                    PyChunksIter::new(self.clone(), prefix, submission.chunks_total).await;
+                    PyChunksIter::new(&self, prefix, submission.chunks_total).await;
 
                 Ok(Some(py_chunks_iter))
             }
@@ -288,14 +287,14 @@ impl ProducerClient {
 
 #[pyclass]
 pub struct PyChunksIter {
-    stream: Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>,
-    producer_client: ProducerClient,
+    stream: BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>,
+    runtime: Arc<tokio::runtime::Runtime>
 }
 
 impl PyChunksIter {
-    pub(crate) async fn new(client: ProducerClient, prefix: String, chunks_total: u63) -> Self {
+    pub(crate) async fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
         let stream = client.object_store_client.retrieve_chunks(&prefix, chunks_total, ChunkType::Output).await.map_err(CError).boxed();
-        Self {stream: Mutex::new(stream), producer_client: client}
+        Self {stream, runtime: client.runtime.clone()}
     }
 }
 
@@ -305,9 +304,11 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
-        slf.producer_client.runtime.block_on(async {
-            let mut stream = slf.stream.lock().await;
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
+        let me = &mut *slf;
+        let runtime = &mut me.runtime;
+        let stream = &mut me.stream;
+        runtime.block_on(async {
             stream.next().await.map(|r| r.map(VecAsPyBytes))
         })
     }

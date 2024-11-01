@@ -11,7 +11,7 @@ use ux_serde::u63;
 ///
 /// This exists as a separate type, so we can build it _once_
 /// and then re-use it in the producer/consumer for all communication going forward from there.
-/// 
+///
 /// It is Arc-wrapped, allowing for cheap cloning
 /// (which is especially necessary for `ObjectStoreClient::retrieve_chunks`)
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ impl ObjectStoreClient {
         let (object_store, base_path) = object_store::parse_url(&url)?;
         Ok(ObjectStoreClient(Arc::new(ObjectStoreClientInner {
             url: object_store_url.into(),
-            object_store: object_store,
+            object_store,
             base_path,
         })))
     }
@@ -194,7 +194,7 @@ impl ObjectStoreClient {
         })
     }
     pub async fn retrieve_chunks(
-        &self, 
+        &self,
         submission_prefix: &str,
         chunk_count: u63,
         chunk_type: ChunkType,
@@ -204,7 +204,7 @@ impl ObjectStoreClient {
         // There must be a better way!?
         let me = self.clone();
         let submission_prefix: Box<str> = submission_prefix.into();
-        stream::iter(0..(chunk_count.into())).then(move |chunk_index| 
+        stream::iter(0..(chunk_count.into())).then(move |chunk_index|
             {
                 let me = me.clone();
                 let submission_prefix = submission_prefix.clone();
