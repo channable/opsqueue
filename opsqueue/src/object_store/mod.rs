@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::common::chunk;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, TryStreamExt};
 use object_store::path::Path;
 use object_store::DynObjectStore;
 use reqwest::Url;
@@ -199,20 +199,17 @@ impl ObjectStoreClient {
         chunk_count: u63,
         chunk_type: ChunkType,
     ) -> impl TryStreamExt<Ok = Vec<u8>, Error = ChunkRetrievalError> + 'static {
-
-        // NOTE: It is unfortunate that we need to do a double clone here.
-        // There must be a better way!?
-        let me = self.clone();
         let submission_prefix: Box<str> = submission_prefix.into();
-        stream::iter(0..(chunk_count.into())).then(move |chunk_index|
-            {
-                let me = me.clone();
-                let submission_prefix = submission_prefix.clone();
-                async move {
-                    let chunk_index: u63 = u63::new(chunk_index);
-                    me.retrieve_chunk(&submission_prefix, chunk_index.into(), chunk_type)
-                        .await
-                }
+        let initial_state = (self.clone(), submission_prefix, u63::new(0));
+        stream::unfold(initial_state, move |(client, prefix, index)| async move {
+            if index >= chunk_count {
+                return None
+            }
+            let element = client.retrieve_chunk(&prefix, index.into(), chunk_type)
+                .await;
+            let new_state = (client, prefix, index + u63::new(1));
+
+            Some((element, new_state))
         })
     }
 
