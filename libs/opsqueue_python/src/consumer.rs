@@ -32,13 +32,6 @@ pub struct ConsumerClient {
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
-fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
-    match e.downcast::<PyErr>() {
-        Ok(py_err) => py_err,
-        Err(other) => ConsumerClientError::new_err(other.to_string()),
-    }
-}
-
 #[pymethods]
 impl ConsumerClient {
     #[new]
@@ -58,6 +51,7 @@ impl ConsumerClient {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn reserve_chunks(
         &self,
         py: Python<'_>,
@@ -83,10 +77,10 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> CPyResult<(), 
+    ) -> CPyResult<(),
         E![
-            FatalPythonException, 
-            ChunkStorageError, 
+            FatalPythonException,
+            ChunkStorageError,
             InternalConsumerClientError]
         > {
         py.allow_threads(|| {
@@ -113,6 +107,7 @@ impl ConsumerClient {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn run_per_chunk(
         &self,
         strategy: Strategy,
@@ -138,6 +133,7 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
+                #[allow(clippy::type_complexity)]
                 let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkStorageError, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
                     let chunks = self.reserve_chunks_gilless(1, strategy.clone()).map_err(|e| match e {
                         CError(L(e)) => CError(L(e)),
@@ -166,7 +162,7 @@ impl ConsumerClient {
                             },
                             Err(failure) => {
                                 log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure:?}", submission_id, chunk_index, &submission_prefix);
-                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}")).map_err(|e| 
+                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}")).map_err(|e|
                                     match e {
                                         CError(L(py_err)) => CError(L(py_err)),
                                         CError(R(e)) => CError(R(R(R(L(e))))),
@@ -233,6 +229,7 @@ impl ConsumerClient {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     fn reserve_chunks_gilless(
         &self,
         max: usize,
@@ -273,12 +270,12 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> CPyResult<(), 
+    ) -> CPyResult<(),
         E![
-            FatalPythonException, 
-            ChunkStorageError, 
+            FatalPythonException,
+            ChunkStorageError,
             InternalConsumerClientError]
-        > 
+        >
         {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(async move {

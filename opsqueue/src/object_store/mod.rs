@@ -168,7 +168,7 @@ impl ObjectStoreClient {
         chunk_type: ChunkType,
     ) -> Result<Vec<u8>, ChunkRetrievalError> {
         use ChunkRetrievalError::*;
-        let res = (|| async move {
+        let res = async move {
             let bytes = self
                 .object_store
                 .get(&self.chunk_path(submission_prefix, chunk_index, chunk_type))
@@ -177,7 +177,7 @@ impl ObjectStoreClient {
                 .await?
                 .into();
             Ok(bytes)
-        })()
+        }
         .await;
         res.map_err(|e| ObjectStoreError {
             source: e,

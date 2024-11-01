@@ -77,6 +77,7 @@ impl ConsumerState {
     }
 
     #[tracing::instrument(skip(self, stale_chunks_notifier))]
+    #[allow(clippy::type_complexity)]
     pub async fn fetch_and_reserve_chunks(
         &mut self,
         strategy: Strategy,

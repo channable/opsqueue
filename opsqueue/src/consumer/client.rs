@@ -29,7 +29,6 @@ use crate::{
         submission::Submission,
     },
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
-    map_both,
 };
 
 use super::{
@@ -323,7 +322,10 @@ impl Client {
             .await?;
         match resp {
             SyncServerToClientResponse::ChunksReserved(chunks_res) => {
-                let chunks = chunks_res.map_err(|err| map_both!(err, e => e.into()))?;
+                let chunks = chunks_res.map_err(|err| match err {
+                    E::L(e) => E::L(e.into()),
+                    E::R(e) => E::R(e),
+                })?;
                 Ok(chunks)
             }
             other => Err(UnexpectedSyncResponse {
@@ -387,7 +389,7 @@ pub enum InternalConsumerClientError {
 
 impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> {
     fn from(value: InternalConsumerClientError) -> Self {
-        E::L(InternalConsumerClientError::from(value))
+        E::L(value)
     }
 }
 

@@ -198,6 +198,7 @@ def _flatten_iterator(iter_of_iters: Iterable[Iterable[bytes]]) -> Iterator[byte
     "Flatten one level of nesting."
     return itertools.chain.from_iterable(iter_of_iters)
 
+
 class ChunkSizeIsZeroError(Exception):
     def __str__(self) -> str:
-        "Chunk size must be a positive integer"
+        return "Chunk size must be a positive integer"

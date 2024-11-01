@@ -42,6 +42,7 @@ pub enum ServerToClientMessage {
 /// Responses to earlier ClientToServerMessages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
+    #[allow(clippy::type_complexity)]
     ChunksReserved(
         Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
     ),

@@ -135,6 +135,7 @@ impl ProducerClient {
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[allow(clippy::type_complexity)]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
@@ -215,6 +216,7 @@ impl ProducerClient {
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[allow(clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
@@ -291,6 +293,7 @@ type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 // https://github.com/channable/opsqueue/issues/62
 #[pyclass]
 pub struct PyChunksIter {
+    #[allow(clippy::type_complexity)]
     stream: MaybeUninit<Mutex<PinfulStream<CPyResult<Vec<u8>, ChunkRetrievalError>>>>,
     // SAFETY:
     // The following fields _have_ to be boxed so they won't move in memory once the struct itself moves.

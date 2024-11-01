@@ -147,7 +147,7 @@ impl ConsumerConn {
                 self.consumer_state
                     .complete_chunk(id, output_content)
                     .await
-                    .map_err(|e| anyhow::Error::from(e))?;
+                    .map_err(anyhow::Error::from)?;
                 Some(ChunkCompleted)
             }
             FailChunk { id, failure } => {
