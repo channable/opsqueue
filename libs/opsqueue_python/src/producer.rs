@@ -1,8 +1,8 @@
-use std::{future::IntoFuture, mem::MaybeUninit, pin::Pin, sync::Arc, time::Duration};
+use std::{future::IntoFuture, sync::Arc, time::Duration};
 
 use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyIterator};
 
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
     common::{chunk, submission},
     object_store::{ChunkRetrievalError, ChunkType},
@@ -15,6 +15,7 @@ use opsqueue::{
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
 use tokio::sync::Mutex;
+use ux_serde::u63;
 
 use crate::{
     common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes},
@@ -63,7 +64,7 @@ impl ProducerClient {
     pub fn __repr__(&self) -> String {
         format!(
             "<opsqueue_producer.ProducerClient(address={:?}, object_store_url={:?})>",
-            self.producer_client.endpoint_url, self.object_store_client.url
+            self.producer_client.endpoint_url, self.object_store_client.url()
         )
     }
 
@@ -285,54 +286,16 @@ impl ProducerClient {
     }
 }
 
-type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
-
-// TODO: This is ugly and painful.
-// At the very least, we should double-check the soundness with miri,
-// but hopefully we can replace this by something else entirely.
-// https://github.com/channable/opsqueue/issues/62
 #[pyclass]
 pub struct PyChunksIter {
-    #[allow(clippy::type_complexity)]
-    stream: MaybeUninit<Mutex<PinfulStream<CPyResult<Vec<u8>, ChunkRetrievalError>>>>,
-    // SAFETY:
-    // The following fields _have_ to be boxed so they won't move in memory once the struct itself moves.
-    // They also _have_ to be after the `stream` field, ensuring they are dropped _after_ stream is dropped.
-    self_borrows: Box<(String, ProducerClient)>,
+    stream: Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>,
+    producer_client: ProducerClient,
 }
 
 impl PyChunksIter {
-    pub(crate) async fn new(client: ProducerClient, prefix: String, chunks_total: i64) -> Self {
-        let self_borrows = Box::new((prefix, client));
-        let mut me = Self {
-            self_borrows,
-            stream: MaybeUninit::uninit(),
-        };
-
-        let stream = me
-            .self_borrows
-            .1
-            .object_store_client
-            .retrieve_chunks(&me.self_borrows.0, chunks_total, ChunkType::Output)
-            .await;
-        let stream = stream.map_err(CError);
-        // SAFETY:
-        // Welcome in self-referential struct land.
-        //
-        // We have to transmute the too-short lifetime to a fake 'static lifetime,
-        // to convince the compiler that `self.stream` will never outlive the passed `client` and `prefix`.
-        // As long as we indeed pass `self.client` and `self.prefix` and never take the `stream` field out of the PyChunksIter struct
-        // after creation, this is sound.
-        //
-        // We have to resort to a self-referential struct because lifetimes cannot cross over to Python,
-        // so we have to pack the stream with all of its dependencies.
-        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> =
-            Box::pin(stream);
-        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> =
-            unsafe { std::mem::transmute(stream) };
-        me.stream = MaybeUninit::new(Mutex::new(stream));
-
-        me
+    pub(crate) async fn new(client: ProducerClient, prefix: String, chunks_total: u63) -> Self {
+        let stream = client.object_store_client.retrieve_chunks(&prefix, chunks_total, ChunkType::Output).await.map_err(CError).boxed();
+        Self {stream: Mutex::new(stream), producer_client: client}
     }
 }
 
@@ -343,9 +306,8 @@ impl PyChunksIter {
     }
 
     fn __next__(slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
-        slf.self_borrows.1.runtime.block_on(async {
-            // SAFETY: The MaybeUninit is always initialized once `PyChunksIter::new` returns.
-            let mut stream = unsafe { slf.stream.assume_init_ref() }.lock().await;
+        slf.producer_client.runtime.block_on(async {
+            let mut stream = slf.stream.lock().await;
             stream.next().await.map(|r| r.map(VecAsPyBytes))
         })
     }

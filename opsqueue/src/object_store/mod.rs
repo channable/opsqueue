@@ -11,10 +11,16 @@ use ux_serde::u63;
 ///
 /// This exists as a separate type, so we can build it _once_
 /// and then re-use it in the producer/consumer for all communication going forward from there.
+/// 
+/// It is Arc-wrapped, allowing for cheap cloning
+/// (which is especially necessary for `ObjectStoreClient::retrieve_chunks`)
 #[derive(Debug, Clone)]
-pub struct ObjectStoreClient {
-    pub url: Box<str>,
-    object_store: Arc<DynObjectStore>,
+pub struct ObjectStoreClient(Arc<ObjectStoreClientInner>);
+
+#[derive(Debug)]
+pub struct ObjectStoreClientInner {
+    url: Box<str>,
+    object_store: Box<DynObjectStore>,
     base_path: Path,
 }
 
@@ -97,11 +103,11 @@ impl ObjectStoreClient {
     pub fn new(object_store_url: &str) -> Result<Self, NewObjectStoreClientError> {
         let url = Url::parse(object_store_url)?;
         let (object_store, base_path) = object_store::parse_url(&url)?;
-        Ok(ObjectStoreClient {
+        Ok(ObjectStoreClient(Arc::new(ObjectStoreClientInner {
             url: object_store_url.into(),
-            object_store: Arc::new(object_store),
+            object_store: object_store,
             base_path,
-        })
+        })))
     }
 
     pub async fn store_chunks(
@@ -149,7 +155,7 @@ impl ObjectStoreClient {
     ) -> Result<(), ChunkStorageError> {
         use ChunkStorageError::*;
         let path = self.chunk_path(submission_prefix, chunk_index, chunk_type);
-        self.object_store
+        self.0.object_store
             .put(&path, content.into())
             .await
             .map_err(|e| ObjectStoreError {
@@ -170,6 +176,7 @@ impl ObjectStoreClient {
         use ChunkRetrievalError::*;
         let res = async move {
             let bytes = self
+                .0
                 .object_store
                 .get(&self.chunk_path(submission_prefix, chunk_index, chunk_type))
                 .await?
@@ -186,21 +193,31 @@ impl ObjectStoreClient {
             chunk_type,
         })
     }
-
-    pub async fn retrieve_chunks<'a>(
-        &'a self,
-        submission_prefix: &'a str,
-        chunk_count: i64,
+    pub async fn retrieve_chunks(
+        &self, 
+        submission_prefix: &str,
+        chunk_count: u63,
         chunk_type: ChunkType,
-    ) -> impl TryStreamExt<Ok = Vec<u8>, Error = ChunkRetrievalError> + 'a {
-        stream::iter(0..chunk_count).then(move |chunk_index| async move {
-            self.retrieve_chunk(submission_prefix, chunk_index.into(), chunk_type)
-                .await
+    ) -> impl TryStreamExt<Ok = Vec<u8>, Error = ChunkRetrievalError> + 'static {
+
+        // NOTE: It is unfortunate that we need to do a double clone here.
+        // There must be a better way!?
+        let me = self.clone();
+        let submission_prefix: Box<str> = submission_prefix.into();
+        stream::iter(0..(chunk_count.into())).then(move |chunk_index| 
+            {
+                let me = me.clone();
+                let submission_prefix = submission_prefix.clone();
+                async move {
+                    let chunk_index: u63 = u63::new(chunk_index);
+                    me.retrieve_chunk(&submission_prefix, chunk_index.into(), chunk_type)
+                        .await
+                }
         })
     }
 
     pub fn base_path(&self) -> &Path {
-        &self.base_path
+        &self.0.base_path
     }
 
     fn chunk_path(
@@ -211,7 +228,11 @@ impl ObjectStoreClient {
     ) -> Path {
         Path::from(format!(
             "{}/{}/{}-{}.bin",
-            self.base_path, submission_prefix, chunk_index, chunk_type
+            self.0.base_path, submission_prefix, chunk_index, chunk_type
         ))
+    }
+
+    pub fn url(&self) -> &str {
+        &self.0.url
     }
 }

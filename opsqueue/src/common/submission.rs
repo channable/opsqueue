@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use ux_serde::u63;
 
 #[cfg(feature = "server-logic")]
 use super::chunk::ChunkIndex;
@@ -112,7 +113,7 @@ pub struct Submission {
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub prefix: Option<String>,
-    pub chunks_total: i64,
+    pub chunks_total: u63,
     pub metadata: Option<Metadata>,
     pub completed_at: DateTime<Utc>,
 }
@@ -299,7 +300,7 @@ pub async fn submission_status(
             1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
                 id: row.id.into(),
                 prefix: row.prefix,
-                chunks_total: row.chunks_total,
+                chunks_total: u63::new(row.chunks_total as u64),
                 metadata: row.metadata,
                 completed_at: row.completed_at.unwrap_or_default().and_utc(),
             }))),
