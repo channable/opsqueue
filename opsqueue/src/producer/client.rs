@@ -1,6 +1,20 @@
+use std::time::Duration;
+
+use backon::BackoffBuilder;
+use backon::FibonacciBuilder;
+use backon::Retryable;
+
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 
 use super::common::InsertSubmission;
+
+fn retry_policy() -> impl BackoffBuilder {
+    FibonacciBuilder::default()
+    .with_jitter()
+    .with_min_delay(Duration::from_millis(10))
+    .with_max_delay(Duration::from_secs(5))
+    .with_max_times(100)
+}
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -19,39 +33,55 @@ impl Client {
     }
 
     pub async fn count_submissions(&self) -> Result<u32, InternalProducerClientError> {
-        let endpoint_url = &self.endpoint_url;
-        let resp = self
-            .http_client
-            .get(format!("http://{endpoint_url}/submissions/count"))
-            .send()
-            .await?;
-        let bytes = resp.bytes().await?;
-        let body  = serde_json::from_slice(&bytes)?;
+        (|| async {
+            let endpoint_url = &self.endpoint_url;
+            let resp = self
+                .http_client
+                .get(format!("http://{endpoint_url}/submissions/count"))
+                .send()
+                .await?;
+            let bytes = resp.bytes().await?;
+            let body  = serde_json::from_slice(&bytes)?;
 
-        Ok(body)
+            Ok(body)
+        })
+        .retry(retry_policy())
+        .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+        })
+        .await
     }
 
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
     ) -> Result<SubmissionId, InternalProducerClientError> {
-        let endpoint_url = &self.endpoint_url;
-        let resp = self
-            .http_client
-            .post(format!("http://{endpoint_url}/submissions"))
-            .json(submission)
-            .send()
-            .await?;
-        let bytes = resp.bytes().await?;
-        let body = serde_json::from_slice(&bytes)?;
-
-        Ok(body)
+        (|| async {
+            let endpoint_url = &self.endpoint_url;
+            let resp = self
+                .http_client
+                .post(format!("http://{endpoint_url}/submissions"))
+                .json(submission)
+                .send()
+                .await?;
+            let bytes = resp.bytes().await?;
+            let body = serde_json::from_slice(&bytes)?;
+            Ok(body)
+        })
+        .retry(retry_policy())
+        .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+        })
+        .await
     }
 
     pub async fn get_submission(
         &self,
         submission_id: SubmissionId,
     ) -> Result<Option<SubmissionStatus>, InternalProducerClientError> {
+        (|| async {
         let endpoint_url = &self.endpoint_url;
         let resp = self
             .http_client
@@ -61,6 +91,13 @@ impl Client {
         let bytes = resp.bytes().await?;
         let body = serde_json::from_slice(&bytes)?;
         Ok(body)
+        })
+        .retry(retry_policy())
+        .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+        })
+        .await
     }
 }
 
@@ -70,6 +107,17 @@ pub enum InternalProducerClientError {
     HTTPClientError(#[from] reqwest::Error),
     #[error("Error decoding JSON response")]
     ResponseDecodingError(#[from] serde_json::Error)
+}
+
+impl InternalProducerClientError {
+    pub fn is_ephemeral(&self) -> bool {
+        match self {
+            // NOTE: reqwest doesn't make this very easy as it has a single error typed used for _everything_
+            // Maybe a different HTTP client library is nicer in this regard?
+            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout(),
+            Self::ResponseDecodingError(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@ use futures::{
     SinkExt, StreamExt,
 };
 use http::Uri;
-use retry_if::ExponentialBackoffConfig;
 use tokio::{net::TcpStream, sync::oneshot::error::RecvError};
 use tokio::{
     select,
@@ -38,6 +37,8 @@ use super::{
     },
     strategy::Strategy,
 };
+
+use backon::{BackoffBuilder, FibonacciBuilder, Retryable};
 
 type InFlightRequests = Arc<
     Mutex<(
@@ -142,30 +143,23 @@ impl OuterClient {
         }
     }
 
-    #[retry_if::retry(BACKOFF_CONFIG, retry_errs)]
     async fn initialize(&self) -> anyhow::Result<Client> {
-        Client::new(&self.1).await
+        (|| Client::new(&self.1))
+        .retry(retry_policy())
+        .notify(|err, duration| { log::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
+        .await
     }
 }
 
-const BACKOFF_CONFIG: ExponentialBackoffConfig = ExponentialBackoffConfig {
-    max_retries: i32::MAX, // TODO: This is brittle. Maybe improve the `retry_if` crate to support indefinite retries?
-    t_wait: Duration::from_millis(50),
-    backoff: 2.0,
-    t_wait_max: None,
-    backoff_max: Some(Duration::from_secs(10)),
-};
-
-fn retry_errs<T>(result: &anyhow::Result<T>) -> bool {
-    match result {
-        Err(err) => {
-            log::debug!(
-                "Error establishing consumer client WS connection. (Will retry). Details: {err:?}"
-            );
-            true
-        }
-        Ok(_) => false,
-    }
+// TOOD: Set max retries to `None`;
+// will require either writing our own Backoff (iterator)
+// or extending the backon crate.
+fn retry_policy() -> impl BackoffBuilder {
+    FibonacciBuilder::default()
+    .with_jitter()
+    .with_min_delay(Duration::from_millis(10))
+    .with_max_delay(Duration::from_secs(5))
+    .with_max_times(usize::MAX)
 }
 
 #[derive(Debug)]
