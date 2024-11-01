@@ -10,7 +10,7 @@ use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use ux_serde::u63;
 
-use super::errors::{ChunkNotFound, DatabaseError, Either, SubmissionNotFound};
+use super::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
 use super::submission::SubmissionId;
 use super::MayBeZero;
 
@@ -148,15 +148,15 @@ pub async fn complete_chunk(
     full_chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
-) -> Result<(), Either<DatabaseError, Either<SubmissionNotFound, ChunkNotFound>>> {
+) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
     conn.transaction(|tx| {
         Box::pin(async move {
             complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
             super::submission::maybe_complete_submission(full_chunk_id.0, tx)
                 .await
                 .map_err(|e| match e {
-                    Either::Left(e) => Either::Left(e),
-                    Either::Right(e) => Either::Right(Either::Left(e)),
+                    E::L(e) => E::L(e),
+                    E::R(e) => E::R(E::L(e)),
                 })?;
             Ok(())
         })

@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use futures::{stream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::errors::{Either, IncorrectUsage, LimitIsZero},
+    common::errors::{E::{self, L, R}, IncorrectUsage, LimitIsZero},
     consumer::client::InternalConsumerClientError,
-    object_store::{ChunkRetrievalError, ChunkType, NewObjectStoreClientError, ObjectStoreClient},
+    object_store::{ChunkRetrievalError, ChunkStorageError, ChunkType, NewObjectStoreClientError, ObjectStoreClient},
     E,
 };
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
@@ -83,7 +83,12 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> PyResult<()> {
+    ) -> CPyResult<(), 
+        E![
+            FatalPythonException, 
+            ChunkStorageError, 
+            InternalConsumerClientError]
+        > {
         py.allow_threads(|| {
             self.complete_chunk_gilless(
                 submission_id,
@@ -102,7 +107,7 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> CPyResult<(), Either<FatalPythonException, InternalConsumerClientError>> {
+    ) -> CPyResult<(), E<FatalPythonException, InternalConsumerClientError>> {
         py.allow_threads(|| {
             self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)
         })
@@ -115,6 +120,7 @@ impl ConsumerClient {
     ) -> CError<
         E![
             FatalPythonException,
+            ChunkStorageError,
             ChunkRetrievalError,
             InternalConsumerClientError,
             IncorrectUsage<LimitIsZero>,
@@ -132,8 +138,12 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
-                let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
-                    let chunks = self.reserve_chunks_gilless(1, strategy.clone())?;
+                let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkStorageError, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
+                    let chunks = self.reserve_chunks_gilless(1, strategy.clone()).map_err(|e| match e {
+                        CError(L(e)) => CError(L(e)),
+                        CError(R(L(e))) => CError(R(R(L(e)))),
+                        CError(R(R(e))) => CError(R(R(R(e)))),
+                    })?;
                     log::debug!("Reserved {} chunks", chunks.len());
                     for chunk in chunks {
                         let submission_id = chunk.submission_id;
@@ -147,15 +157,19 @@ impl ConsumerClient {
                         match res {
                             Ok(res) => {
                                 log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
-                                self.complete_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, res)?;
+                                self.complete_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, res).map_err(|e| match e {
+                                    CError(L(e)) => CError(L(e)),
+                                    CError(R(L(e))) => CError(R(L(e))),
+                                    CError(R(R(e))) => CError(R(R(R(L(e)))))
+                                })?;
                                 log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
                             },
                             Err(failure) => {
                                 log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure:?}", submission_id, chunk_index, &submission_prefix);
                                 self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}")).map_err(|e| 
                                     match e {
-                                        CError(Either::Left(py_err)) => CError(Either::Left(py_err)),
-                                        CError(Either::Right(e)) => CError(Either::Right(Either::Right(Either::Left(e)))),
+                                        CError(L(py_err)) => CError(L(py_err)),
+                                        CError(R(e)) => CError(R(R(R(L(e))))),
                                     }
 
                                 )?;
@@ -182,11 +196,11 @@ impl ConsumerClient {
                 match chunk_outcome {
                     Ok(()) => {}
                     // In essence we 'catch `Exception` (but _not_ `BaseException` here)
-                    Err(CError(Either::Left(e))) => {
+                    Err(CError(L(e))) => {
                         log::info!("Opsqueue consumer closing because of exception: {e:?}");
-                        return CError(Either::Left(e))
+                        return CError(L(e))
                     }
-                    Err(CError(Either::Right(err))) => {
+                    Err(CError(R(err))) => {
                         log::warn!("Opsqueue consumer encountered a Rust error, but will continue: {}", err);
                     }
                 }
@@ -194,6 +208,7 @@ impl ConsumerClient {
         })
     }
 }
+
 
 // What follows are internal helper functions
 // that are not available directly from Python
@@ -224,11 +239,11 @@ impl ConsumerClient {
         strategy: Strategy,
     ) -> CPyResult<
         Vec<Chunk>,
-        Either<
+        E<
             FatalPythonException,
-            Either<
+            E<
                 ChunkRetrievalError,
-                Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+                E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
             >,
         >,
     > {
@@ -240,7 +255,7 @@ impl ConsumerClient {
             let res = self.block_unless_interrupted(async {
                 self.reserve_and_retrieve_chunks(max, strategy.clone())
                     .await
-                    .map_err(|e| CError(Either::Right(e.into())))
+                    .map_err(|e| CError(R(e.into())))
             });
             match res {
                 Err(e) => return Err(e),
@@ -258,24 +273,29 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> PyResult<()> {
+    ) -> CPyResult<(), 
+        E![
+            FatalPythonException, 
+            ChunkStorageError, 
+            InternalConsumerClientError]
+        > 
+        {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(async move {
             match submission_prefix {
                 None => {
                     self.client
                         .complete_chunk(chunk_id, Some(output_content))
-                        .await
+                        .await.map_err(|e| CError(R(R(e))))
                 }
                 Some(prefix) => {
                     self.object_store_client
                         .store_chunk(&prefix, chunk_id.1, ChunkType::Output, output_content)
-                        .await?;
-                    self.client.complete_chunk(chunk_id, None).await
+                        .await.map_err(|e| CError(R(L(e))))?;
+                    self.client.complete_chunk(chunk_id, None).await.map_err(|e| CError(R(R(e))))
                 }
             }
         })
-        .map_err(maybe_wrap_error)
     }
 
     pub fn fail_chunk_gilless(
@@ -284,13 +304,13 @@ impl ConsumerClient {
         _submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         failure: String,
-    ) -> CPyResult<(), Either<FatalPythonException, InternalConsumerClientError>> {
+    ) -> CPyResult<(), E<FatalPythonException, InternalConsumerClientError>> {
         let chunk_id = (submission_id.into(), chunk_index.into());
         self.block_unless_interrupted(async {
             self.client
                 .fail_chunk(chunk_id, failure)
                 .await
-                .map_err(Either::Right)
+                .map_err(R)
                 .map_err(CError)
         })
     }
@@ -301,9 +321,9 @@ impl ConsumerClient {
         strategy: opsqueue::consumer::strategy::Strategy,
     ) -> Result<
         Vec<Chunk>,
-        Either<
+        E<
             ChunkRetrievalError,
-            Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+            E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
         >,
     > {
         let chunks = self.client.reserve_chunks(max, strategy).await?;
@@ -311,6 +331,6 @@ impl ConsumerClient {
             .then(|(c, s)| Chunk::from_internal(c, s, &self.object_store_client))
             .try_collect()
             .await
-            .map_err(|e| Either::Left(e))
+            .map_err(|e| L(e))
     }
 }

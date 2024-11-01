@@ -10,7 +10,7 @@ use opsqueue::{
     E,
 };
 use opsqueue::{
-    common::{errors::Either, NonZero, NonZeroIsZero},
+    common::{errors::E::{self, L, R}, NonZero, NonZeroIsZero},
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
@@ -73,13 +73,13 @@ impl ProducerClient {
     pub fn count_submissions(
         &self,
         py: Python<'_>,
-    ) -> CPyResult<u32, Either<FatalPythonException, InternalProducerClientError>> {
+    ) -> CPyResult<u32, E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .count_submissions()
                     .await
-                    .map_err(|e| CError(Either::Right(e)))
+                    .map_err(|e| CError(R(e)))
             })
         })
     }
@@ -96,14 +96,14 @@ impl ProducerClient {
         id: SubmissionId,
     ) -> CPyResult<
         Option<SubmissionStatus>,
-        Either<FatalPythonException, InternalProducerClientError>,
+        E<FatalPythonException, InternalProducerClientError>,
     > {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .get_submission(id.into())
                     .await
-                    .map_err(|e| CError(Either::Right(e)))
+                    .map_err(|e| CError(R(e)))
             })
             .map(|opt| opt.map(Into::into))
             // .map_err(|e| ProducerClientError::new_err(e.to_string()))
@@ -116,7 +116,7 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
-    ) -> CPyResult<SubmissionId, Either<FatalPythonException, InternalProducerClientError>> {
+    ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
                 chunk_contents: ChunkContents::Direct {
@@ -128,7 +128,7 @@ impl ProducerClient {
                 self.producer_client
                     .insert_submission(&submission)
                     .await
-                    .map_err(|e| Either::Right(e).into())
+                    .map_err(|e| R(e).into())
             })
             .map(Into::into)
         })
@@ -162,11 +162,11 @@ impl ProducerClient {
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
-                        .map_err(|e| CError(Either::Right(Either::Right(Either::Left(e)))))
+                        .map_err(|e| CError(R(R(L(e)))))
                 })
             })?;
             let chunk_count = NonZero::try_from(chunk::ChunkIndex::from(chunk_count))
-                .map_err(|e| Either::Right(Either::Left(e)))?;
+                .map_err(|e| R(L(e)))?;
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
@@ -180,7 +180,7 @@ impl ProducerClient {
                     .insert_submission(&submission)
                     .await
                     .map(|submission_id| submission_id.into())
-                    .map_err(|e| Either::Right(Either::Right(Either::Right(e))).into())
+                    .map_err(|e| R(R(R(e))).into())
             })
         })
     }
@@ -203,9 +203,9 @@ impl ProducerClient {
                 match self
                     .maybe_stream_completed_submission(id)
                     .await
-                    .map_err(|CError(e)| CError(Either::Right(Either::Right(e))))?
+                    .map_err(|CError(e)| CError(R(R(e))))?
                 {
-                    None => Err(CError(Either::Right(Either::Left(
+                    None => Err(CError(R(L(
                         SubmissionNotCompletedYetError(id),
                     ))))?,
                     Some(py_iter) => Ok(py_iter),
@@ -237,7 +237,7 @@ impl ProducerClient {
                         .maybe_stream_completed_submission(submission_id)
                         .await
                         .map_err(|CError(e)| {
-                            CError(Either::Right(Either::Right(Either::Right(e))))
+                            CError(R(R(R(e))))
                         })?
                     {
                         return Ok(py_stream);

@@ -8,7 +8,7 @@ use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, Sqli
 #[cfg(feature = "server-logic")]
 use super::chunk::ChunkIndex;
 use super::chunk::{self, Chunk};
-use super::errors::{DatabaseError, Either, SubmissionNotFound};
+use super::errors::{DatabaseError, E, SubmissionNotFound};
 use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
@@ -244,7 +244,7 @@ pub async fn insert_submission_from_chunks(
 pub async fn get_submission(
     id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
-) -> Result<Submission, Either<DatabaseError, SubmissionNotFound>> {
+) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
     let submission = query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
         .fetch_one(conn)
         .await?;
@@ -324,7 +324,7 @@ pub async fn submission_status(
 pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
-) -> Result<bool, Either<DatabaseError, SubmissionNotFound>> {
+) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
     use sqlx::Connection;
     conn.transaction(|tx| {
         Box::pin(async move {
@@ -347,7 +347,7 @@ pub async fn maybe_complete_submission(
 pub async fn complete_submission_raw(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
-) -> Result<(), Either<DatabaseError, SubmissionNotFound>> {
+) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -368,8 +368,8 @@ pub async fn complete_submission_raw(
     .fetch_one(conn)
     .await
     .map_err(|e| match e {
-        sqlx::Error::RowNotFound => Either::Right(SubmissionNotFound(id)),
-        e => Either::Left(DatabaseError::from(e)),
+        sqlx::Error::RowNotFound => E::R(SubmissionNotFound(id)),
+        e => E::L(DatabaseError::from(e)),
     })?;
     Ok(())
 }

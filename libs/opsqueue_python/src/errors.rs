@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use opsqueue::common::errors::{
-    ChunkNotFound, Either, IncorrectUsage, SubmissionNotFound,
+    ChunkNotFound, E, IncorrectUsage, SubmissionNotFound,
     UnexpectedOpsqueueConsumerServerResponse,
 };
 use opsqueue::common::NonZeroIsZero;
@@ -50,6 +50,7 @@ create_exception!(
     ChunkRetrievalError,
     OpsqueueInternalError
 );
+create_exception!(opsqueue_internal, ChunkStorageError, OpsqueueInternalError);
 create_exception!(opsqueue_internal, ChunksStorageError, OpsqueueInternalError);
 create_exception!(
     opsqueue_internal,
@@ -139,6 +140,12 @@ impl From<CError<opsqueue::object_store::ChunksStorageError>> for PyErr {
     }
 }
 
+impl From<CError<opsqueue::object_store::ChunkStorageError>> for PyErr {
+    fn from(value: CError<opsqueue::object_store::ChunkStorageError>) -> Self {
+        ChunkStorageError::new_err(value.0.to_string()).into()
+    }
+}
+
 impl From<CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>> for PyErr {
     fn from(value: CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>) -> Self {
         ChunkCountIsZeroError::new_err(value.0.to_string()).into()
@@ -204,27 +211,27 @@ impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
     }
 }
 
-impl<T> From<PyErr> for CError<Either<FatalPythonException, T>> {
+impl<T> From<PyErr> for CError<E<FatalPythonException, T>> {
     fn from(value: PyErr) -> Self {
-        CError(Either::Left(FatalPythonException(value)))
+        CError(E::L(FatalPythonException(value)))
     }
 }
 
-impl<T> From<FatalPythonException> for CError<Either<FatalPythonException, T>> {
+impl<T> From<FatalPythonException> for CError<E<FatalPythonException, T>> {
     fn from(value: FatalPythonException) -> Self {
-        CError(Either::Left(value))
+        CError(E::L(value))
     }
 }
 
-impl<L, R> From<CError<Either<L, R>>> for PyErr
+impl<L, R> From<CError<E<L, R>>> for PyErr
 where
     PyErr: From<CError<L>> + From<CError<R>>, // CError<L>: Into<PyErr>,
                                               // CError<R>: Into<PyErr>,
 {
-    fn from(value: CError<Either<L, R>>) -> Self {
+    fn from(value: CError<E<L, R>>) -> Self {
         match value.0 {
-            Either::Left(e) => CError(e).into(),
-            Either::Right(e) => CError(e).into(),
+            E::L(e) => CError(e).into(),
+            E::R(e) => CError(e).into(),
         }
     }
 }

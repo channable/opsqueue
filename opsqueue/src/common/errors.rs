@@ -27,35 +27,37 @@ pub struct ChunkNotFound(pub ChunkId);
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
 
-impl<T> From<DatabaseError> for Either<DatabaseError, T> {
+impl<T> From<DatabaseError> for E<DatabaseError, T> {
     fn from(e: DatabaseError) -> Self {
-        Either::Left(e)
+        E::L(e)
     }
 }
 
-/// We roll our own version of `either::Either` so that we're not limited by the orphan rule.
+/// We roll our own version of `either::E` so that we're not limited by the orphan rule.
 ///
-/// We only use this particular Either type for error handling in the case we have a result returning two or more
+/// We only use this particular E type for error handling in the case we have a result returning two or more
 /// potential errors.
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]
-pub enum Either<L, R> {
+pub enum E<L, R> {
+    /// A abbreviation for Left
     #[error(transparent)]
-    Left(L),
+    L(L),
+    /// An abbreviation for Right
     #[error(transparent)]
-    Right(R),
+    R(R),
 }
 
-/// Builds a nested `Either` from two or more (error) types.
-/// - `E![A, B]` is the same as `Either<A, B>`
-/// - `E![A, B, C]` is the same as `Either<A, Either<B, C>>`
+/// Builds a nested `E` from two or more (error) types.
+/// - `E![A, B]` is the same as `E<A, B>`
+/// - `E![A, B, C]` is the same as `E<A, E<B, C>>`
 /// - etc.
 #[macro_export]
 macro_rules! E {
-    ($tl: ty, $tr: ty) => ($crate::common::errors::Either<$tl, $tr>);
-    ($h:ty, $($t:ty),+ $(,)?) => ($crate::common::errors::Either<$h, $crate::E!($($t),+)>);
+    ($tl: ty, $tr: ty) => ($crate::common::errors::E<$tl, $tr>);
+    ($h:ty, $($t:ty),+ $(,)?) => ($crate::common::errors::E<$h, $crate::E!($($t),+)>);
 }
 
-/// Allows you to run the same expression on both halves of an Either,
+/// Allows you to run the same expression on both halves of an E,
 /// without the types necessarily having to match.
 ///
 /// For example, to run `Into::into` on both halves, we cannot just pass a single function
@@ -69,16 +71,16 @@ macro_rules! E {
 /// which will desugar to
 /// ```rust
 /// match either {
-///   Either::Left(variant) => Either::Left(variant.into()),
-///   Either::Right(variant) => Either::Right(variant.into()),
+///   E::L(variant) => E::L(variant.into()),
+///   E::R(variant) => E::R(variant.into()),
 /// }
 /// ```
 #[macro_export]
 macro_rules! map_both {
     ($value:expr, $pattern:pat => $result:expr) => {
         match $value {
-            $crate::common::errors::Either::Left($pattern) => Either::Left($result),
-            $crate::common::errors::Either::Right($pattern) => Either::Right($result),
+            $crate::common::errors::E::L($pattern) => $crate::common::errors::E::L($result),
+            $crate::common::errors::E::R($pattern) => $crate::common::errors::E::R($result),
         }
     };
 }
@@ -88,21 +90,21 @@ macro_rules! map_both {
 macro_rules! fold_both {
     ($value:expr, $pattern:pat => $result:expr) => {
         match $value {
-            $crate::common::errors::Either::Left($pattern) => $result,
-            $crate::common::errors::Either::Right($pattern) => $result,
+            $crate::common::errors::E::L($pattern) => $result,
+            $crate::common::errors::E::R($pattern) => $result,
         }
     };
 }
 
-impl<R> From<sqlx::Error> for Either<DatabaseError, R> {
+impl<R> From<sqlx::Error> for E<DatabaseError, R> {
     fn from(value: sqlx::Error) -> Self {
-        Either::Left(DatabaseError::from(value))
+        E::L(DatabaseError::from(value))
     }
 }
 
-impl<L, R1, R2> From<Either<R1, R2>> for Either<L, Either<R1, R2>> {
-    fn from(value: Either<R1, R2>) -> Self {
-        Either::Right(value)
+impl<L, R1, R2> From<E<R1, R2>> for E<L, E<R1, R2>> {
+    fn from(value: E<R1, R2>) -> Self {
+        E::R(value)
     }
 }
 

@@ -25,7 +25,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::{
     common::{
         chunk::{self, Chunk, ChunkId},
-        errors::{DatabaseError, Either, IncorrectUsage, LimitIsZero},
+        errors::{DatabaseError, E, IncorrectUsage, LimitIsZero},
         submission::Submission,
     },
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
@@ -66,7 +66,7 @@ impl OuterClient {
         strategy: Strategy,
     ) -> Result<
         Vec<(Chunk, Submission)>,
-        Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+        E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
     > {
         self.ensure_initialized().await;
         let res = self
@@ -87,7 +87,7 @@ impl OuterClient {
         &self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), InternalConsumerClientError> {
         self.ensure_initialized().await;
         let res = self
             .0
@@ -315,7 +315,7 @@ impl Client {
         strategy: Strategy,
     ) -> Result<
         Vec<(Chunk, Submission)>,
-        Either<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
+        E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
     > {
         use InternalConsumerClientError::*;
         let resp = self
@@ -338,13 +338,16 @@ impl Client {
         &self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), InternalConsumerClientError> {
+        use InternalConsumerClientError::*;
         let resp = self
             .request(ClientToServerMessage::CompleteChunk { id, output_content })
             .await?;
         match resp {
             SyncServerToClientResponse::ChunkCompleted => Ok(()),
-            _ => anyhow::bail!("Unexpected response from server: {:?}", resp),
+            other => Err(UnexpectedSyncResponse {
+                actual: other,
+            expected: "ChunkCompleted".into()}),
         }
     }
 
@@ -382,9 +385,9 @@ pub enum InternalConsumerClientError {
     DatabaseError(#[from] DatabaseError),
 }
 
-impl<R> From<InternalConsumerClientError> for Either<InternalConsumerClientError, R> {
+impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> {
     fn from(value: InternalConsumerClientError) -> Self {
-        Either::Left(InternalConsumerClientError::from(value))
+        E::L(InternalConsumerClientError::from(value))
     }
 }
 

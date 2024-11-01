@@ -17,7 +17,7 @@ use crate::{
 
 use super::ServerState;
 use crate::common::errors::{
-    ChunkNotFound, Either, IncorrectUsage, LimitIsZero, SubmissionNotFound,
+    ChunkNotFound, E, IncorrectUsage, LimitIsZero, SubmissionNotFound,
 };
 
 // TODO: We currently clone the arc-like pool and reserver,
@@ -82,9 +82,9 @@ impl ConsumerState {
         strategy: Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
-    ) -> Result<Vec<(Chunk, Submission)>, Either<DatabaseError, IncorrectUsage<LimitIsZero>>> {
+    ) -> Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>> {
         if limit == 0 {
-            return Err(Either::Right(IncorrectUsage(LimitIsZero())));
+            return Err(E::R(IncorrectUsage(LimitIsZero())));
         }
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
@@ -106,7 +106,7 @@ impl ConsumerState {
         &mut self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> Result<(), Either<DatabaseError, Either<SubmissionNotFound, ChunkNotFound>>> {
+    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved

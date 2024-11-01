@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::chunk;
 use crate::common::chunk::{Chunk, ChunkId};
 
-use crate::common::errors::{DatabaseError, Either, IncorrectUsage, LimitIsZero};
+use crate::common::errors::{DatabaseError, E, IncorrectUsage, LimitIsZero};
 use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
 
@@ -43,7 +43,7 @@ pub enum ServerToClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
     ChunksReserved(
-        Result<Vec<(Chunk, Submission)>, Either<DatabaseError, IncorrectUsage<LimitIsZero>>>,
+        Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
     ),
     ChunkCompleted,
     ChunkFailed,
