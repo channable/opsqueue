@@ -1,6 +1,6 @@
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 
-use super::common::{InsertSubmission, InsertSubmissionResponse};
+use super::common::InsertSubmission;
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -25,7 +25,9 @@ impl Client {
             .get(format!("http://{endpoint_url}/submissions/count"))
             .send()
             .await?;
-        let body: u32 = resp.json().await?;
+        let bytes = resp.bytes().await?;
+        let body  = serde_json::from_slice(&bytes)?;
+
         Ok(body)
     }
 
@@ -40,8 +42,10 @@ impl Client {
             .json(submission)
             .send()
             .await?;
-        let body: InsertSubmissionResponse = resp.json().await?;
-        Ok(body.id)
+        let bytes = resp.bytes().await?;
+        let body = serde_json::from_slice(&bytes)?;
+
+        Ok(body)
     }
 
     pub async fn get_submission(
@@ -54,7 +58,8 @@ impl Client {
             .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
             .send()
             .await?;
-        let body: Option<SubmissionStatus> = resp.json().await?;
+        let bytes = resp.bytes().await?;
+        let body = serde_json::from_slice(&bytes)?;
         Ok(body)
     }
 }
@@ -63,6 +68,8 @@ impl Client {
 pub enum InternalProducerClientError {
     #[error("HTTP request failed")]
     HTTPClientError(#[from] reqwest::Error),
+    #[error("Error decoding JSON response")]
+    ResponseDecodingError(#[from] serde_json::Error)
 }
 
 #[cfg(test)]

@@ -82,7 +82,7 @@ async fn submission_status(
 async fn insert_submission(
     State(state): State<ServerState>,
     Json(request): Json<InsertSubmission>,
-) -> Result<Json<InsertSubmissionResponse>, ServerError> {
+) -> Result<Json<SubmissionId>, ServerError> {
     let mut conn = state.pool.acquire().await?;
     let (prefix, chunk_contents) = match request.chunk_contents {
         ChunkContents::Direct { contents } => (None, contents),
@@ -97,7 +97,7 @@ async fn insert_submission(
         &mut conn,
     )
     .await?;
-    Ok(Json(InsertSubmissionResponse { id: submission_id }))
+    Ok(Json(submission_id))
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

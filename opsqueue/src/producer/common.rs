@@ -27,8 +27,3 @@ pub enum ChunkContents {
     /// but significantly less scalable than using `SeeObjectStorage`.
     Direct { contents: Vec<chunk::Content> },
 }
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InsertSubmissionResponse {
-    pub id: SubmissionId,
-}
