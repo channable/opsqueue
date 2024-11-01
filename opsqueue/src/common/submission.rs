@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use ux_serde::u63;
 
 use super::chunk::{ChunkIndex, ChunkCount};
 use super::chunk::{self, Chunk};
