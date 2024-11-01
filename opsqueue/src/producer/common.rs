@@ -2,7 +2,7 @@ use crate::common::NonZero;
 
 use crate::common::{
     chunk,
-    submission::{Metadata, SubmissionId},
+    submission::Metadata,
 };
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

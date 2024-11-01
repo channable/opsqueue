@@ -8,6 +8,8 @@ use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, Sqli
 #[cfg(feature = "server-logic")]
 use super::chunk::ChunkIndex;
 use super::chunk::{self, Chunk};
+
+#[cfg(feature = "server-logic")]
 use super::errors::{DatabaseError, E, SubmissionNotFound};
 use snowflaked::Snowflake;
 

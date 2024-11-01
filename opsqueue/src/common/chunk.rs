@@ -10,7 +10,9 @@ use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use ux_serde::u63;
 
+#[cfg(feature = "server-logic")]
 use super::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
+
 use super::submission::SubmissionId;
 use super::MayBeZero;
 

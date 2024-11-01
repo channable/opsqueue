@@ -13,6 +13,7 @@ pub struct DatabaseError(#[from] pub serde_error::Error);
 #[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]
 pub struct UnexpectedOpsqueueConsumerServerResponse(pub SyncServerToClientResponse);
 
+#[cfg(feature = "server-logic")]
 impl From<sqlx::Error> for DatabaseError {
     fn from(value: sqlx::Error) -> Self {
         DatabaseError(serde_error::Error::new(&value))
@@ -96,6 +97,7 @@ macro_rules! fold_both {
     };
 }
 
+#[cfg(feature = "server-logic")]
 impl<R> From<sqlx::Error> for E<DatabaseError, R> {
     fn from(value: sqlx::Error) -> Self {
         E::L(DatabaseError::from(value))
