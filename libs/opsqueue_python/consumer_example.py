@@ -1,7 +1,7 @@
 import logging
 from opsqueue.consumer import ConsumerClient, Strategy
 
-logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
 
 
 def my_operation(data: int) -> int:
