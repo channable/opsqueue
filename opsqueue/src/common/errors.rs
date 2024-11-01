@@ -65,11 +65,11 @@ macro_rules! E {
 ///
 /// Instead, you can use
 ///
-/// ```rust
+/// ```ignore
 /// map_both!(either, variant => variant.into())
 /// ```
 /// which will desugar to
-/// ```rust
+/// ```ignore
 /// match either {
 ///   E::L(variant) => E::L(variant.into()),
 ///   E::R(variant) => E::R(variant.into()),
