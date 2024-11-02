@@ -11,6 +11,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 #[cfg(feature = "server-logic")]
 use axum::{routing::get, Router};
+use backon::{BackoffBuilder, FibonacciBuilder};
 #[cfg(feature = "server-logic")]
 use http::StatusCode;
 
@@ -25,28 +26,45 @@ use tokio::select;
 #[cfg(feature = "server-logic")]
 use tokio_util::sync::CancellationToken;
 
+// TOOD: Set max retries to `None`;
+// will require either writing our own Backoff (iterator)
+// or extending the backon crate.
+fn retry_policy() -> impl BackoffBuilder {
+    FibonacciBuilder::default()
+    .with_jitter()
+    .with_min_delay(Duration::from_millis(10))
+    .with_max_delay(Duration::from_secs(10))
+    .with_max_times(usize::MAX)
+}
+
+
 #[cfg(feature = "server-logic")]
 pub async fn serve_producer_and_consumer(
     server_addr: &str,
-    pool: SqlitePool,
+    pool: &SqlitePool,
     reservation_expiration: Duration,
-    cancellation_token: CancellationToken,
-    app_healthy_flag: Arc<AtomicBool>,
-) {
+    cancellation_token: &CancellationToken,
+    app_healthy_flag: &Arc<AtomicBool>,
+) -> Result<(), std::io::Error> {
+    use backon::Retryable;
+
+    (|| async {
     let router = build_router(
-        pool,
+        pool.clone(),
         reservation_expiration,
         cancellation_token.clone(),
-        app_healthy_flag,
+        app_healthy_flag.clone(),
     );
     let listener = tokio::net::TcpListener::bind(server_addr)
-        .await
-        .expect("Failed to bind to web server address");
+        .await?;
 
-    let res = axum::serve(listener, router)
-        .with_graceful_shutdown(cancellation_token.cancelled_owned())
-        .await;
-    res.expect("Failed to start web server")
+    axum::serve(listener, router)
+        .with_graceful_shutdown(cancellation_token.clone().cancelled_owned())
+        .await?;
+    Ok(())
+    }).retry(retry_policy()).notify(|e, d| {
+        tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}")
+    }).await
 }
 
 #[cfg(feature = "server-logic")]
@@ -92,13 +110,13 @@ async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
 #[cfg(feature = "server-logic")]
 pub async fn app_watchdog(
     app_healthy_flag: Arc<AtomicBool>,
-    pool: SqlitePool,
+    pool: &SqlitePool,
     cancellation_token: CancellationToken,
 ) {
     loop {
         // For now this is just a single check, but in the future
         // we might have many checks; we first gather them and then write to the atomic bool once.
-        let is_app_healthy = is_db_healthy(&pool).await;
+        let is_app_healthy = is_db_healthy(pool).await;
         app_healthy_flag.store(is_app_healthy, std::sync::atomic::Ordering::Relaxed);
 
         select! {
