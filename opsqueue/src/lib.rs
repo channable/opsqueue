@@ -4,12 +4,10 @@ pub mod producer;
 
 #[cfg(feature = "client-logic")]
 pub mod object_store;
+use std::time::Duration;
 
 #[cfg(feature = "server-logic")]
-use std::{
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 
 #[cfg(feature = "server-logic")]
 use axum::{routing::get, Router};

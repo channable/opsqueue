@@ -276,7 +276,7 @@ impl ProducerClient {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
-                    PyChunksIter::new(self, prefix, submission.chunks_total).await;
+                    PyChunksIter::new(self, prefix, submission.chunks_total.into()).await;
 
                 Ok(Some(py_chunks_iter))
             }

@@ -75,7 +75,8 @@ async fn submission_status(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
-    let status = submission::submission_status(submission_id, &state.pool).await?;
+    let mut conn = state.pool.acquire().await?;
+    let status = submission::submission_status(submission_id, &mut conn).await?;
     Ok(Json(status))
 }
 

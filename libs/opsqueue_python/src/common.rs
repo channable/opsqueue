@@ -188,9 +188,9 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
         Self {
             id: value.id.into(),
             failed_at: value.failed_at,
-            chunks_total: value.chunks_total,
+            chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
-            failed_chunk_id: value.failed_chunk_id,
+            failed_chunk_id: value.failed_chunk_id.into(),
         }
     }
 }
@@ -224,8 +224,8 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submission {
     pub id: SubmissionId,
-    pub chunks_total: i64,
-    pub chunks_done: i64,
+    pub chunks_total: u64,
+    pub chunks_done: u64,
     pub metadata: Option<submission::Metadata>,
 }
 
@@ -233,8 +233,8 @@ impl From<opsqueue::common::submission::Submission> for Submission {
     fn from(value: opsqueue::common::submission::Submission) -> Self {
         Self {
             id: value.id.into(),
-            chunks_total: value.chunks_total,
-            chunks_done: value.chunks_done,
+            chunks_total: value.chunks_total.into(),
+            chunks_done: value.chunks_done.into(),
             metadata: value.metadata,
         }
     }
@@ -294,10 +294,10 @@ pub struct SubmissionCompleted {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionFailed {
     pub id: SubmissionId,
-    pub chunks_total: i64,
+    pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
     pub failed_at: DateTime<Utc>,
-    pub failed_chunk_id: i64,
+    pub failed_chunk_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
