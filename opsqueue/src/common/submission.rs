@@ -4,7 +4,6 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
-use ux_serde::u63;
 
 use super::chunk::{ChunkIndex, ChunkCount};
 use super::chunk::{self, Chunk};
@@ -36,6 +35,25 @@ impl std::fmt::Debug for SubmissionId {
             .finish()
     }
 }
+
+// #[cfg(feature = "server-logic")]
+// impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
+//     fn encode(
+//         self,
+//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+//     ) -> sqlx::encode::IsNull
+//     where
+//         Self: Sized,
+//     {
+//         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+//     }
+//     fn encode_by_ref(
+//         &self,
+//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+//     ) -> sqlx::encode::IsNull {
+//         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+//     }
+// }
 
 #[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {

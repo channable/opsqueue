@@ -48,6 +48,25 @@ impl std::fmt::Display for ChunkIndex {
     }
 }
 
+// #[cfg(feature = "server-logic")]
+// impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
+//     fn encode(
+//         self,
+//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+//     ) -> sqlx::encode::IsNull
+//     where
+//         Self: Sized,
+//     {
+//         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+//     }
+//     fn encode_by_ref(
+//         &self,
+//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
+//     ) -> sqlx::encode::IsNull {
+//         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+//     }
+// }
+
 #[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
     fn encode_by_ref(
