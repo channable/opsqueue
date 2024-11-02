@@ -132,7 +132,7 @@ mod tests {
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         tokio::spawn(
-            super::super::server::ServerState::new(pool.clone()).serve_for_tests(url.into()),
+            super::super::server::serve_for_tests(pool.clone(), url.into()),
         );
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
         tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime

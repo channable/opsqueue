@@ -225,8 +225,10 @@ impl Client {
                         // And now exit the background task, which means all remaining in-flight requests immediately fail as well
                         break
                     } else {
-                        log::debug!("Sending heartbeat");
-                        let _ = ws_sink.lock().await.send(Message::Ping("heartbeat".into())).await;
+                        // NOTE: We don't need to send a heartbeat as client; only the server needs to.
+                        // We only need to track missed heartbeats.
+                        // log::debug!("Sending heartbeat");
+                        // let _ = ws_sink.lock().await.send(Message::Ping("heartbeat".into())).await;
                         heartbeats_missed += 1;
                     }
                 },

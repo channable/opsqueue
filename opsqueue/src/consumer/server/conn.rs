@@ -1,31 +1,42 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::{Message, WebSocket};
 use tokio::{
     select,
-    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Notify},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     common::chunk::ChunkId,
-    consumer::common::{
+    consumer::{common::{
         AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
         SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS,
-    },
+    }, strategy::Strategy},
 };
 
 use super::{state::ConsumerState, ServerState};
+
+#[derive(Debug, Clone)]
+pub struct RetryReservation{
+    nonce: usize, 
+    max: usize, 
+    strategy: Strategy,
+}
 
 pub struct ConsumerConn {
     consumer_state: ConsumerState,
     cancellation_token: CancellationToken,
     ws_stream: WebSocket,
+    notify_on_insert: Arc<Notify>,
     heartbeat_interval: tokio::time::Interval,
     heartbeats_missed: usize,
     // Channel with which the rest of the server can send messages to this particular client
     tx: UnboundedSender<ChunkId>,
     rx: UnboundedReceiver<ChunkId>,
+
+    tx2: UnboundedSender<RetryReservation>,
+    rx2: UnboundedReceiver<RetryReservation>,
 }
 
 impl ConsumerConn {
@@ -33,16 +44,21 @@ impl ConsumerConn {
         let heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
         let heartbeats_missed = 0;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx2, rx2) = tokio::sync::mpsc::unbounded_channel();
         let consumer_state = ConsumerState::new(server_state);
         let cancellation_token = server_state.cancellation_token.clone();
+        let notify_on_insert = server_state.notify_on_insert.clone();
 
         Self {
             consumer_state,
             ws_stream,
+            notify_on_insert,
             heartbeat_interval,
             heartbeats_missed,
             tx,
             rx,
+            tx2,
+            rx2,
             cancellation_token,
         }
     }
@@ -70,6 +86,11 @@ impl ConsumerConn {
                         Some(Ok(msg)) => self.handle_incoming_msg(msg).await?,
                     }
                 },
+                // When we are notified that we can retry an earlier failing reservation:
+                Some(RetryReservation{nonce, max, strategy}) = self.rx2.recv() => {
+                    tracing::debug!("Retrying reservation for nonce {nonce} / {max} / {strategy:?}");
+                    self.handle_incoming_client_message(Envelope {nonce, contents: ClientToServerMessage::WantToReserveChunks { max, strategy }}).await?
+                }
                 // When a message from elsewhere in the app is received, pass it forward
                 // (Currently there is only one kind of these, namely a chunk reservation having expired)
                 Some((submission_id, chunk_index)) = self.rx.recv() => {
@@ -97,7 +118,7 @@ impl ConsumerConn {
             tracing::warn!("Too many heartbeat misses, closing connection.");
             Err(ConsumerConnError::HeartbeatFailure)
         } else {
-            let _ = self.ws_stream.send(Message::Ping("heartbeat".into())).await;
+            let _ = self.ws_stream.send(Message::Ping("💓".into())).await;
             self.heartbeats_missed += 1;
             Ok(())
         }
@@ -139,9 +160,23 @@ impl ConsumerConn {
             WantToReserveChunks { max, strategy } => {
                 let chunks_or_err = self
                     .consumer_state
-                    .fetch_and_reserve_chunks(strategy, max, &self.tx)
+                    .fetch_and_reserve_chunks(strategy.clone(), max, &self.tx)
                     .await;
-                Some(ChunksReserved(chunks_or_err))
+                match chunks_or_err {
+                    Err(e) => Some(ChunksReserved(Err(e))),
+                    Ok(vals) if !vals.is_empty() => Some(ChunksReserved(Ok(vals))),
+                    Ok(_) => {
+                        // No work to do right now. Retry when new work is inserted.
+                        tracing::debug!("No work to do for {} / {max} / {strategy:?}, retrying later", msg.nonce);
+                        let notifier = self.notify_on_insert.clone();
+                        let tx2 = self.tx2.clone();
+                        tokio::spawn(async move {
+                            notifier.notified().await;
+                            let _ = tx2.send(RetryReservation{nonce: msg.nonce, max, strategy});
+                        });
+                        None
+                    }
+                }
             }
             CompleteChunk { id, output_content } => {
                 self.consumer_state

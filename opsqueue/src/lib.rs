@@ -11,6 +11,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 #[cfg(feature = "server-logic")]
 use axum::{routing::get, Router};
+#[cfg(feature = "server-logic")]
 use backon::{BackoffBuilder, FibonacciBuilder};
 #[cfg(feature = "server-logic")]
 use http::StatusCode;
@@ -29,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 // TOOD: Set max retries to `None`;
 // will require either writing our own Backoff (iterator)
 // or extending the backon crate.
+#[cfg(feature = "server-logic")]
 fn retry_policy() -> impl BackoffBuilder {
     FibonacciBuilder::default()
     .with_jitter()
@@ -74,13 +76,17 @@ pub fn build_router(
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
 ) -> Router<()> {
+    use tokio::sync::Notify;
+    let notify_on_insert = Arc::new(Notify::new());
+
     let consumer_routes = consumer::server::ServerState::new(
         pool.clone(),
+        notify_on_insert.clone(),
         cancellation_token.clone(),
         reservation_expiration,
     )
     .build_router();
-    let producer_routes = producer::server::ServerState::new(pool).build_router();
+    let producer_routes = producer::server::ServerState::new(pool, notify_on_insert).build_router();
     let routes = Router::new()
         .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
         .nest("/producer", producer_routes)
