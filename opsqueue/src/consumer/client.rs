@@ -449,8 +449,11 @@ mod tests {
             input_chunks[0..3]
         );
 
-        let two = client.reserve_chunks(3, Strategy::Oldest);
-        let three = client.reserve_chunks(3, Strategy::Oldest);
+        // NOTE: We ensure to fetch exactly the amount left;
+        // if we fetch more, the server will only respond when new chunks are inserted,
+        // which would make this test hang
+        let two = client.reserve_chunks(1, Strategy::Oldest);
+        let three = client.reserve_chunks(1, Strategy::Oldest);
 
         yield_now().await;
 

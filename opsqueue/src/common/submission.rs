@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 #[cfg(feature = "server-logic")]
-use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
 use super::chunk::{ChunkIndex, ChunkCount};
 use super::chunk::{self, Chunk};
@@ -11,6 +11,9 @@ use super::chunk::{self, Chunk};
 #[cfg(feature = "server-logic")]
 use super::errors::{DatabaseError, E, SubmissionNotFound};
 use snowflaked::Snowflake;
+
+#[cfg(feature = "server-logic")]
+use crate::db::SqliteConnectionExt;
 
 pub type Metadata = Vec<u8>;
 
@@ -223,7 +226,7 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             insert_submission_raw(submission, &mut **tx).await?;
             super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
@@ -344,8 +347,7 @@ pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
 ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
-    use sqlx::Connection;
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             let submission = get_submission(id, &mut **tx).await?;
 
@@ -428,7 +430,7 @@ pub async fn fail_submission(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
             super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx)
@@ -476,7 +478,7 @@ pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             query!(
                 "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",

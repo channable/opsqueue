@@ -1,7 +1,10 @@
+use std::{future::Future, ops::{Deref, DerefMut}, time::Duration};
+
+use futures::future::BoxFuture;
 use sqlx::{
     migrate::MigrateDatabase,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-    Connection, Sqlite, SqliteConnection, SqlitePool,
+    Connection, Sqlite, SqliteConnection, SqlitePool, Executor,
 };
 
 /// Connects to the SQLite database, 
@@ -18,10 +21,17 @@ pub async fn open_and_setup(database_filename: &str) -> SqlitePool {
 }
 
 pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
+    // These settings are currently based on the rule-of-thumb guide:
+    // https://kerkour.com/sqlite-for-servers
     SqliteConnectOptions::new()
         .filename(database_filename)
         .journal_mode(SqliteJournalMode::Wal) // This is the default for Sqlx-sqlite and also for Litestream, but good to make sure it is set
         .synchronous(SqliteSynchronous::Normal) // Full is not needed because we use WAL mode
+        .busy_timeout(Duration::from_secs(5)) // No query should ever lock for more than 5 seconds
+        .foreign_keys(true) // By default SQLite does not do foreign key checks; we want them to ensure data consistency
+        .pragma("mmap_size", "134217728")
+        .pragma("cache_size", "-1000000") // Cache size of 10⁶ KiB AKA 1GiB (negative value means measured in KiB rather than in multiples of the page size)
+        // NOTE: we do _not_ set PRAGMA temp_store = 2 (MEMORY) because as long as the page cache has room those will use memory anyway (and if it is full we need the disk)
 }
 
 pub async fn db_connect_pool(database_filename: &str) -> SqlitePool {
@@ -72,4 +82,130 @@ pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
     }
     .await
     .is_ok()
+}
+
+/// Extension trait to add extra functionality that is currently missing from SQLx to its `sqlx::SqliteConnection`.
+/// 
+/// c.f. https://github.com/launchbadge/sqlx/issues/481
+pub(crate) trait SqliteConnectionExt {
+    /// Similar to `sqlx::SqliteConnection::begin`, but uses BEGIN IMMEDIATE 
+    /// to grab a write lock immediately at the start of the transaction
+    /// rather than deferring this to when the first write happens.
+    fn begin_immediate(&mut self) -> impl Future<Output = sqlx::Result<ImmediateTransaction>>;
+
+    /// Version of `sqlx::SqliteConnection::transaction` that uses `begin_immediate` rather than `sqlx::Connection::begin`.
+    /// 
+    /// Runs the provided callback in a database transaction that acquires a write-lock immediately on transaction start.
+    /// 
+    /// When the transaction returns Ok, the transaction is committed.
+    /// When the callback returns an Err, the transaction is rolled back.
+    fn immediate_write_transaction<'a, F, R, E>(&'a mut self, callback: F) -> BoxFuture<'a, Result<R, E>>
+    where
+        for<'c> F: FnOnce(&'c mut ImmediateTransaction<'_>) -> BoxFuture<'c, Result<R, E>>
+            + 'a
+            + Send
+            + Sync,
+        Self: Sized,
+        R: Send,
+        E: From<sqlx::Error> + Send;
+}
+
+impl SqliteConnectionExt for SqliteConnection {
+    async fn begin_immediate(&mut self) -> sqlx::Result<ImmediateTransaction> {
+        let conn = &mut *self;
+
+        conn.execute("BEGIN IMMEDIATE;").await?;
+
+        Ok(ImmediateTransaction {
+            conn,
+            is_open: true,
+        })
+    }
+
+    /// Based on the source of Connection::transaction
+    /// https://github.com/launchbadge/sqlx/blob/82d332f4b487440b4c2bd5d54a5f17dcc1abc92c/sqlx-core/src/connection.rs#L69
+    fn immediate_write_transaction<'a, F, R, E>(&'a mut self, callback: F) -> BoxFuture<'a, Result<R, E>>
+    where
+        for<'c> F: FnOnce(&'c mut ImmediateTransaction<'_>) -> BoxFuture<'c, Result<R, E>>
+            + 'a
+            + Send
+            + Sync,
+        Self: Sized,
+        R: Send,
+        E: From<sqlx::Error> + Send,
+    {
+        Box::pin(async move {
+            let mut transaction = self.begin_immediate().await?;
+            let ret = callback(&mut transaction).await;
+
+            match ret {
+                Ok(ret) => {
+                    transaction.commit().await?;
+
+                    Ok(ret)
+                }
+                Err(err) => {
+                    transaction.rollback().await?;
+
+                    Err(err)
+                }
+            }
+        })
+    }
+}
+
+/// Similar to `sqlx::Transaction` but it was started using BEGIN IMMEDIATE.
+/// 
+/// Usage of this transaction should end with a call to `commit` or `rollback`.
+/// If neither was called when the transaction goes out of scope,
+///  then `rollback`  will be called on drop.
+pub(crate) struct ImmediateTransaction<'c> {
+    conn: &'c mut SqliteConnection,
+    /// is the transaction open, or did we already commit/rollback?
+    is_open: bool,
+}
+
+
+impl<'c> ImmediateTransaction<'c> {
+    pub(crate) async fn commit(mut self) -> sqlx::Result<()> {
+        self.conn.execute("COMMIT;").await?;
+        // Even if the conn.execute call failed, we consider the transaction 'finished'.
+        self.is_open = false;
+
+        Ok(())
+    }
+
+    pub(crate) async fn rollback(mut self) -> sqlx::Result<()> {
+        self.conn.execute("ROLLBACK;").await?;
+        // Even if the conn.execute call failed, we consider the transaction 'finished'.
+        self.is_open = false;
+
+        Ok(())
+    }
+}
+
+impl<'c> Drop for ImmediateTransaction<'c> {
+    fn drop(&mut self) {
+        if !self.is_open { 
+            return; 
+        }
+        let rt_handle = tokio::runtime::Handle::current();
+        rt_handle.block_on(async {
+            let _ = self.conn.execute("ROLLBACK").await;
+        });
+
+    }
+}
+impl<'c> Deref for ImmediateTransaction<'c> {
+    type Target = SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn
+    }
+}
+
+impl<'c> DerefMut for ImmediateTransaction<'c> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.conn
+    }
 }

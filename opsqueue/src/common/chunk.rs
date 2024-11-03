@@ -1,11 +1,13 @@
 #[cfg(feature = "server-logic")]
 use std::ops::{Deref, DerefMut};
+#[cfg(feature = "server-logic")]
+use crate::db::SqliteConnectionExt;
 
 use chrono::NaiveDateTime;
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server-logic")]
-use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 #[cfg(feature = "server-logic")]
 use sqlx::{query_as, SqliteConnection};
 use ux_serde::u63;
@@ -174,7 +176,8 @@ pub async fn complete_chunk(
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-    conn.transaction(|tx| {
+
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
             super::submission::maybe_complete_submission(full_chunk_id.0, tx)
@@ -230,7 +233,7 @@ pub async fn retry_or_fail_chunk(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             const MAX_RETRIES: i64 = 10;
             let (submission_id, chunk_index) = full_chunk_id;
