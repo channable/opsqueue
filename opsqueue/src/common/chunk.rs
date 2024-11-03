@@ -193,7 +193,7 @@ pub async fn complete_chunk(
 
     conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
-            complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
+            complete_chunk_raw(full_chunk_id, output_content, tx).await?;
             crate::common::submission::db::maybe_complete_submission(full_chunk_id.0, tx)
                 .await
                 .map_err(|e| match e {
@@ -207,35 +207,47 @@ pub async fn complete_chunk(
 }
 
 #[tracing::instrument]
-/// TODO: Complete submission automatically when all chunks are completed
+/// Do not call directly! MUST be called inside a transaction!
 pub async fn complete_chunk_raw(
     full_chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
-    conn: impl Executor<'_, Database = Sqlite>,
+    conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    let now = chrono::prelude::Utc::now();
-    query!("
-    SAVEPOINT complete_chunk_raw;
+        let now = chrono::prelude::Utc::now();
+        query!("
 
-    UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
+        INSERT INTO chunks_completed
+        (submission_id, chunk_index, output_content, completed_at)
+        SELECT submission_id, chunk_index, ?, julianday(?) FROM chunks
+        WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
 
-    INSERT INTO chunks_completed
-    (submission_id, chunk_index, output_content, completed_at)
-    SELECT submission_id, chunk_index, ?, julianday(?) FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
-
-    DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
-
-
-    RELEASE SAVEPOINT complete_chunk_raw;
-    ",
-    full_chunk_id.0,
-    output_content,
-    now,
-    full_chunk_id.0,
-    full_chunk_id.1,
-    full_chunk_id.0,
-    full_chunk_id.1,
-    ).execute(conn).await?;
+        DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?
+        RETURNING submission_id, chunk_index;
+        ;
+        ",
+        output_content,
+        now,
+        full_chunk_id.0,
+        full_chunk_id.1,
+        full_chunk_id.0,
+        full_chunk_id.1,
+        ).fetch_one(&mut *conn).await?;
+        // Defense in depth: Above query should never be called twice on the same chunk.
+        // If it _does_ happen, it means that either a consumer is attempting a chunk they didn't reserve,
+        // or we gave out the same reservation twice.
+        //
+        // By returning early if the chunk was not found,
+        // we ensure that even in these situations
+        // we never mess up the submission's `chunks_done` counter.
+        //
+        // (Not doing that resulted in a hard-to-track-down bug in the past.
+        // https://github.com/channable/opsqueue/issues/76
+        // )
+        query!("
+        UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
+        ",
+        full_chunk_id.0,
+        ).execute(&mut *conn).await?;
     Ok(())
 }
 
@@ -445,6 +457,7 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 pub mod test {
     use crate::common::submission::{Submission, SubmissionStatus};
     use crate::common::submission::db::insert_submission_raw;
+    use crate::db::SqliteConnectionExt;
 
     use super::*;
     use super::db::*;
@@ -488,13 +501,13 @@ pub mod test {
 
         insert_submission_raw(submission, &mut *conn).await.unwrap();
 
-        complete_chunk_raw(
-            (chunk.submission_id, chunk.chunk_index),
-            Some(vec![6, 7, 8, 9]),
-            &mut *conn,
-        )
-        .await
-        .expect("complete chunk failed");
+        conn.immediate_write_transaction(|tx| Box::pin(async move {
+            complete_chunk_raw(
+                (chunk.submission_id, chunk.chunk_index),
+                Some(vec![6, 7, 8, 9]),
+                &mut **tx,
+            ).await
+        })).await.expect("complete chunk failed");
 
         assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(0));
         assert!(count_chunks_completed(&mut *conn).await.unwrap() == u63::new(1));
@@ -518,7 +531,7 @@ pub mod test {
         complete_chunk_raw(
             (submission_id, u63::new(0).into()),
             Some(vec![6, 7, 8, 9]),
-            &mut *conn,
+            &mut conn,
         )
         .await
         .expect("complete chunk failed");

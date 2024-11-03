@@ -375,23 +375,25 @@ pub async fn submission_status(
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// Completes the submission, iff all chunks have been completed.
+/// 
+/// Do not call directly! MUST be called inside a transaction.
 pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
 ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
-    conn.immediate_write_transaction(|tx| {
-        Box::pin(async move {
-            let submission = get_submission(id, &mut **tx).await?;
+    // conn.immediate_write_transaction(|tx| {
+        // Box::pin(async move {
+            let submission = get_submission(id, &mut *conn).await?;
 
             if submission.chunks_done == submission.chunks_total {
-                complete_submission_raw(id, &mut **tx).await?;
+                complete_submission_raw(id, &mut *conn).await?;
                 Ok(true)
             } else {
                 Ok(false)
             }
-        })
-    })
-    .await
+        // })
+    // })
+    // .await
 }
 
 #[cfg(feature = "server-logic")]
