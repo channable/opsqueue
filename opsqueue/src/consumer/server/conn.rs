@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    common::chunk::ChunkId,
+    common::{chunk::ChunkId, errors::DatabaseError},
     consumer::{common::{
         AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
         SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS,
@@ -183,11 +183,11 @@ impl ConsumerConn {
                     .complete_chunk(id, output_content)
                     .await
                     .map_err(anyhow::Error::from)?;
-                Some(ChunkCompleted)
+                None
             }
             FailChunk { id, failure } => {
                 self.consumer_state.fail_chunk(id, failure).await?;
-                Some(ChunkFailed)
+                None
             }
         };
 
@@ -209,7 +209,7 @@ impl ConsumerConn {
 #[error("Error while handling a consumer connection")]
 pub enum ConsumerConnError {
     HeartbeatFailure,
-    DbError(sqlx::Error),
+    DbError(#[from] DatabaseError),
     UnreadableClientToServerMessage(ciborium::de::Error<std::io::Error>),
     UnparsableServerToClientMessage(ciborium::ser::Error<std::io::Error>),
     UnexpectedWSMessageType(anyhow::Error),
@@ -219,7 +219,7 @@ pub enum ConsumerConnError {
 
 impl From<sqlx::Error> for ConsumerConnError {
     fn from(err: sqlx::Error) -> Self {
-        ConsumerConnError::DbError(err)
+        ConsumerConnError::DbError(err.into())
     }
 }
 

@@ -274,7 +274,7 @@ pub async fn retry_or_fail_chunk(
             .fetch_one(&mut **tx)
             .await?;
             if fields.retries >= MAX_RETRIES {
-                crate::common::submission::db::fail_submission(submission_id, chunk_index, failure, tx).await?
+                crate::common::submission::db::fail_submission_notx(submission_id, chunk_index, failure, tx).await?
             }
             Ok(())
         })
@@ -505,7 +505,7 @@ pub mod test {
             complete_chunk_raw(
                 (chunk.submission_id, chunk.chunk_index),
                 Some(vec![6, 7, 8, 9]),
-                &mut **tx,
+                tx,
             ).await
         })).await.expect("complete chunk failed");
 

@@ -23,7 +23,7 @@ use crate::{
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
-const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(1);
+const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(1000);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass]

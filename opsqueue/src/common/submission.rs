@@ -375,7 +375,7 @@ pub async fn submission_status(
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// Completes the submission, iff all chunks have been completed.
-/// 
+///
 /// Do not call directly! MUST be called inside a transaction.
 pub async fn maybe_complete_submission(
     id: SubmissionId,
@@ -464,16 +464,27 @@ pub async fn fail_submission(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.immediate_write_transaction(|tx| {
+    use sqlx::Connection;
+    conn.transaction(|tx| {
         Box::pin(async move {
-            fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
-            super::chunk::db::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx)
-                .await?;
-            super::chunk::db::skip_remaining_chunks(id, &mut **tx).await?;
-            Ok(())
-        })
+            fail_submission_notx(id, failed_chunk_index, failure, tx).await
+      })
     })
     .await
+}
+
+/// Do not call directly! Must be called inside a transaction.
+pub async fn fail_submission_notx(
+    id: SubmissionId,
+    failed_chunk_index: ChunkIndex,
+    failure: String,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<()> {
+    fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
+    super::chunk::db::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut *conn)
+        .await?;
+    super::chunk::db::skip_remaining_chunks(id, &mut *conn).await?;
+    Ok(())
 }
 
 #[cfg(feature = "server-logic")]
@@ -689,7 +700,8 @@ pub mod test {
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 5);
 
-        cleanup_old(&mut conn, cutoff_timestamp).await.unwrap();
+        let mut conn2 = db.acquire().await.unwrap();
+        cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
 

@@ -43,7 +43,9 @@ where
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone()));
-        let res = if entry.is_fresh() {
+
+
+        if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
             // Reservation succeeded
             Some(entry.into_value().0)
@@ -51,11 +53,7 @@ where
             tracing::debug!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
-        };
-
-        assert!(self.0.contains_key(&key));
-
-        res
+        }
     }
 
     /// Removes a particular key-val from the reserver.

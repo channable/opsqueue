@@ -46,8 +46,8 @@ pub enum SyncServerToClientResponse {
     ChunksReserved(
         Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
     ),
-    ChunkCompleted,
-    ChunkFailed,
+    // ChunkCompleted,
+    // ChunkFailed,
 }
 
 /// Messages the server sends on its own

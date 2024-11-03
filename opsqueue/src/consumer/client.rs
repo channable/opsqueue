@@ -285,7 +285,7 @@ impl Client {
         in_flight_requests.0 = 0;
     }
 
-    async fn request(
+    async fn sync_request(
         &self,
         request: ClientToServerMessage,
     ) -> Result<SyncServerToClientResponse, InternalConsumerClientError> {
@@ -304,6 +304,18 @@ impl Client {
         Ok(resp)
     }
 
+    async fn async_request(&self, request: ClientToServerMessage) -> Result<(), InternalConsumerClientError> {
+            let in_flight_requests = self.in_flight_requests.lock().await;
+            let nonce = in_flight_requests.0.wrapping_add(1);
+            let envelope = Envelope {
+                nonce,
+                contents: request,
+            };
+            let () = self.ws_sink.lock().await.send(envelope.into()).await?;
+            Ok(())
+
+    }
+
     pub async fn reserve_chunks(
         &self,
         max: usize,
@@ -312,24 +324,14 @@ impl Client {
         Vec<(Chunk, Submission)>,
         E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
     > {
-        use InternalConsumerClientError::*;
-        let resp = self
-            .request(ClientToServerMessage::WantToReserveChunks { max, strategy })
+        let SyncServerToClientResponse::ChunksReserved(resp) = self
+            .sync_request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
-        match resp {
-            SyncServerToClientResponse::ChunksReserved(chunks_res) => {
-                let chunks = chunks_res.map_err(|err| match err {
-                    E::L(e) => E::L(e.into()),
-                    E::R(e) => E::R(e),
-                })?;
-                Ok(chunks)
-            }
-            other => Err(UnexpectedSyncResponse {
-                actual: other,
-                expected: "ChunksReserved".into(),
-            }
-            .into()),
-        }
+        let chunks = resp.map_err(|err| match err {
+            E::L(e) => E::L(e.into()),
+            E::R(e) => E::R(e),
+        })?;
+        Ok(chunks)
     }
 
     pub async fn complete_chunk(
@@ -337,16 +339,9 @@ impl Client {
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), InternalConsumerClientError> {
-        use InternalConsumerClientError::*;
-        let resp = self
-            .request(ClientToServerMessage::CompleteChunk { id, output_content })
-            .await?;
-        match resp {
-            SyncServerToClientResponse::ChunkCompleted => Ok(()),
-            other => Err(UnexpectedSyncResponse {
-                actual: other,
-            expected: "ChunkCompleted".into()}),
-        }
+        self
+            .async_request(ClientToServerMessage::CompleteChunk { id, output_content })
+            .await
     }
 
     pub async fn fail_chunk(
@@ -354,17 +349,9 @@ impl Client {
         id: ChunkId,
         failure: String,
     ) -> Result<(), InternalConsumerClientError> {
-        use InternalConsumerClientError::*;
-        let resp = self
-            .request(ClientToServerMessage::FailChunk { id, failure })
-            .await?;
-        match resp {
-            SyncServerToClientResponse::ChunkFailed => Ok(()),
-            other => Err(UnexpectedSyncResponse {
-                actual: other,
-                expected: "ChunkFailed".into(),
-            }),
-        }
+        self
+            .async_request(ClientToServerMessage::FailChunk { id, failure })
+            .await
     }
 }
 
