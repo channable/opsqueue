@@ -7,12 +7,12 @@ use sqlx::{
     Connection, Sqlite, SqliteConnection, SqlitePool, Executor,
 };
 
-/// Connects to the SQLite database, 
+/// Connects to the SQLite database,
 /// creating it if it doesn't exist yet,
 /// and migrating it if it isn't up to date.
-/// 
-/// This function should be called on app startup; 
-/// it will panic when the database cannot be opened or migrated. 
+///
+/// This function should be called on app startup;
+/// it will panic when the database cannot be opened or migrated.
 pub async fn open_and_setup(database_filename: &str) -> SqlitePool {
     ensure_db_exists(database_filename).await;
     let db_pool = db_connect_pool(database_filename).await;
@@ -77,7 +77,7 @@ pub async fn ensure_db_migrated(db: &SqlitePool) {
 pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
     async move {
         let mut tx = pool.begin().await?;
-        let _count = crate::common::submission::count_submissions(&mut *tx).await?;
+        let _count = crate::common::submission::db::count_submissions(&mut *tx).await?;
         Ok::<_, anyhow::Error>(())
     }
     .await
@@ -85,18 +85,18 @@ pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
 }
 
 /// Extension trait to add extra functionality that is currently missing from SQLx to its `sqlx::SqliteConnection`.
-/// 
+///
 /// c.f. https://github.com/launchbadge/sqlx/issues/481
 pub(crate) trait SqliteConnectionExt {
-    /// Similar to `sqlx::SqliteConnection::begin`, but uses BEGIN IMMEDIATE 
+    /// Similar to `sqlx::SqliteConnection::begin`, but uses BEGIN IMMEDIATE
     /// to grab a write lock immediately at the start of the transaction
     /// rather than deferring this to when the first write happens.
     fn begin_immediate(&mut self) -> impl Future<Output = sqlx::Result<ImmediateTransaction>>;
 
     /// Version of `sqlx::SqliteConnection::transaction` that uses `begin_immediate` rather than `sqlx::Connection::begin`.
-    /// 
+    ///
     /// Runs the provided callback in a database transaction that acquires a write-lock immediately on transaction start.
-    /// 
+    ///
     /// When the transaction returns Ok, the transaction is committed.
     /// When the callback returns an Err, the transaction is rolled back.
     fn immediate_write_transaction<'a, F, R, E>(&'a mut self, callback: F) -> BoxFuture<'a, Result<R, E>>
@@ -155,7 +155,7 @@ impl SqliteConnectionExt for SqliteConnection {
 }
 
 /// Similar to `sqlx::Transaction` but it was started using BEGIN IMMEDIATE.
-/// 
+///
 /// Usage of this transaction should end with a call to `commit` or `rollback`.
 /// If neither was called when the transaction goes out of scope,
 ///  then `rollback`  will be called on drop.
@@ -186,8 +186,8 @@ impl<'c> ImmediateTransaction<'c> {
 
 impl<'c> Drop for ImmediateTransaction<'c> {
     fn drop(&mut self) {
-        if !self.is_open { 
-            return; 
+        if !self.is_open {
+            return;
         }
         let rt_handle = tokio::runtime::Handle::current();
         rt_handle.block_on(async {

@@ -20,7 +20,7 @@ create_exception!(
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
 create_exception!(
     opsqueue_internal,
-    InvalidChunkIndexError,
+    TryFromIntError,
     IncorrectUsageError
 );
 create_exception!(
@@ -110,9 +110,9 @@ impl From<FatalPythonException> for PyErr {
     }
 }
 
-impl From<CError<opsqueue::common::chunk::InvalidChunkIndexError>> for PyErr {
-    fn from(value: CError<opsqueue::common::chunk::InvalidChunkIndexError>) -> Self {
-        InvalidChunkIndexError::new_err((value.0.to_string(), value.0 .0))
+impl From<CError<opsqueue::common::errors::TryFromIntError>> for PyErr {
+    fn from(value: CError<opsqueue::common::errors::TryFromIntError>) -> Self {
+        TryFromIntError::new_err(value.0.to_string())
     }
 }
 

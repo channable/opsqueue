@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use opsqueue::common::chunk::InvalidChunkIndexError;
+use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use pyo3::prelude::*;
@@ -24,14 +24,15 @@ pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SubmissionId {
-    pub id: i64,
+    pub id: u64,
 }
 
 #[pymethods]
 impl SubmissionId {
     #[new]
-    fn new(id: i64) -> Self {
-        Self { id }
+    fn new(id: u64) -> CPyResult<Self, TryFromIntError> {
+        let _is_inner_valid = opsqueue::common::submission::SubmissionId::try_from(id).map_err(CError)?;
+        Ok(SubmissionId { id })
     }
 
     fn __repr__(&self) -> String {
@@ -41,7 +42,10 @@ impl SubmissionId {
 
 impl From<SubmissionId> for submission::SubmissionId {
     fn from(val: SubmissionId) -> Self {
-        submission::SubmissionId::from(val.id)
+        // NOTE: Previously constructed either through
+        // `new` or an already-valid SubmissionId
+        // so we can safely convert it back
+        submission::SubmissionId::from(u63::new(val.id))
     }
 }
 
@@ -54,13 +58,13 @@ impl From<submission::SubmissionId> for SubmissionId {
 #[pyclass(frozen, get_all, eq, ord, hash)]
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkIndex {
-    pub id: i64,
+    pub id: u64,
 }
 
 #[pymethods]
 impl ChunkIndex {
     #[new]
-    fn new(id: i64) -> CPyResult<Self, InvalidChunkIndexError> {
+    fn new(id: u64) -> CPyResult<Self, TryFromIntError> {
         let _is_inner_valid = opsqueue::common::chunk::ChunkIndex::new(id).map_err(CError)?;
         Ok(ChunkIndex { id })
     }
@@ -72,7 +76,10 @@ impl ChunkIndex {
 
 impl From<ChunkIndex> for chunk::ChunkIndex {
     fn from(val: ChunkIndex) -> Self {
-        chunk::ChunkIndex::from(val.id)
+        // NOTE: Previously constructed either through
+        // `new` or an already-valid SubmissionId
+        // so we can safely convert it back
+        chunk::ChunkIndex::from(u63::new(val.id))
     }
 }
 
@@ -85,7 +92,7 @@ impl From<chunk::ChunkIndex> for ChunkIndex {
 impl From<u63> for ChunkIndex {
     fn from(value: u63) -> Self {
         ChunkIndex {
-            id: u64::from(value) as i64,
+            id: value.into(),
         }
     }
 }

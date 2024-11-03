@@ -19,8 +19,8 @@ use super::{state::ConsumerState, ServerState};
 
 #[derive(Debug, Clone)]
 pub struct RetryReservation{
-    nonce: usize, 
-    max: usize, 
+    nonce: usize,
+    max: usize,
     strategy: Strategy,
 }
 

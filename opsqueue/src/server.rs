@@ -106,7 +106,7 @@ pub async fn app_watchdog(
     loop {
         // For now this is just a single check, but in the future
         // we might have many checks; we first gather them and then write to the atomic bool once.
-        let is_app_healthy = crate::db::is_db_healthy(&pool).await;
+        let is_app_healthy = crate::db::is_db_healthy(pool).await;
         app_healthy_flag.store(is_app_healthy, std::sync::atomic::Ordering::Relaxed);
 
         select! {

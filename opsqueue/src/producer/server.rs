@@ -80,7 +80,7 @@ async fn submission_status(
     Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
     let mut conn = state.pool.acquire().await?;
-    let status = submission::submission_status(submission_id, &mut conn).await?;
+    let status = submission::db::submission_status(submission_id, &mut conn).await?;
     Ok(Json(status))
 }
 
@@ -95,7 +95,7 @@ async fn insert_submission(
             (Some(prefix), (0..count).map(|_index| None).collect())
         }
     };
-    let submission_id = submission::insert_submission_from_chunks(
+    let submission_id = submission::db::insert_submission_from_chunks(
         prefix,
         chunk_contents,
         request.metadata,
@@ -135,13 +135,13 @@ pub struct InsertSubmissionResponse {
 }
 
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
-    let count = submission::count_submissions(&state.pool).await?;
+    let count = submission::db::count_submissions(&state.pool).await?;
     Ok(Json(count.try_into()?))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
 ) -> Result<Json<u32>, ServerError> {
-    let count = submission::count_submissions_completed(&state.pool).await?;
+    let count = submission::db::count_submissions_completed(&state.pool).await?;
     Ok(Json(count.try_into()?))
 }

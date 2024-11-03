@@ -1,46 +1,45 @@
-#[cfg(feature = "server-logic")]
-use std::ops::{Deref, DerefMut};
-#[cfg(feature = "server-logic")]
-use crate::db::SqliteConnectionExt;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "server-logic")]
-use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
-#[cfg(feature = "server-logic")]
-use sqlx::{query_as, SqliteConnection};
 use ux_serde::u63;
 
-#[cfg(feature = "server-logic")]
-use super::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
 
+use super::errors::TryFromIntError;
 use super::submission::SubmissionId;
 use super::MayBeZero;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-pub struct ChunkIndex(i64);
+
+/// Index of this particular chunk in a submission.
+pub struct ChunkIndex(u63);
+
+/// Another name for ChunkIndex, indicating that we're dealing with the _total count_ of chunks.
+/// i.e. when you have a value of type ChunkCount, there is a high likelyhood
+/// that there are [0..chunk_count) (note the half-open range) chunks to select from.
 pub type ChunkCount = ChunkIndex;
 
-#[derive(thiserror::Error, Debug)]
-#[error("{0} is not a valid chunk index")]
-pub struct InvalidChunkIndexError(pub i64);
+// #[derive(thiserror::Error, Debug)]
+// #[error("{0} is not a valid chunk index")]
+// pub struct InvalidChunkIndexError(pub i64);
 
 impl ChunkIndex {
-    pub fn new(index: i64) -> Result<Self, InvalidChunkIndexError> {
-        if index < 0 {
-            Err(InvalidChunkIndexError(index))
-        } else {
-            Ok(ChunkIndex(index))
-        }
+    pub fn new<T>(index: T) -> Result<Self, TryFromIntError>
+    where
+        Self: TryFrom<T, Error = TryFromIntError>,
+    {
+        Self::try_from(index)
+    }
+    pub fn zero() -> Self {
+        Self(u63::new(0))
     }
 }
 
 impl MayBeZero for ChunkIndex {
     fn is_zero(&self) -> bool {
-        self.0 == 0
+        self.0 == u63::new(0)
     }
 }
 
@@ -50,75 +49,48 @@ impl std::fmt::Display for ChunkIndex {
     }
 }
 
-// #[cfg(feature = "server-logic")]
-// impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
-//     fn encode(
-//         self,
-//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-//     ) -> sqlx::encode::IsNull
-//     where
-//         Self: Sized,
-//     {
-//         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
-//     }
-//     fn encode_by_ref(
-//         &self,
-//         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-//     ) -> sqlx::encode::IsNull {
-//         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
-//     }
-// }
-
-#[cfg(feature = "server-logic")]
-impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
-    fn encode_by_ref(
-            &self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
-        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
-    }
-
-    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
-        where
-            Self: Sized, {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
-    }
-}
-
-/// NOTE: Only exists to please SQLx! Do not use directly!
-///
-/// Use the u63 conversion instead.
-impl From<i64> for ChunkIndex {
-    fn from(value: i64) -> Self {
-        ChunkIndex(value)
-    }
-}
 
 impl From<ChunkIndex> for u63 {
     fn from(value: ChunkIndex) -> Self {
-        u63::new(value.0 as u64)
+        value.0
     }
 }
 
 impl From<u63> for ChunkIndex {
     fn from(value: u63) -> Self {
-        ChunkIndex(u64::from(value) as i64)
+        ChunkIndex(value)
     }
 }
+
 
 impl From<ChunkIndex> for u64 {
     fn from(value: ChunkIndex) -> Self {
-        value.0 as u64
+        value.0.into()
     }
 }
 
-#[cfg(feature = "server-logic")]
-impl sqlx::Type<Sqlite> for ChunkIndex {
-    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
-        <i64 as sqlx::Type<Sqlite>>::compatible(ty)
+impl From<ChunkIndex> for i64 {
+    fn from(value: ChunkIndex) -> Self {
+        let inner: u64 = value.0.into();
+        // Guaranteed to fit positive signed range
+        inner as i64
     }
-    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
-        <i64 as sqlx::Type<Sqlite>>::type_info()
+}
+
+impl TryFrom<u64> for ChunkIndex {
+    type Error = crate::common::errors::TryFromIntError;
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value > u63::MAX.into() {
+            return Err(crate::common::errors::TryFromIntError(()));
+        }
+        Ok(Self(u63::new(value)))
+    }
+}
+
+impl TryFrom<usize> for ChunkIndex {
+    type Error = crate::common::errors::TryFromIntError;
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        Self::try_from(value as u64)
     }
 }
 
@@ -138,7 +110,7 @@ pub struct ChunkCompleted {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
     pub output_content: Content,
-    pub completed_at: NaiveDateTime,
+    pub completed_at: DateTime<Utc>,
 }
 
 impl Chunk {
@@ -153,6 +125,49 @@ impl Chunk {
 }
 
 #[cfg(feature = "server-logic")]
+pub mod db {
+    use super::*;
+use std::ops::{Deref, DerefMut};
+use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+use sqlx::{query_as, SqliteConnection};
+use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
+
+use crate::db::SqliteConnectionExt;
+
+
+impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
+    fn encode_by_ref(
+            &self,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
+    }
+
+    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+        where
+            Self: Sized, {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode(i64::from(self), buf)
+    }
+}
+
+impl sqlx::Type<Sqlite> for ChunkIndex {
+    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        <u64 as sqlx::Type<Sqlite>>::compatible(ty)
+    }
+    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+        <u64 as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> sqlx::Decode<'q, Sqlite> for ChunkIndex {
+    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'q>) -> Result<Self, sqlx::error::BoxDynError> {
+        let inner = <u64 as sqlx::Decode<'q, Sqlite>>::decode(value)?;
+        let x = ChunkIndex::try_from(inner)?;
+        Ok(x)
+    }
+}
+
+
 #[tracing::instrument]
 pub async fn insert_chunk(
     chunk: Chunk,
@@ -169,7 +184,6 @@ pub async fn insert_chunk(
     Ok(())
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn complete_chunk(
     full_chunk_id: ChunkId,
@@ -180,7 +194,7 @@ pub async fn complete_chunk(
     conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
-            super::submission::maybe_complete_submission(full_chunk_id.0, tx)
+            crate::common::submission::db::maybe_complete_submission(full_chunk_id.0, tx)
                 .await
                 .map_err(|e| match e {
                     E::L(e) => E::L(e),
@@ -192,7 +206,6 @@ pub async fn complete_chunk(
     .await
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// TODO: Complete submission automatically when all chunks are completed
 pub async fn complete_chunk_raw(
@@ -226,7 +239,6 @@ pub async fn complete_chunk_raw(
     Ok(())
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn retry_or_fail_chunk(
     full_chunk_id: ChunkId,
@@ -250,7 +262,7 @@ pub async fn retry_or_fail_chunk(
             .fetch_one(&mut **tx)
             .await?;
             if fields.retries >= MAX_RETRIES {
-                super::submission::fail_submission(submission_id, chunk_index, failure, tx).await?
+                crate::common::submission::db::fail_submission(submission_id, chunk_index, failure, tx).await?
             }
             Ok(())
         })
@@ -258,7 +270,6 @@ pub async fn retry_or_fail_chunk(
     .await
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn move_chunk_to_failed_chunks(
     full_chunk_id: ChunkId,
@@ -288,15 +299,20 @@ pub async fn move_chunk_to_failed_chunks(
     Ok(())
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn get_chunk(
     full_chunk_id: ChunkId,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<Chunk> {
     query_as!(
-        Chunk,
-        "SELECT * FROM chunks WHERE submission_id =? AND chunk_index =?",
+        Chunk, r#"
+        SELECT
+            submission_id AS "submission_id: SubmissionId"
+            , chunk_index AS "chunk_index: ChunkIndex"
+            , input_content
+            , retries
+        FROM chunks WHERE submission_id =? AND chunk_index =?
+        "#,
         full_chunk_id.0,
         full_chunk_id.1
     )
@@ -304,16 +320,24 @@ pub async fn get_chunk(
     .await
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn get_chunk_completed(
     full_chunk_id: (i64, i64),
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<ChunkCompleted> {
-    query_as!(ChunkCompleted, "SELECT submission_id, chunk_index, output_content, completed_at FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?", full_chunk_id.0, full_chunk_id.1).fetch_one(conn).await
+    query_as!(ChunkCompleted, r#"
+        SELECT
+            submission_id AS "submission_id: SubmissionId"
+            , chunk_index AS "chunk_index: ChunkIndex"
+            , output_content
+            , completed_at AS "completed_at: DateTime<Utc>"
+        FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?
+        "#,
+        full_chunk_id.0,
+        full_chunk_id.1
+    ).fetch_one(conn).await
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument(skip(chunks, conn))]
 pub async fn insert_many_chunks<Tx, Conn, Iter>(chunks: Iter, mut conn: Tx) -> sqlx::Result<()>
 where
@@ -344,7 +368,6 @@ where
     Ok(())
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn skip_remaining_chunks(
     submission_id: SubmissionId,
@@ -370,27 +393,25 @@ pub async fn skip_remaining_chunks(
     Ok(())
 }
 
-#[cfg(feature = "server-logic")]
-#[tracing::instrument]
-pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
-    // TODO: Document what we're doing here exactly
-    let count_div10 = std::cmp::max(count / 10, 100);
-    sqlx::query_as!(
-        Chunk,
-        "SELECT submission_id, chunk_index, input_content, retries FROM chunks JOIN
-    (SELECT rowid as rid FROM chunks
-        WHERE random() % $1 = 0  -- Reduce rowids by Nx
-        LIMIT $2) AS srid
-    ON chunks.rowid = srid.rid;",
-        count_div10,
-        count
-    )
-    .fetch_all(db)
-    .await
-    .unwrap()
-}
+// #[tracing::instrument]
+// pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
+//     // TODO: Document what we're doing here exactly
+//     let count_div10 = std::cmp::max(count / 10, 100);
+//     sqlx::query_as!(
+//         Chunk,
+//         "SELECT submission_id, chunk_index, input_content, retries FROM chunks JOIN
+//     (SELECT rowid as rid FROM chunks
+//         WHERE random() % $1 = 0  -- Reduce rowids by Nx
+//         LIMIT $2) AS srid
+//     ON chunks.rowid = srid.rid;",
+//         count_div10,
+//         count
+//     )
+//     .fetch_all(db)
+//     .await
+//     .unwrap()
+// }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
@@ -400,7 +421,6 @@ pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63
     Ok(count)
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
@@ -410,7 +430,6 @@ pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::
     Ok(count)
 }
 
-#[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
@@ -419,17 +438,20 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
     let count = u63::new(count.count as u64);
     Ok(count)
 }
+}
 
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use crate::common::submission::{insert_submission_raw, Submission, SubmissionStatus};
+    use crate::common::submission::{Submission, SubmissionStatus};
+    use crate::common::submission::db::insert_submission_raw;
 
     use super::*;
+    use super::db::*;
 
     #[sqlx::test]
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(1.into(), 0.into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
 
         assert!(count_chunks(&db).await.unwrap() == u63::new(0));
         insert_chunk(chunk.clone(), &db)
@@ -440,7 +462,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(1.into(), 0.into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
         insert_chunk(chunk.clone(), &db)
             .await
             .expect("Insert chunk failed");
@@ -456,9 +478,9 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let mut submission = Submission::new();
-        submission.chunks_total = 1.into();
+        submission.chunks_total = u63::new(1).into();
         submission.id = Submission::generate_id();
-        let chunk = Chunk::new(submission.id, 0.into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(submission.id, u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await
@@ -482,7 +504,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let submission_id = crate::common::submission::insert_submission_from_chunks(
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
             None,
             vec![Some("first".into())],
             None,
@@ -494,7 +516,7 @@ pub mod test {
         assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(1));
 
         complete_chunk_raw(
-            (submission_id, 0.into()),
+            (submission_id, u63::new(0).into()),
             Some(vec![6, 7, 8, 9]),
             &mut *conn,
         )
@@ -502,13 +524,13 @@ pub mod test {
         .expect("complete chunk failed");
 
         let submission_status =
-            crate::common::submission::submission_status(submission_id, &mut conn)
+            crate::common::submission::db::submission_status(submission_id, &mut conn)
                 .await
                 .unwrap()
                 .unwrap();
         match submission_status {
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, 1.into());
+                assert_eq!(submission.chunks_done, u63::new(1).into());
             }
             _ => panic!("Expected InProgress"),
         }
@@ -517,7 +539,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let chunk = Chunk::new(1.into(), 0.into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await

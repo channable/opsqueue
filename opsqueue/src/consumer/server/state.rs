@@ -111,7 +111,7 @@ impl ConsumerState {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
-        let res = chunk::complete_chunk(id, output_content, &mut conn).await;
+        let res = chunk::db::complete_chunk(id, output_content, &mut conn).await;
         self.reservations.remove(&id);
         self.reserver.finish_reservation(&id);
         res
@@ -121,7 +121,7 @@ impl ConsumerState {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
-        let res = chunk::retry_or_fail_chunk(id, failure, &mut conn).await;
+        let res = chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
         self.reservations.remove(&id);
         self.reserver.finish_reservation(&id);
         res

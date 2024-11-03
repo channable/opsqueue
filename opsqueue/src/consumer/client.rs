@@ -414,7 +414,7 @@ mod tests {
             Some("d".into()),
             Some("e".into()),
         ];
-        crate::common::submission::insert_submission_from_chunks(
+        crate::common::submission::db::insert_submission_from_chunks(
             None,
             input_chunks.clone(),
             None,
