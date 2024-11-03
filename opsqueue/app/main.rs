@@ -22,12 +22,10 @@ async fn main() {
 
     let database_filename = DATABASE_FILENAME;
 
-    opsqueue::ensure_db_exists(database_filename).await;
-    let db_pool = opsqueue::db_connect_pool(database_filename).await;
-    opsqueue::ensure_db_migrated(&db_pool).await;
+    let db_pool = opsqueue::db::open_and_setup(database_filename).await;
 
     moro_local::async_scope!(|scope| {
-        scope.spawn(opsqueue::serve_producer_and_consumer(
+        scope.spawn(opsqueue::server::serve_producer_and_consumer(
             &server_addr,
             &db_pool,
             reservation_expiration,
@@ -36,7 +34,7 @@ async fn main() {
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
-        scope.spawn(opsqueue::app_watchdog(
+        scope.spawn(opsqueue::server::app_watchdog(
             app_healthy_flag.clone(),
             &db_pool,
             cancellation_token.clone(),
