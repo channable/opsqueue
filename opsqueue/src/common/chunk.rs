@@ -10,11 +10,19 @@ use super::submission::SubmissionId;
 use super::MayBeZero;
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 
 /// Index of this particular chunk in a submission.
 pub struct ChunkIndex(u63);
+
+impl std::fmt::Debug for ChunkIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ChunkIndex")
+            .field(&self.0)
+            .finish()
+    }
+}
 
 /// Another name for ChunkIndex, indicating that we're dealing with the _total count_ of chunks.
 /// i.e. when you have a value of type ChunkCount, there is a high likelyhood

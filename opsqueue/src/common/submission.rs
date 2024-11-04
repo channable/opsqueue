@@ -25,9 +25,8 @@ impl Display for SubmissionId {
 
 impl std::fmt::Debug for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubmissionId")
-            .field("id", &self.0)
-            .field("timestamp", &self.timestamp())
+        f.debug_tuple("SubmissionId")
+            .field(&self.0)
             .finish()
     }
 }

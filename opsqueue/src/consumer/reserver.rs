@@ -44,13 +44,12 @@ where
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone()));
 
-
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
             // Reservation succeeded
             Some(entry.into_value().0)
         } else {
-            tracing::debug!("Reservation of {key:?} failed!");
+            tracing::warn!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
         }

@@ -292,7 +292,8 @@ impl Client {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
         {
             let mut in_flight_requests = self.in_flight_requests.lock().await;
-            let nonce = in_flight_requests.0.wrapping_add(1);
+            let nonce = in_flight_requests.0;
+            in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
             let envelope = Envelope {
                 nonce,
                 contents: request,
@@ -305,8 +306,9 @@ impl Client {
     }
 
     async fn async_request(&self, request: ClientToServerMessage) -> Result<(), InternalConsumerClientError> {
-            let in_flight_requests = self.in_flight_requests.lock().await;
-            let nonce = in_flight_requests.0.wrapping_add(1);
+            let mut in_flight_requests = self.in_flight_requests.lock().await;
+            let nonce = in_flight_requests.0;
+            in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
             let envelope = Envelope {
                 nonce,
                 contents: request,

@@ -19,6 +19,10 @@ moka = { version = "0.12.8", features = ["sync"], optional = true }
 chrono = { version = "0.4.38", features = ["serde"]}
 futures = "0.3.30"
 tokio = { version = "1.38.0", features = ["macros", "signal", "rt-multi-thread"] }
+uuid = {version = "1.11.0", features = [
+        "v4",                # Fully random UUIDs
+        "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    ]}
 # Error handling:
 anyhow = "1.0.86"
 # Database:

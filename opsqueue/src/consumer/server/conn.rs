@@ -25,6 +25,7 @@ pub struct RetryReservation{
 }
 
 pub struct ConsumerConn {
+    id: uuid::Uuid,
     consumer_state: ConsumerState,
     cancellation_token: CancellationToken,
     ws_stream: WebSocket,
@@ -50,6 +51,7 @@ impl ConsumerConn {
         let notify_on_insert = server_state.notify_on_insert.clone();
 
         Self {
+            id: uuid::Uuid::new_v4(),
             consumer_state,
             ws_stream,
             notify_on_insert,
@@ -150,6 +152,7 @@ impl ConsumerConn {
         Ok(())
     }
 
+    #[tracing::instrument(, fields(client_id = self.id.to_string()), skip(self, msg))]
     async fn handle_incoming_client_message(
         &mut self,
         msg: Envelope<ClientToServerMessage>,

@@ -102,6 +102,7 @@ impl From<u63> for ChunkIndex {
 pub enum Strategy {
     Oldest,
     Newest,
+    Random,
 }
 
 impl From<strategy::Strategy> for Strategy {
@@ -109,6 +110,7 @@ impl From<strategy::Strategy> for Strategy {
         match value {
             strategy::Strategy::Oldest => Strategy::Oldest,
             strategy::Strategy::Newest => Strategy::Newest,
+            strategy::Strategy::Random => Strategy::Random,
         }
     }
 }
@@ -118,6 +120,7 @@ impl From<Strategy> for strategy::Strategy {
         match val {
             Strategy::Oldest => strategy::Strategy::Oldest,
             Strategy::Newest => strategy::Strategy::Newest,
+            Strategy::Random => strategy::Strategy::Random,
         }
     }
 }
