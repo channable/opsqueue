@@ -9,7 +9,7 @@
 -- (and it occupies no space in the table).
 --
 -- But we create an index on it, where it _will_ be stored, to allow fast ORDER BY and binary search.
-ALTER TABLE chunks ADD COLUMN random_order INTEGER GENERATED ALWAYS AS (
+ALTER TABLE chunks ADD COLUMN random_order INTEGER NOT NULL GENERATED ALWAYS AS (
     (((submission_id + chunk_index) % 65536) * 40503) % 65536
     ) VIRTUAL;
 

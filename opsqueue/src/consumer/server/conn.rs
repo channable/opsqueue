@@ -95,8 +95,8 @@ impl ConsumerConn {
                 }
                 // When a message from elsewhere in the app is received, pass it forward
                 // (Currently there is only one kind of these, namely a chunk reservation having expired)
-                Some((submission_id, chunk_index)) = self.rx.recv() => {
-                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired((submission_id, chunk_index)));
+                Some(chunk_id) = self.rx.recv() => {
+                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired(chunk_id));
                     self.ws_stream.send(msg.into()).await?;
                 },
             }

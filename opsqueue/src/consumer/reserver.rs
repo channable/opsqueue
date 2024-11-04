@@ -33,7 +33,9 @@ where
                     let _ = val.1.send(val.0);
                 }
             })
-            .build();
+            // We're not worried about HashDoS as the consumers are trusted code,
+            // so let's use a faster hash than SipHash
+            .build_with_hasher(rustc_hash::FxBuildHasher);
         Reserver(cache)
     }
 

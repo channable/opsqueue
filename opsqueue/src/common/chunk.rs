@@ -102,7 +102,24 @@ impl TryFrom<usize> for ChunkIndex {
     }
 }
 
-pub type ChunkId = (SubmissionId, ChunkIndex);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
+pub struct ChunkId{
+    pub submission_id: SubmissionId,
+    pub chunk_index: ChunkIndex,
+}
+
+impl From<(SubmissionId, ChunkIndex)> for ChunkId {
+    fn from(value: (SubmissionId, ChunkIndex)) -> Self {
+        Self{submission_id: value.0, chunk_index: value.1}
+    }
+}
+
+impl From<ChunkId> for (SubmissionId, ChunkIndex) {
+    fn from(value: ChunkId) -> Self {
+        (value.submission_id, value.chunk_index)
+    }
+}
 
 pub type Content = Option<Vec<u8>>;
 
@@ -194,15 +211,15 @@ pub async fn insert_chunk(
 
 #[tracing::instrument]
 pub async fn complete_chunk(
-    full_chunk_id: ChunkId,
+    chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
 
     conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
-            complete_chunk_raw(full_chunk_id, output_content, tx).await?;
-            crate::common::submission::db::maybe_complete_submission(full_chunk_id.0, tx)
+            complete_chunk_raw(chunk_id, output_content, tx).await?;
+            crate::common::submission::db::maybe_complete_submission(chunk_id.submission_id, tx)
                 .await
                 .map_err(|e| match e {
                     E::L(e) => E::L(e),
@@ -217,7 +234,7 @@ pub async fn complete_chunk(
 #[tracing::instrument]
 /// Do not call directly! MUST be called inside a transaction!
 pub async fn complete_chunk_raw(
-    full_chunk_id: ChunkId,
+    chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
@@ -235,10 +252,10 @@ pub async fn complete_chunk_raw(
         ",
         output_content,
         now,
-        full_chunk_id.0,
-        full_chunk_id.1,
-        full_chunk_id.0,
-        full_chunk_id.1,
+        chunk_id.submission_id,
+        chunk_id.chunk_index,
+        chunk_id.submission_id,
+        chunk_id.chunk_index,
         ).fetch_one(&mut *conn).await?;
         // Defense in depth: Above query should never be called twice on the same chunk.
         // If it _does_ happen, it means that either a consumer is attempting a chunk they didn't reserve,
@@ -254,21 +271,21 @@ pub async fn complete_chunk_raw(
         query!("
         UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
         ",
-        full_chunk_id.0,
+        chunk_id.submission_id,
         ).execute(&mut *conn).await?;
     Ok(())
 }
 
 #[tracing::instrument]
 pub async fn retry_or_fail_chunk(
-    full_chunk_id: ChunkId,
+    chunk_id: ChunkId,
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
     conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             const MAX_RETRIES: i64 = 10;
-            let (submission_id, chunk_index) = full_chunk_id;
+            let ChunkId{submission_id, chunk_index} = chunk_id;
             let fields = query!(
                 "
         UPDATE chunks SET retries = retries + 1
@@ -292,12 +309,12 @@ pub async fn retry_or_fail_chunk(
 
 #[tracing::instrument]
 pub async fn move_chunk_to_failed_chunks(
-    full_chunk_id: ChunkId,
+    chunk_id: ChunkId,
     failure: String,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
-    let (submission_id, chunk_index) = full_chunk_id;
+    let ChunkId{submission_id, chunk_index} = chunk_id;
     query!("
     SAVEPOINT move_chunk_to_failed_chunks;
 
@@ -333,8 +350,8 @@ pub async fn get_chunk(
             , retries
         FROM chunks WHERE submission_id =? AND chunk_index =?
         "#,
-        full_chunk_id.0,
-        full_chunk_id.1
+        full_chunk_id.submission_id,
+        full_chunk_id.chunk_index
     )
     .fetch_one(conn)
     .await
@@ -488,7 +505,7 @@ pub mod test {
             .await
             .expect("Insert chunk failed");
 
-        let fetched_chunk = get_chunk((chunk.submission_id, chunk.chunk_index), &db)
+        let fetched_chunk = get_chunk((chunk.submission_id, chunk.chunk_index).into(), &db)
             .await
             .unwrap();
         assert!(chunk == fetched_chunk);
@@ -511,7 +528,7 @@ pub mod test {
 
         conn.immediate_write_transaction(|tx| Box::pin(async move {
             complete_chunk_raw(
-                (chunk.submission_id, chunk.chunk_index),
+                (chunk.submission_id, chunk.chunk_index).into(),
                 Some(vec![6, 7, 8, 9]),
                 tx,
             ).await
@@ -537,7 +554,7 @@ pub mod test {
         assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(1));
 
         complete_chunk_raw(
-            (submission_id, u63::new(0).into()),
+            (submission_id, u63::new(0).into()).into(),
             Some(vec![6, 7, 8, 9]),
             &mut conn,
         )
@@ -566,7 +583,7 @@ pub mod test {
             .await
             .expect("Insert chunk failed");
         move_chunk_to_failed_chunks(
-            (chunk.submission_id, chunk.chunk_index),
+            (chunk.submission_id, chunk.chunk_index).into(),
             "Boom!".to_string(),
             &mut *conn,
         )
