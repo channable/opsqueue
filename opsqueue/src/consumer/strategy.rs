@@ -71,8 +71,8 @@ pub fn oldest_chunks_stream<'c>(
                 Submission {
                     id: row.submission_id.into(),
                     prefix: row.prefix,
-                    chunks_total: row.chunks_total,
-                    chunks_done: row.chunks_done,
+                    chunks_total: row.chunks_total.into(),
+                    chunks_done: row.chunks_done.into(),
                     metadata: row.metadata,
                 },
             )
@@ -104,8 +104,8 @@ pub fn newest_chunks_stream<'c>(
                 Submission {
                     id: row.submission_id.into(),
                     prefix: row.prefix,
-                    chunks_total: row.chunks_total,
-                    chunks_done: row.chunks_done,
+                    chunks_total: row.chunks_total.into(),
+                    chunks_done: row.chunks_done.into(),
                     metadata: row.metadata,
                 },
             )

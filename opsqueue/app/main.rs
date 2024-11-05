@@ -15,30 +15,30 @@ async fn main() {
     let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
+    let cancellation_token = CancellationToken::new();
+    let _ = setup_tracing();
+
+    tracing::info!("Finished setting up tracing subscriber");
+
+    let database_filename = DATABASE_FILENAME;
+
+    opsqueue::ensure_db_exists(database_filename).await;
+    let db_pool = opsqueue::db_connect_pool(database_filename).await;
+    opsqueue::ensure_db_migrated(&db_pool).await;
+
     moro_local::async_scope!(|scope| {
-        let cancellation_token = CancellationToken::new();
-        let _ = setup_tracing();
-
-        tracing::info!("Finished setting up tracing subscriber");
-
-        let database_filename = DATABASE_FILENAME;
-
-        opsqueue::ensure_db_exists(database_filename).await;
-        let db_pool = opsqueue::db_connect_pool(database_filename).await;
-        opsqueue::ensure_db_migrated(&db_pool).await;
-
         scope.spawn(opsqueue::serve_producer_and_consumer(
             &server_addr,
-            db_pool.clone(),
+            &db_pool,
             reservation_expiration,
-            cancellation_token.clone(),
-            app_healthy_flag.clone(),
+            &cancellation_token,
+            &app_healthy_flag,
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
         scope.spawn(opsqueue::app_watchdog(
             app_healthy_flag.clone(),
-            db_pool,
+            &db_pool,
             cancellation_token.clone(),
         ));
 

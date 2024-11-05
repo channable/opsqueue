@@ -22,7 +22,7 @@ tokio = { version = "1.38.0", features = ["macros", "signal", "rt-multi-thread"]
 # Error handling:
 anyhow = "1.0.86"
 # Database:
-sqlx = { version = "0.7.4", features = ["sqlite", "runtime-tokio", "chrono"], optional = true }
+sqlx = { version = "0.8.2", features = ["sqlite", "runtime-tokio", "chrono"], optional = true }
 # Serialization:
 serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.124"

@@ -20,6 +20,7 @@ use super::MayBeZero;
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct ChunkIndex(i64);
+pub type ChunkCount = ChunkIndex;
 
 #[derive(thiserror::Error, Debug)]
 #[error("{0} is not a valid chunk index")]
@@ -49,20 +50,17 @@ impl std::fmt::Display for ChunkIndex {
 
 #[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
-    fn encode(
-        self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull
-    where
-        Self: Sized,
-    {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
-    }
     fn encode_by_ref(
-        &self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull {
+            &self,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+    }
+
+    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+        where
+            Self: Sized, {
+        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
     }
 }
 
@@ -84,6 +82,12 @@ impl From<ChunkIndex> for u63 {
 impl From<u63> for ChunkIndex {
     fn from(value: u63) -> Self {
         ChunkIndex(u64::from(value) as i64)
+    }
+}
+
+impl From<ChunkIndex> for u64 {
+    fn from(value: ChunkIndex) -> Self {
+        value.0 as u64
     }
 }
 
@@ -366,29 +370,32 @@ pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32)
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    let count = u63::new(count.count as u64);
+    Ok(count)
 }
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    let count = u63::new(count.count as u64);
+    Ok(count)
 }
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    let count = u63::new(count.count as u64);
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -402,11 +409,11 @@ pub mod test {
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
         let chunk = Chunk::new(1.into(), 0.into(), vec![1, 2, 3, 4, 5].into());
 
-        assert!(count_chunks(&db).await.unwrap() == 0);
+        assert!(count_chunks(&db).await.unwrap() == u63::new(0));
         insert_chunk(chunk.clone(), &db)
             .await
             .expect("Insert chunk failed");
-        assert!(count_chunks(&db).await.unwrap() == 1);
+        assert!(count_chunks(&db).await.unwrap() == u63::new(1));
     }
 
     #[sqlx::test]
@@ -427,7 +434,7 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let mut submission = Submission::new();
-        submission.chunks_total = 1;
+        submission.chunks_total = 1.into();
         submission.id = Submission::generate_id();
         let chunk = Chunk::new(submission.id, 0.into(), vec![1, 2, 3, 4, 5].into());
 
@@ -445,9 +452,9 @@ pub mod test {
         .await
         .expect("complete chunk failed");
 
-        assert!(count_chunks(&mut *conn).await.unwrap() == 0);
-        assert!(count_chunks_completed(&mut *conn).await.unwrap() == 1);
-        assert!(count_chunks_failed(&mut *conn).await.unwrap() == 0);
+        assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(0));
+        assert!(count_chunks_completed(&mut *conn).await.unwrap() == u63::new(1));
+        assert!(count_chunks_failed(&mut *conn).await.unwrap() == u63::new(0));
     }
 
     #[sqlx::test]
@@ -462,7 +469,7 @@ pub mod test {
         .await
         .unwrap();
 
-        assert!(count_chunks(&mut *conn).await.unwrap() == 1);
+        assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(1));
 
         complete_chunk_raw(
             (submission_id, 0.into()),
@@ -473,13 +480,13 @@ pub mod test {
         .expect("complete chunk failed");
 
         let submission_status =
-            crate::common::submission::submission_status(submission_id, &mut *conn)
+            crate::common::submission::submission_status(submission_id, &mut conn)
                 .await
                 .unwrap()
                 .unwrap();
         match submission_status {
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, 1);
+                assert_eq!(submission.chunks_done, 1.into());
             }
             _ => panic!("Expected InProgress"),
         }
@@ -501,8 +508,8 @@ pub mod test {
         .await
         .expect("Succeed chunk failed");
 
-        assert!(count_chunks(&mut *conn).await.unwrap() == 0);
-        assert!(count_chunks_completed(&mut *conn).await.unwrap() == 0);
-        assert!(count_chunks_failed(&mut *conn).await.unwrap() == 1);
+        assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(0));
+        assert!(count_chunks_completed(&mut *conn).await.unwrap() == u63::new(0));
+        assert!(count_chunks_failed(&mut *conn).await.unwrap() == u63::new(1));
     }
 }

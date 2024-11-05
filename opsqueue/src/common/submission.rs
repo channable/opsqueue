@@ -4,10 +4,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
-use ux_serde::u63;
 
-#[cfg(feature = "server-logic")]
-use super::chunk::ChunkIndex;
+use super::chunk::{ChunkIndex, ChunkCount};
 use super::chunk::{self, Chunk};
 
 #[cfg(feature = "server-logic")]
@@ -40,22 +38,20 @@ impl std::fmt::Debug for SubmissionId {
 
 #[cfg(feature = "server-logic")]
 impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
-    fn encode(
-        self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull
-    where
-        Self: Sized,
-    {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
-    }
     fn encode_by_ref(
-        &self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+            &self,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
+    }
+
+    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+        where
+            Self: Sized, {
+         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
     }
 }
+
 
 impl From<i64> for SubmissionId {
     fn from(value: i64) -> Self {
@@ -104,8 +100,8 @@ impl SubmissionId {
 pub struct Submission {
     pub id: SubmissionId,
     pub prefix: Option<String>,
-    pub chunks_total: i64,
-    pub chunks_done: i64,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
     pub metadata: Option<Metadata>,
 }
 
@@ -113,7 +109,7 @@ pub struct Submission {
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub prefix: Option<String>,
-    pub chunks_total: u63,
+    pub chunks_total: ChunkCount,
     pub metadata: Option<Metadata>,
     pub completed_at: DateTime<Utc>,
 }
@@ -122,10 +118,10 @@ pub struct SubmissionCompleted {
 pub struct SubmissionFailed {
     pub id: SubmissionId,
     pub prefix: Option<String>,
-    pub chunks_total: i64,
+    pub chunks_total: ChunkCount,
     pub metadata: Option<Metadata>,
     pub failed_at: DateTime<Utc>,
-    pub failed_chunk_id: i64,
+    pub failed_chunk_id: ChunkIndex,
 }
 
 impl Default for Submission {
@@ -139,8 +135,8 @@ impl Submission {
         Submission {
             id: SubmissionId(0),
             prefix: None,
-            chunks_total: 0,
-            chunks_done: 0,
+            chunks_total: 0.into(),
+            chunks_done: 0.into(),
             metadata: None,
         }
     }
@@ -154,12 +150,12 @@ impl Submission {
         metadata: Option<Metadata>,
     ) -> Option<(Submission, Vec<Chunk>)> {
         let submission_id = Self::generate_id();
-        let len = chunks.len().try_into().ok()?;
+        let len = i64::try_from(chunks.len()).ok()?.into();
         let submission = Submission {
             id: submission_id,
             prefix: None,
             chunks_total: len,
-            chunks_done: 0,
+            chunks_done: 0.into(),
             metadata,
         };
         let chunks = chunks
@@ -230,8 +226,8 @@ pub async fn insert_submission_from_chunks(
     let submission = Submission {
         id: submission_id,
         prefix,
-        chunks_total: chunks_contents.len() as i64,
-        chunks_done: 0,
+        chunks_total: (chunks_contents.len() as i64).into(),
+        chunks_done: 0.into(),
         metadata,
     };
     let iter = chunks_contents
@@ -272,53 +268,54 @@ pub enum SubmissionStatus {
 #[tracing::instrument]
 pub async fn submission_status(
     id: SubmissionId,
-    conn: impl SqliteExecutor<'_>,
+    conn: &mut SqliteConnection,
 ) -> Result<Option<SubmissionStatus>, DatabaseError> {
-    let maybe_row = query!("
-        SELECT 0 as status, id, prefix, chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, NULL as completed_at FROM submissions WHERE id = ?
-        UNION ALL
-        SELECT 1 as status, id, prefix, NULL as chunks_done, chunks_total, metadata, NULL as failed_chunk_id, NULL as failed_at, completed_at FROM submissions_completed WHERE id = ?
-        UNION ALL
-        SELECT 2 as status, id, prefix, NULL as chunks_done, chunks_total, metadata, failed_chunk_id, failed_at, NULL as completed_at FROM submissions_failed WHERE id = ?
-    ",
-    id,
-    id,
-    id,
-    ).fetch_one(conn).await;
-    match maybe_row {
-        Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(other) => Err(other.into()),
-        Ok(row) => match row.status {
-            // TODO: Cleaner error handling than unwrap_or_default
-            0 => Ok(Some(SubmissionStatus::InProgress(Submission {
-                id: row.id.into(),
-                prefix: row.prefix,
-                chunks_total: row.chunks_total,
-                chunks_done: row.chunks_done.unwrap_or_default(),
-                metadata: row.metadata,
-            }))),
-            1 => Ok(Some(SubmissionStatus::Completed(SubmissionCompleted {
-                id: row.id.into(),
-                prefix: row.prefix,
-                chunks_total: u63::new(row.chunks_total as u64),
-                metadata: row.metadata,
-                completed_at: row.completed_at.unwrap_or_default().and_utc(),
-            }))),
-            2 => Ok(Some(SubmissionStatus::Failed(SubmissionFailed {
-                id: row.id.into(),
-                prefix: row.prefix,
-                chunks_total: row.chunks_total,
-                metadata: row.metadata,
-                failed_chunk_id: row.failed_chunk_id.unwrap_or_default(),
-                failed_at: row.failed_at.unwrap_or_default().and_utc(),
-            }))),
-            idx => Err(sqlx::Error::ColumnIndexOutOfBounds {
-                index: 0,
-                len: idx as usize,
-            }
-            .into()),
-        },
+    // NOTE: The order is important here; a concurrent writer could move a submission
+    // from InProgress to Completed/Failed in-between the queries.
+    let submission =
+        query!("SELECT * FROM submissions WHERE id = ?", id)
+        .fetch_optional(&mut *conn).await
+        .map(|row| row.map(|row| Submission {
+            id: row.id.into(),
+            prefix: row.prefix,
+            chunks_total: row.chunks_total.into(),
+            chunks_done: row.chunks_done.into(),
+            metadata: row.metadata
+        }))?;
+    if let Some(submission) = submission {
+        return Ok(Some(SubmissionStatus::InProgress(submission)));
     }
+
+    let completed_submission =
+        query!("SELECT * FROM submissions_completed WHERE id = ?", id)
+        .fetch_optional(&mut *conn).await
+        .map(|row| row.map(|row| SubmissionCompleted {
+            id: row.id.into(),
+            prefix: row.prefix,
+            chunks_total: row.chunks_total.into(),
+            metadata: row.metadata,
+            completed_at: row.completed_at.and_utc(),
+        }))?;
+    if let Some(completed_submission) = completed_submission {
+        return Ok(Some(SubmissionStatus::Completed(completed_submission)));
+    }
+
+    let failed_submission =
+        query!("SELECT * FROM submissions_failed WHERE id = ?", id)
+        .fetch_optional(&mut *conn).await
+        .map(|row| row.map(|row| SubmissionFailed {
+            id: row.id.into(),
+            prefix: row.prefix,
+            chunks_total: row.chunks_total.into(),
+            metadata: row.metadata,
+            failed_at: row.failed_at.and_utc(),
+            failed_chunk_id: row.failed_chunk_id.into(),
+        }))?;
+    if let Some(failed_submission) = failed_submission {
+        return Ok(Some(SubmissionStatus::Failed(failed_submission)));
+    }
+
+    Ok(None)
 }
 
 #[cfg(feature = "server-logic")]
@@ -426,29 +423,29 @@ pub async fn fail_submission(
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_submissions(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<usize> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    Ok(count.count as usize)
 }
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_submissions_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<usize> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    Ok(count.count as usize)
 }
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
-pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<i32> {
+pub async fn count_submissions_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<usize> {
     let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
         .fetch_one(db)
         .await?;
-    Ok(count.count)
+    Ok(count.count as usize)
 }
 
 /// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
@@ -639,7 +636,7 @@ pub mod test {
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
 
-        let _sub1 = submission_status(old_four_unfailed, &mut *conn).await;
-        let _sub2 = submission_status(old_four_unfailed, &mut *conn).await;
+        let _sub1 = submission_status(old_four_unfailed, &mut conn).await;
+        let _sub2 = submission_status(old_four_unfailed, &mut conn).await;
     }
 }

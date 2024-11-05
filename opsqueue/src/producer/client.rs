@@ -233,8 +233,8 @@ mod tests {
                 );
             }
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, 0);
-                assert_eq!(submission.chunks_total, 3);
+                assert_eq!(submission.chunks_done, 0.into());
+                assert_eq!(submission.chunks_total, 3.into());
                 assert_eq!(submission.id, submission_id);
             }
         }
