@@ -1,11 +1,12 @@
 use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use moka::{notification::RemovalCause, sync::Cache};
+use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Clone)]
-pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>)>);
+pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>), FxBuildHasher>);
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
 where
@@ -51,7 +52,7 @@ where
             // Reservation succeeded
             Some(entry.into_value().0)
         } else {
-            tracing::warn!("Reservation of {key:?} failed!");
+            tracing::trace!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
         }
