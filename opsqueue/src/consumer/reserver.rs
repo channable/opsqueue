@@ -1,11 +1,12 @@
 use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use moka::{notification::RemovalCause, sync::Cache};
+use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Clone)]
-pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>)>);
+pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>), FxBuildHasher>);
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
 where
@@ -33,7 +34,9 @@ where
                     let _ = val.1.send(val.0);
                 }
             })
-            .build();
+            // We're not worried about HashDoS as the consumers are trusted code,
+            // so let's use a faster hash than SipHash
+            .build_with_hasher(rustc_hash::FxBuildHasher);
         Reserver(cache)
     }
 
@@ -44,13 +47,12 @@ where
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone()));
 
-
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
             // Reservation succeeded
             Some(entry.into_value().0)
         } else {
-            tracing::debug!("Reservation of {key:?} failed!");
+            tracing::trace!("Reservation of {key:?} failed!");
             // Someone else reserved this first
             None
         }

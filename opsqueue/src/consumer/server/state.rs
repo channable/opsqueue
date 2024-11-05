@@ -63,17 +63,23 @@ impl ConsumerState {
     #[tracing::instrument(skip(self, stream, limit, stale_chunks_notifier))]
     async fn reserve_chunks(
         &self,
-        stream: impl Stream<Item = Result<(Chunk, Submission), sqlx::Error>>,
+        stream: impl Stream<Item = Result<ChunkId, sqlx::Error>>,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         stream
-            .try_filter_map(|(chunk, submission)| async move {
-                let chunk_id = (chunk.submission_id, chunk.chunk_index);
+            .try_filter_map(|chunk_id| async move {
                 Ok(self
                     .reserver
-                    .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
-                    .map(|_| (chunk, submission)))
+                    .try_reserve(chunk_id, chunk_id, stale_chunks_notifier))
+            })
+            .and_then(|chunk_id| {
+                async move {
+                    let conn = &mut self.pool.acquire().await?;
+                    let chunk = crate::common::chunk::db::get_chunk(chunk_id, &mut **conn).await?;
+                    let submission = crate::common::submission::db::get_submission(chunk_id.submission_id, &mut **conn).await.expect("TODO: map error");
+                    Ok((chunk, submission))
+                }
             })
             .take(limit)
             .try_collect()
@@ -100,7 +106,7 @@ impl ConsumerState {
         self.reservations.lock().expect("No poison").extend(
             new_reservations
                 .iter()
-                .map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)),
+                .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
         );
 
         Ok(new_reservations)

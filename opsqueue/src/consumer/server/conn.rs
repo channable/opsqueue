@@ -25,6 +25,7 @@ pub struct RetryReservation{
 }
 
 pub struct ConsumerConn {
+    id: uuid::Uuid,
     consumer_state: ConsumerState,
     cancellation_token: CancellationToken,
     ws_stream: WebSocket,
@@ -50,6 +51,7 @@ impl ConsumerConn {
         let notify_on_insert = server_state.notify_on_insert.clone();
 
         Self {
+            id: uuid::Uuid::new_v4(),
             consumer_state,
             ws_stream,
             notify_on_insert,
@@ -93,8 +95,8 @@ impl ConsumerConn {
                 }
                 // When a message from elsewhere in the app is received, pass it forward
                 // (Currently there is only one kind of these, namely a chunk reservation having expired)
-                Some((submission_id, chunk_index)) = self.rx.recv() => {
-                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired((submission_id, chunk_index)));
+                Some(chunk_id) = self.rx.recv() => {
+                    let msg = ServerToClientMessage::Async(AsyncServerToClientMessage::ChunkReservationExpired(chunk_id));
                     self.ws_stream.send(msg.into()).await?;
                 },
             }
@@ -150,6 +152,7 @@ impl ConsumerConn {
         Ok(())
     }
 
+    #[tracing::instrument(, fields(client_id = self.id.to_string()), skip(self, msg))]
     async fn handle_incoming_client_message(
         &mut self,
         msg: Envelope<ClientToServerMessage>,

@@ -1512,7 +1512,9 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "rand",
  "reqwest",
+ "rustc-hash",
  "serde",
  "serde-error",
  "serde_json",
@@ -1527,6 +1529,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+ "uuid",
  "ux_serde",
 ]
 

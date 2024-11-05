@@ -277,7 +277,7 @@ impl ConsumerClient {
             InternalConsumerClientError]
         >
         {
-        let chunk_id = (submission_id.into(), chunk_index.into());
+        let chunk_id = (submission_id.into(), chunk_index.into()).into();
         self.block_unless_interrupted(async move {
             match submission_prefix {
                 None => {
@@ -287,7 +287,7 @@ impl ConsumerClient {
                 }
                 Some(prefix) => {
                     self.object_store_client
-                        .store_chunk(&prefix, chunk_id.1, ChunkType::Output, output_content)
+                        .store_chunk(&prefix, chunk_id.chunk_index, ChunkType::Output, output_content)
                         .await.map_err(|e| CError(R(L(e))))?;
                     self.client.complete_chunk(chunk_id, None).await.map_err(|e| CError(R(R(e))))
                 }
@@ -302,7 +302,7 @@ impl ConsumerClient {
         chunk_index: ChunkIndex,
         failure: String,
     ) -> CPyResult<(), E<FatalPythonException, InternalConsumerClientError>> {
-        let chunk_id = (submission_id.into(), chunk_index.into());
+        let chunk_id = (submission_id.into(), chunk_index.into()).into();
         self.block_unless_interrupted(async {
             self.client
                 .fail_chunk(chunk_id, failure)

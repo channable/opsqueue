@@ -1,5 +1,6 @@
 use std::error::Error;
 
+use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
     ChunkNotFound, E, IncorrectUsage, SubmissionNotFound,
     UnexpectedOpsqueueConsumerServerResponse,
@@ -177,7 +178,7 @@ impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
 
 impl From<CError<ChunkNotFound>> for PyErr {
     fn from(value: CError<ChunkNotFound>) -> Self {
-        let (submission_id, chunk_index) = value.0 .0;
+        let ChunkId{submission_id, chunk_index} = value.0 .0;
         ChunkNotFoundError::new_err((
             value.0.to_string(),
             (

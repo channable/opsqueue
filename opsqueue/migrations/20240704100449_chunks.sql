@@ -6,7 +6,7 @@ CREATE TABLE chunks
     retries INTEGER NOT NULL DEFAULT 0,
 
     PRIMARY KEY (submission_id, chunk_index)
-) STRICT;
+) WITHOUT ROWID, STRICT;
 
 CREATE TABLE chunks_completed
 (
@@ -16,7 +16,7 @@ CREATE TABLE chunks_completed
     completed_at DATETIME NOT NULL, -- Unix Timestamp
 
     PRIMARY KEY (submission_id, chunk_index)
-);
+) WITHOUT ROWID;
 
 
 CREATE TABLE chunks_failed
@@ -29,4 +29,4 @@ CREATE TABLE chunks_failed
     skipped BOOL NOT NULL DEFAULT false,
 
     PRIMARY KEY (submission_id, chunk_index)
-);
+) WITHOUT ROWID;

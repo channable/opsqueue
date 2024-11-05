@@ -25,9 +25,8 @@ impl Display for SubmissionId {
 
 impl std::fmt::Debug for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubmissionId")
-            .field("id", &self.0)
-            .field("timestamp", &self.timestamp())
+        f.debug_tuple("SubmissionId")
+            .field(&self.0)
             .finish()
     }
 }
@@ -481,7 +480,7 @@ pub async fn fail_submission_notx(
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
     fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
-    super::chunk::db::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut *conn)
+    super::chunk::db::move_chunk_to_failed_chunks((id, failed_chunk_index).into(), failure, &mut *conn)
         .await?;
     super::chunk::db::skip_remaining_chunks(id, &mut *conn).await?;
     Ok(())
