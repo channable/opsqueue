@@ -2,15 +2,11 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-#[cfg(feature = "server-logic")]
-use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use ux_serde::u63;
 
 use super::chunk::{ChunkIndex, ChunkCount};
 use super::chunk::{self, Chunk};
 
-#[cfg(feature = "server-logic")]
-use super::errors::{DatabaseError, E, SubmissionNotFound};
-use snowflaked::Snowflake;
 
 pub type Metadata = Vec<u8>;
 
@@ -19,7 +15,7 @@ static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-pub struct SubmissionId(i64);
+pub struct SubmissionId(u63);
 
 impl Display for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,32 +32,39 @@ impl std::fmt::Debug for SubmissionId {
     }
 }
 
-#[cfg(feature = "server-logic")]
-impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
-    fn encode_by_ref(
-            &self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
-        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&self.0, buf)
-    }
-
-    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
-        where
-            Self: Sized, {
-         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.0, buf)
+impl From<u63> for SubmissionId {
+    fn from(value: u63) -> Self {
+        SubmissionId(value)
     }
 }
 
-
-impl From<i64> for SubmissionId {
-    fn from(value: i64) -> Self {
-        SubmissionId(value)
+impl From<SubmissionId> for u63 {
+    fn from(value: SubmissionId) -> Self {
+        value.0
     }
 }
 
 impl From<SubmissionId> for i64 {
     fn from(value: SubmissionId) -> Self {
-        value.0
+        let inner: u64 = value.0.into();
+        // Guaranteed to fit positive signed range
+        inner as i64
+    }
+}
+
+impl From<SubmissionId> for u64 {
+    fn from(value: SubmissionId) -> Self {
+        value.0.into()
+    }
+}
+
+impl TryFrom<u64> for SubmissionId {
+    type Error = crate::common::errors::TryFromIntError;
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value > u63::MAX.into() {
+            return Err(crate::common::errors::TryFromIntError(()));
+        }
+        Ok(Self(u63::new(value)))
     }
 }
 
@@ -71,19 +74,12 @@ impl From<&SubmissionId> for std::time::SystemTime {
     }
 }
 
-#[cfg(feature = "server-logic")]
-impl sqlx::Type<Sqlite> for SubmissionId {
-    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
-        <i64 as sqlx::Type<Sqlite>>::compatible(ty)
-    }
-    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
-        <i64 as sqlx::Type<Sqlite>>::type_info()
-    }
-}
-
 impl SubmissionId {
     pub fn system_time(self) -> std::time::SystemTime {
-        let unix_timestamp_ms = self.0.timestamp();
+        use snowflaked::Snowflake;
+        let inner: u64 = self.0.into();
+
+        let unix_timestamp_ms = inner.timestamp();
         let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
         ID_GENERATOR
             .epoch()
@@ -124,6 +120,21 @@ pub struct SubmissionFailed {
     pub failed_chunk_id: ChunkIndex,
 }
 
+
+// #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+// pub enum SubmissionStatusTag {
+//     InProgress,
+//     Completed,
+//     Failed,
+// }
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SubmissionStatus {
+    InProgress(Submission),
+    Completed(SubmissionCompleted),
+    Failed(SubmissionFailed),
+}
+
 impl Default for Submission {
     fn default() -> Self {
         Self::new()
@@ -133,16 +144,17 @@ impl Default for Submission {
 impl Submission {
     pub fn new() -> Self {
         Submission {
-            id: SubmissionId(0),
+            id: SubmissionId(u63::new(0)),
             prefix: None,
-            chunks_total: 0.into(),
-            chunks_done: 0.into(),
+            chunks_total: ChunkCount::zero(),
+            chunks_done: ChunkCount::zero(),
             metadata: None,
         }
     }
 
     pub fn generate_id() -> SubmissionId {
-        SubmissionId(ID_GENERATOR.generate())
+        let inner: u64 = ID_GENERATOR.generate();
+        SubmissionId(u63::new(inner))
     }
 
     pub fn from_vec(
@@ -150,12 +162,12 @@ impl Submission {
         metadata: Option<Metadata>,
     ) -> Option<(Submission, Vec<Chunk>)> {
         let submission_id = Self::generate_id();
-        let len = i64::try_from(chunks.len()).ok()?.into();
+        let len = ChunkCount::new(u64::try_from(chunks.len()).ok()?).ok()?;
         let submission = Submission {
             id: submission_id,
             prefix: None,
             chunks_total: len,
-            chunks_done: 0.into(),
+            chunks_done: ChunkCount::zero(),
             metadata,
         };
         let chunks = chunks
@@ -163,13 +175,56 @@ impl Submission {
             .enumerate()
             .map(|(chunk_index, uri)| {
                 // NOTE: we know that `len` fits in the unsigned 63-bit part of a i64 and therefore that the index fits it as well.
-                let chunk_index = (chunk_index as i64).into();
+                let chunk_index = ChunkIndex::from(u63::new(chunk_index as u64));
                 Chunk::new(submission_id, chunk_index, uri)
             })
             .collect();
         Some((submission, chunks))
     }
 }
+
+
+#[cfg(feature = "server-logic")]
+pub mod db {
+use crate::common::errors::{DatabaseError, E, SubmissionNotFound};
+use crate::db::SqliteConnectionExt;
+#[cfg(feature = "server-logic")]
+use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+
+use super::*;
+
+impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
+    fn encode_by_ref(
+            &self,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+         <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
+    }
+
+    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+        where
+            Self: Sized, {
+         <i64 as sqlx::Encode<'q, Sqlite>>::encode(self.into(), buf)
+    }
+}
+
+impl<'q> sqlx::Decode<'q, Sqlite> for SubmissionId {
+    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'q>) -> Result<Self, sqlx::error::BoxDynError> {
+        let inner = <u64 as sqlx::Decode<'q, Sqlite>>::decode(value)?;
+        let x = SubmissionId::try_from(inner)?;
+        Ok(x)
+    }
+}
+
+impl sqlx::Type<Sqlite> for SubmissionId {
+    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        <u64 as sqlx::Type<Sqlite>>::compatible(ty)
+    }
+    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+        <u64 as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
@@ -204,10 +259,10 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             insert_submission_raw(submission, &mut **tx).await?;
-            super::chunk::insert_many_chunks(chunks, &mut **tx).await?;
+            super::chunk::db::insert_many_chunks(chunks, &mut **tx).await?;
             Ok(())
         })
     })
@@ -223,17 +278,21 @@ pub async fn insert_submission_from_chunks(
     conn: &mut SqliteConnection,
 ) -> Result<SubmissionId, DatabaseError> {
     let submission_id = Submission::generate_id();
+    let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
     let submission = Submission {
         id: submission_id,
         prefix,
-        chunks_total: (chunks_contents.len() as i64).into(),
-        chunks_done: 0.into(),
+        chunks_total: len,
+        chunks_done: ChunkCount::zero(),
         metadata,
     };
     let iter = chunks_contents
         .into_iter()
         .enumerate()
-        .map(move |(chunk_index, uri)| Chunk::new(submission_id, (chunk_index as i64).into(), uri));
+        .map(move |(chunk_index, uri)| {
+            // NOTE: Since `len` fits in a u64, these indexes by definition must too!
+            Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
+        });
     insert_submission(submission, iter, conn).await?;
     Ok(submission_id)
 }
@@ -244,24 +303,10 @@ pub async fn get_submission(
     id: SubmissionId,
     conn: impl Executor<'_, Database = Sqlite>,
 ) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
-    let submission = query_as!(Submission, "SELECT * FROM submissions WHERE id = ?", id)
+    let submission = query_as!(Submission, r#"SELECT id AS "id: SubmissionId", prefix, chunks_total AS "chunks_total: ChunkCount", chunks_done AS "chunks_done: ChunkCount", metadata FROM submissions WHERE id = ?"#, id)
         .fetch_one(conn)
         .await?;
     Ok(submission)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SubmissionStatusTag {
-    InProgress,
-    Completed,
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SubmissionStatus {
-    InProgress(Submission),
-    Completed(SubmissionCompleted),
-    Failed(SubmissionFailed),
 }
 
 #[cfg(feature = "server-logic")]
@@ -273,44 +318,53 @@ pub async fn submission_status(
     // NOTE: The order is important here; a concurrent writer could move a submission
     // from InProgress to Completed/Failed in-between the queries.
     let submission =
-        query!("SELECT * FROM submissions WHERE id = ?", id)
-        .fetch_optional(&mut *conn).await
-        .map(|row| row.map(|row| Submission {
-            id: row.id.into(),
-            prefix: row.prefix,
-            chunks_total: row.chunks_total.into(),
-            chunks_done: row.chunks_done.into(),
-            metadata: row.metadata
-        }))?;
+        query_as!(Submission, r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , metadata
+        FROM submissions WHERE id = ?
+        "#
+        , id
+    )
+        .fetch_optional(&mut *conn).await?;
     if let Some(submission) = submission {
         return Ok(Some(SubmissionStatus::InProgress(submission)));
     }
 
     let completed_submission =
-        query!("SELECT * FROM submissions_completed WHERE id = ?", id)
-        .fetch_optional(&mut *conn).await
-        .map(|row| row.map(|row| SubmissionCompleted {
-            id: row.id.into(),
-            prefix: row.prefix,
-            chunks_total: row.chunks_total.into(),
-            metadata: row.metadata,
-            completed_at: row.completed_at.and_utc(),
-        }))?;
+        query_as!(SubmissionCompleted, r#"
+        SELECT
+            id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , metadata
+            , completed_at AS "completed_at: DateTime<Utc>"
+        FROM submissions_completed WHERE id = ?
+        "#
+        , id
+    )
+        .fetch_optional(&mut *conn).await?;
     if let Some(completed_submission) = completed_submission {
         return Ok(Some(SubmissionStatus::Completed(completed_submission)));
     }
 
     let failed_submission =
-        query!("SELECT * FROM submissions_failed WHERE id = ?", id)
-        .fetch_optional(&mut *conn).await
-        .map(|row| row.map(|row| SubmissionFailed {
-            id: row.id.into(),
-            prefix: row.prefix,
-            chunks_total: row.chunks_total.into(),
-            metadata: row.metadata,
-            failed_at: row.failed_at.and_utc(),
-            failed_chunk_id: row.failed_chunk_id.into(),
-        }))?;
+        query_as!(SubmissionFailed, r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , metadata
+            , failed_at AS "failed_at: DateTime<Utc>"
+            , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
+        FROM submissions_failed WHERE id = ?
+        "#
+        , id
+    )
+        .fetch_optional(&mut *conn).await?;
     if let Some(failed_submission) = failed_submission {
         return Ok(Some(SubmissionStatus::Failed(failed_submission)));
     }
@@ -321,24 +375,25 @@ pub async fn submission_status(
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
 /// Completes the submission, iff all chunks have been completed.
+///
+/// Do not call directly! MUST be called inside a transaction.
 pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
 ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
-    use sqlx::Connection;
-    conn.transaction(|tx| {
-        Box::pin(async move {
-            let submission = get_submission(id, &mut **tx).await?;
+    // conn.immediate_write_transaction(|tx| {
+        // Box::pin(async move {
+            let submission = get_submission(id, &mut *conn).await?;
 
             if submission.chunks_done == submission.chunks_total {
-                complete_submission_raw(id, &mut **tx).await?;
+                complete_submission_raw(id, &mut *conn).await?;
                 Ok(true)
             } else {
                 Ok(false)
             }
-        })
-    })
-    .await
+        // })
+    // })
+    // .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -409,16 +464,27 @@ pub async fn fail_submission(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
+    use sqlx::Connection;
     conn.transaction(|tx| {
         Box::pin(async move {
-            fail_submission_raw(id, failed_chunk_index, &mut **tx).await?;
-            super::chunk::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut **tx)
-                .await?;
-            super::chunk::skip_remaining_chunks(id, &mut **tx).await?;
-            Ok(())
-        })
+            fail_submission_notx(id, failed_chunk_index, failure, tx).await
+      })
     })
     .await
+}
+
+/// Do not call directly! Must be called inside a transaction.
+pub async fn fail_submission_notx(
+    id: SubmissionId,
+    failed_chunk_index: ChunkIndex,
+    failure: String,
+    conn: &mut SqliteConnection,
+) -> sqlx::Result<()> {
+    fail_submission_raw(id, failed_chunk_index, &mut *conn).await?;
+    super::chunk::db::move_chunk_to_failed_chunks((id, failed_chunk_index), failure, &mut *conn)
+        .await?;
+    super::chunk::db::skip_remaining_chunks(id, &mut *conn).await?;
+    Ok(())
 }
 
 #[cfg(feature = "server-logic")]
@@ -457,7 +523,7 @@ pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| {
+    conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             query!(
                 "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
@@ -489,6 +555,7 @@ pub async fn cleanup_old(
     })
     .await
 }
+}
 
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
@@ -497,6 +564,7 @@ pub mod test {
     use chrono::Utc;
 
     use super::*;
+    use super::db::*;
 
     #[sqlx::test]
     pub async fn test_insert_submission(db: sqlx::SqlitePool) {
@@ -565,7 +633,7 @@ pub mod test {
             .expect("insertion failed");
         let mut conn = db.acquire().await.unwrap();
 
-        fail_submission(submission.id, 1.into(), "Boom!".to_string(), &mut conn)
+        fail_submission(submission.id, u63::new(1).into(), "Boom!".to_string(), &mut conn)
             .await
             .unwrap();
         assert!(count_submissions(&mut *conn).await.unwrap() == 0);
@@ -593,13 +661,13 @@ pub mod test {
                 .await
                 .unwrap();
 
-        fail_submission(old_one, 0.into(), "Broken one".into(), &mut conn)
+        fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
             .await
             .unwrap();
-        fail_submission(old_two, 0.into(), "Broken two".into(), &mut conn)
+        fail_submission(old_two, u63::new(0).into(), "Broken two".into(), &mut conn)
             .await
             .unwrap();
-        fail_submission(old_three, 0.into(), "Broken three".into(), &mut conn)
+        fail_submission(old_three, u63::new(0).into(), "Broken three".into(), &mut conn)
             .await
             .unwrap();
 
@@ -618,12 +686,12 @@ pub mod test {
                 .await
                 .unwrap();
 
-        fail_submission(too_new_one, 0.into(), "Broken new one".into(), &mut conn)
+        fail_submission(too_new_one, u63::new(0).into(), "Broken new one".into(), &mut conn)
             .await
             .unwrap();
         fail_submission(
             too_new_three,
-            0.into(),
+            u63::new(0).into(),
             "Broken new three".into(),
             &mut conn,
         )
@@ -632,7 +700,8 @@ pub mod test {
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 5);
 
-        cleanup_old(&mut conn, cutoff_timestamp).await.unwrap();
+        let mut conn2 = db.acquire().await.unwrap();
+        cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
         assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
 

@@ -15,7 +15,7 @@ use crate::consumer::strategy::Strategy;
 // TODO: Make configurable
 pub const MAX_MISSABLE_HEARTBEATS: usize = 3;
 // TODO: Make configurable
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
@@ -46,8 +46,8 @@ pub enum SyncServerToClientResponse {
     ChunksReserved(
         Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
     ),
-    ChunkCompleted,
-    ChunkFailed,
+    // ChunkCompleted,
+    // ChunkFailed,
 }
 
 /// Messages the server sends on its own

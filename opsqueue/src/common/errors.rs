@@ -117,3 +117,9 @@ pub struct IncorrectUsage<E>(#[from] pub E);
 #[derive(Error, Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[error("You passed a 0 as reservation maximum limit. Please provide a positive integer")]
 pub struct LimitIsZero();
+
+/// Similar to the type in the stdlib, used with our custom ID int-wrapper types
+/// (`SubmissionId`, `ChunkIndex`, etc.)
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
+#[error("out of range integral type conversion attempted")]
+pub struct TryFromIntError(pub(crate)());

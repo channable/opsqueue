@@ -123,6 +123,8 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
+    use ux_serde::u63;
+
     use crate::{
         common::submission::{self, SubmissionStatus},
         producer::common::ChunkContents,
@@ -132,7 +134,7 @@ mod tests {
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         tokio::spawn(
-            super::super::server::ServerState::new(pool.clone()).serve_for_tests(url.into()),
+            super::super::server::serve_for_tests(pool.clone(), url.into()),
         );
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
         tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime
@@ -149,7 +151,7 @@ mod tests {
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
-        submission::insert_submission_from_chunks(None, vec![None, None, None], None, &mut conn)
+        submission::db::insert_submission_from_chunks(None, vec![None, None, None], None, &mut conn)
             .await
             .expect("Insertion failed");
 
@@ -163,7 +165,7 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let count = submission::count_submissions(&pool)
+        let count = submission::db::count_submissions(&pool)
             .await
             .expect("Should be OK");
         assert_eq!(count, 0);
@@ -179,7 +181,7 @@ mod tests {
             .await
             .expect("Should be OK");
 
-        let count = submission::count_submissions(&pool)
+        let count = submission::db::count_submissions(&pool)
             .await
             .expect("Should be OK");
         assert_eq!(count, 1);
@@ -197,7 +199,7 @@ mod tests {
             .await
             .expect("Should be OK");
 
-        let count = submission::count_submissions(&pool)
+        let count = submission::db::count_submissions(&pool)
             .await
             .expect("Should be OK");
         assert_eq!(count, 4);
@@ -233,8 +235,8 @@ mod tests {
                 );
             }
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, 0.into());
-                assert_eq!(submission.chunks_total, 3.into());
+                assert_eq!(submission.chunks_done, u63::new(0).into());
+                assert_eq!(submission.chunks_total, u63::new(3).into());
                 assert_eq!(submission.id, submission_id);
             }
         }

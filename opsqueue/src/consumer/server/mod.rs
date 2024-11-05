@@ -1,11 +1,11 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{State, WebSocketUpgrade},
     routing::get,
     Router,
 };
-use tokio::select;
+use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::chunk::ChunkId;
@@ -21,7 +21,8 @@ pub async fn serve_for_tests(
     cancellation_token: CancellationToken,
     reservation_expiration: Duration,
 ) {
-    let state = ServerState::new(pool, cancellation_token.clone(), reservation_expiration);
+    let notify_on_insert = Arc::new(Notify::new());
+    let state = ServerState::new(pool, notify_on_insert, cancellation_token.clone(), reservation_expiration);
     let router = ServerState::build_router(state);
     let app = Router::new().nest("/consumer", router);
     let listener = tokio::net::TcpListener::bind(&*server_addr)
@@ -38,6 +39,7 @@ pub async fn serve_for_tests(
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: sqlx::SqlitePool,
+    notify_on_insert: Arc<Notify>,
     cancellation_token: CancellationToken,
     reserver: Reserver<ChunkId, ChunkId>,
 }
@@ -45,12 +47,14 @@ pub struct ServerState {
 impl ServerState {
     pub fn new(
         pool: sqlx::SqlitePool,
+        notify_on_insert: Arc<Notify>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
     ) -> Self {
         let reserver = Reserver::new(reservation_expiration);
         Self {
             pool,
+            notify_on_insert,
             cancellation_token,
             reserver,
         }

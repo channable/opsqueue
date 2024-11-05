@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::common::chunk;
 use crate::common::submission::{self, Metadata, SubmissionId};
 use axum::extract::{Path, State};
@@ -5,9 +7,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use tokio::sync::Notify;
 
 pub async fn serve_for_tests(database_pool: sqlx::SqlitePool, server_addr: Box<str>) {
-    ServerState::new(database_pool)
+    ServerState::new(database_pool, Arc::new(Notify::new()))
         .serve_for_tests(server_addr)
         .await;
 }
@@ -15,11 +18,12 @@ pub async fn serve_for_tests(database_pool: sqlx::SqlitePool, server_addr: Box<s
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: sqlx::SqlitePool,
+    notify_on_insert: Arc<Notify>,
 }
 
 impl ServerState {
-    pub fn new(pool: sqlx::SqlitePool) -> Self {
-        ServerState { pool }
+    pub fn new(pool: sqlx::SqlitePool, notify_on_insert: Arc<Notify>) -> Self {
+        ServerState { pool, notify_on_insert }
     }
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
         let app = Router::new().nest("/producer", self.build_router());
@@ -76,7 +80,7 @@ async fn submission_status(
     Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
     let mut conn = state.pool.acquire().await?;
-    let status = submission::submission_status(submission_id, &mut conn).await?;
+    let status = submission::db::submission_status(submission_id, &mut conn).await?;
     Ok(Json(status))
 }
 
@@ -91,13 +95,17 @@ async fn insert_submission(
             (Some(prefix), (0..count).map(|_index| None).collect())
         }
     };
-    let submission_id = submission::insert_submission_from_chunks(
+    let submission_id = submission::db::insert_submission_from_chunks(
         prefix,
         chunk_contents,
         request.metadata,
         &mut conn,
     )
     .await?;
+
+    // We've done a new insert! Let's tell any waiting consumers!
+    state.notify_on_insert.notify_waiters();
+
     Ok(Json(submission_id))
 }
 
@@ -127,13 +135,13 @@ pub struct InsertSubmissionResponse {
 }
 
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
-    let count = submission::count_submissions(&state.pool).await?;
+    let count = submission::db::count_submissions(&state.pool).await?;
     Ok(Json(count.try_into()?))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
 ) -> Result<Json<u32>, ServerError> {
-    let count = submission::count_submissions_completed(&state.pool).await?;
+    let count = submission::db::count_submissions_completed(&state.pool).await?;
     Ok(Json(count.try_into()?))
 }

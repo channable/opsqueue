@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use futures::Stream;
 use futures::StreamExt;
@@ -17,25 +19,27 @@ use crate::{
 
 use super::ServerState;
 use crate::common::errors::{
-    ChunkNotFound, E, IncorrectUsage, LimitIsZero, SubmissionNotFound,
+    E, IncorrectUsage, LimitIsZero,
 };
 
 // TODO: We currently clone the arc-like pool and reserver,
 // but we could probably just give this struct a lifetime,
 // as it will never outlive the ServerState it is created from.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConsumerState {
     // NOTE: This is an arc-like field, referring to the same DB pool.
     pool: sqlx::SqlitePool,
     // NOTE: This is an arc-like field, referring to the same reserver as all other ConsumerStates.
     reserver: Reserver<ChunkId, ChunkId>,
     // The following are the consumer-specific chunks that are currently reserved.
-    reservations: HashSet<ChunkId>,
+    reservations: Arc<Mutex<HashSet<ChunkId>>>,
 }
 
 impl Drop for ConsumerState {
     fn drop(&mut self) {
-        for reservation in &self.reservations {
+
+        let reservations = self.reservations.lock().unwrap();
+        for reservation in &*reservations {
             self.reserver.finish_reservation(reservation)
         }
     }
@@ -46,7 +50,7 @@ impl ConsumerState {
         Self {
             pool: server_state.pool.clone(),
             reserver: server_state.reserver.clone(),
-            reservations: HashSet::new(),
+            reservations: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -93,7 +97,7 @@ impl ConsumerState {
             .reserve_chunks(stream, limit, stale_chunks_notifier)
             .await?;
 
-        self.reservations.extend(
+        self.reservations.lock().expect("No poison").extend(
             new_reservations
                 .iter()
                 .map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)),
@@ -107,23 +111,47 @@ impl ConsumerState {
         &mut self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-        let mut conn = self.pool.acquire().await?;
-        // NOTE: Even in the unlikely event the query fails,
-        // we want the chunk to be un-reserved
-        let res = chunk::complete_chunk(id, output_content, &mut conn).await;
-        self.reservations.remove(&id);
-        self.reserver.finish_reservation(&id);
-        res
+    ) -> Result<(), DatabaseError> {
+        let pool = self.pool.clone();
+        let reservations = self.reservations.clone();
+        let reserver = self.reserver.clone();
+        tokio::spawn(async move {
+            let res: Result<(), anyhow::Error> = async move {
+                let mut conn = pool.acquire().await?;
+                chunk::db::complete_chunk(id, output_content, &mut conn).await?;
+                reservations.lock().expect("No poison").remove(&id);
+                // NOTE: Even in the unlikely event the query fails,
+                // we want the chunk to be un-reserved
+                reserver.finish_reservation(&id);
+                Ok(())
+            }.await;
+
+            if res.is_err() {
+                tracing::error!("Failed to fail chunk: {:?}", res);
+            }
+        });
+        Ok(())
     }
 
-    pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), sqlx::Error> {
-        let mut conn = self.pool.acquire().await?;
-        // NOTE: Even in the unlikely event the query fails,
-        // we want the chunk to be un-reserved
-        let res = chunk::retry_or_fail_chunk(id, failure, &mut conn).await;
-        self.reservations.remove(&id);
-        self.reserver.finish_reservation(&id);
-        res
+    pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), DatabaseError> {
+        let pool = self.pool.clone();
+        let reservations = self.reservations.clone();
+        let reserver = self.reserver.clone();
+        tokio::spawn(async move {
+            let res: Result<(), anyhow::Error> = async move {
+                let mut conn = pool.acquire().await?;
+                chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await?;
+                reservations.lock().expect("No poison").remove(&id);
+                // NOTE: Even in the unlikely event the query fails,
+                // we want the chunk to be un-reserved
+                reserver.finish_reservation(&id);
+                Ok(())
+            }.await;
+
+            if res.is_err() {
+                tracing::error!("Failed to fail chunk: {:?}", res);
+            }
+        });
+        Ok(())
     }
 }
