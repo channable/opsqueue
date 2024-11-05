@@ -23,6 +23,11 @@ class ProducerClient:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
+        """
+        Creates a new producer client.
+
+        Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
+        """
         self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)
 
     def run_submission(
@@ -40,6 +45,10 @@ class ProducerClient:
 
         If the submission fails, an exception will be raised.
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
+
+        Raises:
+        - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         results_iter = self.run_submission_chunks(
             _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
@@ -59,6 +68,11 @@ class ProducerClient:
         returning an ID you can use to track the submission's progress afterwards.
 
         Chunking is done automatically, based on the provided chunk size.
+
+        Raises:
+        - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
+        - `ChunkCountIsZeroError` if passing an empty list of operations;
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.insert_submission_chunks(
             _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
@@ -74,8 +88,9 @@ class ProducerClient:
         Returns the operation-results of a completed submission, as an iterator that lazily
         looks up each of the chunk-results one by one from the object storage.
 
-        Will raise an exception if the submission was not completed yet.
-        (use `get_submission_status` or `is_completed` to check for this.)
+        Raises:
+        - TODO `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         return _unchunk_iterator(
             self.inner.stream_completed_submission(submission_id), serialization_format
@@ -89,6 +104,11 @@ class ProducerClient:
 
         If the submission fails, an exception will be raised.
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
+
+        Raises:
+        - `ChunkCountIsZeroError` if passing an empty list of operations;
+        - `InternalProducerClientError` if there is a low-level internal error.
+        - TODO special exception for when the submission fails.
         """
         return self.inner.run_submission_chunks(chunk_contents, metadata=metadata)  # type: ignore[no-any-return]
 
@@ -98,6 +118,11 @@ class ProducerClient:
         """
         Inserts an already-chunked submission into the queue,
         returning an ID you can use to track the submission's progress afterwards.
+
+        Raises:
+        - `ChunkCountIsZeroError` if passing an empty list of operations;
+        - `InternalProducerClientError` if there is a low-level internal error.
+        - TODO special exception for when the submission fails.
         """
         return self.inner.insert_submission_chunks(
             iter(chunk_contents), metadata=metadata
@@ -110,8 +135,9 @@ class ProducerClient:
         Returns the chunk-results of a completed submission, as an iterator that lazily
         looks up the chunk-results one by one from the object storage.
 
-        Will raise an exception if the submission was not completed yet.
-        (use `get_submission_status` or `is_completed` to check for this.)
+        Raises:
+        - TODO `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.inner.stream_completed_submission(submission_id)  # type: ignore[no-any-return]
 
@@ -120,6 +146,9 @@ class ProducerClient:
         Returns the number of active submissions in the queue.
 
         (This does not include completed or failed submissions.)
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.inner.count_submissions()  # type: ignore[no-any-return]
 
@@ -129,11 +158,16 @@ class ProducerClient:
         """
         Retrieve the status (in progress, completed, or failed) of a specific submission.
 
+        Returns `None` if no submission for the given ID can be found.
+
         The returned SubmissionStatus object also includes the number of chunks finished so far,
         timestamps indicating when the submission was started/completed/failed,
         and the metadata submitted earlier.
 
-        This call does not on its own fetch the results of aa (completed) submission.
+        This call does not on its own fetch the results of a (completed) submission.
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.inner.get_submission_status(submission_id)
 
@@ -144,6 +178,8 @@ class ProducerClient:
 def _chunk_iterator(
     iter: Iterable[Any], chunk_size: int, serialization_format: SerializationFormat
 ) -> Iterator[bytes]:
+    if chunk_size <= 0:
+        raise ChunkSizeIsZeroError
     return map(
         lambda c: encode_chunk(c, serialization_format),
         itertools.batched(iter, chunk_size),
@@ -161,3 +197,8 @@ def _unchunk_iterator(
 def _flatten_iterator(iter_of_iters: Iterable[Iterable[bytes]]) -> Iterator[bytes]:
     "Flatten one level of nesting."
     return itertools.chain.from_iterable(iter_of_iters)
+
+
+class ChunkSizeIsZeroError(Exception):
+    def __str__(self) -> str:
+        return "Chunk size must be a positive integer"

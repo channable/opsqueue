@@ -1,23 +1,24 @@
 use std::{future::IntoFuture, mem::MaybeUninit, pin::Pin, sync::Arc, time::Duration};
 
-use pyo3::{
-    create_exception,
-    exceptions::{PyException, PyTypeError},
-    prelude::*,
-    types::PyIterator,
-};
+use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyIterator};
 
 use futures::{Stream, StreamExt, TryStreamExt};
-use opsqueue::producer::client::Client as ActualClient;
 use opsqueue::{
     common::{chunk, submission},
-    object_store::ChunkType,
+    object_store::{ChunkRetrievalError, ChunkType},
     producer::common::ChunkContents,
+    E,
+};
+use opsqueue::{
+    common::{errors::E::{self, L, R}, NonZero, NonZeroIsZero},
+    object_store::{ChunksStorageError, NewObjectStoreClientError},
+    producer::client::{Client as ActualClient, InternalProducerClientError},
 };
 use tokio::sync::Mutex;
 
-use crate::common::{
-    run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes,
+use crate::{
+    common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes},
+    errors::{CError, CPyResult, FatalPythonException},
 };
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
@@ -33,13 +34,6 @@ pub struct ProducerClient {
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
-fn maybe_wrap_error(e: anyhow::Error) -> PyErr {
-    match e.downcast::<PyErr>() {
-        Ok(py_err) => py_err,
-        Err(other) => ProducerClientError::new_err(other.to_string()),
-    }
-}
-
 #[pymethods]
 impl ProducerClient {
     /// Create a new client instance.
@@ -52,11 +46,13 @@ impl ProducerClient {
     ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
     ///   Note that other GCS settings are read from environment variables, using the steps outlined here: https://cloud.google.com/docs/authentication/application-default-credentials.
     #[new]
-    pub fn new(address: &str, object_store_url: &str) -> PyResult<Self> {
+    pub fn new(
+        address: &str,
+        object_store_url: &str,
+    ) -> CPyResult<Self, NewObjectStoreClientError> {
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
-        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)
-            .map_err(maybe_wrap_error)?;
+        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)?;
         Ok(ProducerClient {
             producer_client,
             object_store_client,
@@ -74,10 +70,17 @@ impl ProducerClient {
     /// Counts the number of ongoing submissions in the queue.
     ///
     /// Completed and failed submissions are not included in the count.
-    pub fn count_submissions(&self, py: Python<'_>) -> PyResult<u32> {
+    pub fn count_submissions(
+        &self,
+        py: Python<'_>,
+    ) -> CPyResult<u32, E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
-            self.block_unless_interrupted(self.producer_client.count_submissions())
-                .map_err(|e| PyTypeError::new_err(e.to_string()))
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .count_submissions()
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
         })
     }
 
@@ -91,11 +94,19 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> PyResult<Option<SubmissionStatus>> {
+    ) -> CPyResult<
+        Option<SubmissionStatus>,
+        E<FatalPythonException, InternalProducerClientError>,
+    > {
         py.allow_threads(|| {
-            self.block_unless_interrupted(self.producer_client.get_submission(id.into()))
-                .map(|opt| opt.map(Into::into))
-                .map_err(|e| ProducerClientError::new_err(e.to_string()))
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .get_submission(id.into())
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+            .map(|opt| opt.map(Into::into))
+            // .map_err(|e| ProducerClientError::new_err(e.to_string()))
         })
     }
 
@@ -105,7 +116,7 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
-    ) -> PyResult<SubmissionId> {
+    ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
                 chunk_contents: ChunkContents::Direct {
@@ -113,19 +124,32 @@ impl ProducerClient {
                 },
                 metadata,
             };
-            self.block_unless_interrupted(self.producer_client.insert_submission(&submission))
-                .map(Into::into)
-                .map_err(|e| ProducerClientError::new_err(e.to_string()))
+            self.block_unless_interrupted(async move {
+                self.producer_client
+                    .insert_submission(&submission)
+                    .await
+                    .map_err(|e| R(e).into())
+            })
+            .map(Into::into)
         })
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[allow(clippy::type_complexity)]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
-    ) -> PyResult<SubmissionId> {
+    ) -> CPyResult<
+        SubmissionId,
+        E![
+            FatalPythonException,
+            NonZeroIsZero<chunk::ChunkIndex>,
+            ChunksStorageError,
+            InternalProducerClientError,
+        ],
+    > {
         // This function is split into two parts.
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
@@ -139,9 +163,11 @@ impl ProducerClient {
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
-                        .map_err(maybe_wrap_error)
+                        .map_err(|e| CError(R(R(L(e)))))
                 })
             })?;
+            let chunk_count = NonZero::try_from(chunk::ChunkIndex::from(chunk_count))
+                .map_err(|e| R(L(e)))?;
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
@@ -154,8 +180,8 @@ impl ProducerClient {
                 self.producer_client
                     .insert_submission(&submission)
                     .await
-                    .map(Into::into)
-                    .map_err(maybe_wrap_error)
+                    .map(|submission_id| submission_id.into())
+                    .map_err(|e| R(R(R(e))).into())
             })
         })
     }
@@ -164,13 +190,25 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> PyResult<PyChunksIter> {
+    ) -> CPyResult<
+        PyChunksIter,
+        E![
+            FatalPythonException,
+            SubmissionNotCompletedYetError,
+            InternalProducerClientError,
+        ],
+    > {
+        // TODO: Use CPyResult instead
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
-                match self.maybe_stream_completed_submission(id).await? {
-                    None => Err(ProducerClientError::new_err(
-                        "Submission not completed yet".to_string(),
-                    ))?,
+                match self
+                    .maybe_stream_completed_submission(id)
+                    .await
+                    .map_err(|CError(e)| CError(R(R(e))))?
+                {
+                    None => Err(CError(R(L(
+                        SubmissionNotCompletedYetError(id),
+                    ))))?,
                     Some(py_iter) => Ok(py_iter),
                 }
             })
@@ -178,19 +216,31 @@ impl ProducerClient {
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[allow(clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
-    ) -> PyResult<PyChunksIter> {
+    ) -> CPyResult<
+        PyChunksIter,
+        E![
+            FatalPythonException,
+            NonZeroIsZero<chunk::ChunkIndex>,
+            ChunksStorageError,
+            InternalProducerClientError,
+        ],
+    > {
         let submission_id = self.insert_submission_chunks(py, chunk_contents, metadata)?;
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 loop {
                     if let Some(py_stream) = self
                         .maybe_stream_completed_submission(submission_id)
-                        .await?
+                        .await
+                        .map_err(|CError(e)| {
+                            CError(R(R(R(e))))
+                        })?
                     {
                         return Ok(py_stream);
                     }
@@ -201,6 +251,10 @@ impl ProducerClient {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+#[error("The submission with ID {0:?} is not completed yet. ")]
+pub struct SubmissionNotCompletedYetError(pub SubmissionId);
+
 // What follows are internal helper functions
 // that are not available from Python
 impl ProducerClient {
@@ -209,31 +263,16 @@ impl ProducerClient {
         future: impl IntoFuture<Output = Result<T, E>>,
     ) -> Result<T, E>
     where
-        E: From<PyErr>,
+        E: From<FatalPythonException>,
     {
         self.runtime.block_on(run_unless_interrupted(future))
     }
 
-    // fn sleep_unless_interrupted<E>(&self, duration: Duration) -> Result<(), E>
-    // where
-    //     E: From<PyErr>
-    // {
-    //     self.block_unless_interrupted(async {
-    //         tokio::time::sleep(duration).await;
-    //         Ok(())
-    //     })
-    // }
-
     async fn maybe_stream_completed_submission(
         &self,
         id: SubmissionId,
-    ) -> PyResult<Option<PyChunksIter>> {
-        match self
-            .producer_client
-            .get_submission(id.into())
-            .await
-            .map_err(maybe_wrap_error)?
-        {
+    ) -> CPyResult<Option<PyChunksIter>, InternalProducerClientError> {
+        match self.producer_client.get_submission(id.into()).await? {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
@@ -254,7 +293,8 @@ type PinfulStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 // https://github.com/channable/opsqueue/issues/62
 #[pyclass]
 pub struct PyChunksIter {
-    stream: MaybeUninit<Mutex<PinfulStream<PyResult<Vec<u8>>>>>,
+    #[allow(clippy::type_complexity)]
+    stream: MaybeUninit<Mutex<PinfulStream<CPyResult<Vec<u8>, ChunkRetrievalError>>>>,
     // SAFETY:
     // The following fields _have_ to be boxed so they won't move in memory once the struct itself moves.
     // They also _have_ to be after the `stream` field, ensuring they are dropped _after_ stream is dropped.
@@ -275,7 +315,7 @@ impl PyChunksIter {
             .object_store_client
             .retrieve_chunks(&me.self_borrows.0, chunks_total, ChunkType::Output)
             .await;
-        let stream = stream.map_err(maybe_wrap_error);
+        let stream = stream.map_err(CError);
         // SAFETY:
         // Welcome in self-referential struct land.
         //
@@ -286,8 +326,9 @@ impl PyChunksIter {
         //
         // We have to resort to a self-referential struct because lifetimes cannot cross over to Python,
         // so we have to pack the stream with all of its dependencies.
-        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> = Box::pin(stream);
-        let stream: Pin<Box<dyn Stream<Item = PyResult<Vec<u8>>> + Send>> =
+        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> =
+            Box::pin(stream);
+        let stream: Pin<Box<dyn Stream<Item = CPyResult<Vec<u8>, ChunkRetrievalError>> + Send>> =
             unsafe { std::mem::transmute(stream) };
         me.stream = MaybeUninit::new(Mutex::new(stream));
 
@@ -301,7 +342,7 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(slf: PyRefMut<'_, Self>) -> Option<PyResult<VecAsPyBytes>> {
+    fn __next__(slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
         slf.self_borrows.1.runtime.block_on(async {
             // SAFETY: The MaybeUninit is always initialized once `PyChunksIter::new` returns.
             let mut stream = unsafe { slf.stream.assume_init_ref() }.lock().await;

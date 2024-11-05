@@ -5,10 +5,10 @@ use axum::extract::ws;
 
 use serde::{Deserialize, Serialize};
 
-
 use crate::common::chunk;
 use crate::common::chunk::{Chunk, ChunkId};
 
+use crate::common::errors::{DatabaseError, E, IncorrectUsage, LimitIsZero};
 use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
 
@@ -30,19 +30,22 @@ pub enum ClientToServerMessage {
     FailChunk {
         id: ChunkId,
         failure: String,
-    }
+    },
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerToClientMessage {
     Sync(Envelope<SyncServerToClientResponse>),
     Async(AsyncServerToClientMessage),
 }
 
 /// Responses to earlier ClientToServerMessages
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
-    ChunksReserved(Vec<(Chunk, Submission)>),
+    #[allow(clippy::type_complexity)]
+    ChunksReserved(
+        Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
+    ),
     ChunkCompleted,
     ChunkFailed,
 }
@@ -80,7 +83,8 @@ impl TryFrom<ws::Message> for ServerToClientMessage {
 impl From<ServerToClientMessage> for ws::Message {
     fn from(val: ServerToClientMessage) -> Self {
         let mut writer = Vec::new();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ServerToClientMessage");
+        ciborium::into_writer(&val, &mut writer)
+            .expect("Failed to serialize ServerToClientMessage");
 
         ws::Message::Binary(writer)
     }
@@ -91,7 +95,8 @@ impl From<ServerToClientMessage> for ws::Message {
 impl From<Envelope<ClientToServerMessage>> for ws::Message {
     fn from(val: Envelope<ClientToServerMessage>) -> Self {
         let mut writer = Vec::new();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ClientToServerMessage");
+        ciborium::into_writer(&val, &mut writer)
+            .expect("Failed to serialize ClientToServerMessage");
 
         ws::Message::Binary(writer)
     }
@@ -123,7 +128,8 @@ impl TryFrom<tokio_tungstenite::tungstenite::Message> for ServerToClientMessage 
 impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
     fn from(val: ServerToClientMessage) -> Self {
         let mut writer = Vec::new();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ServerToClientMessage");
+        ciborium::into_writer(&val, &mut writer)
+            .expect("Failed to serialize ServerToClientMessage");
 
         tokio_tungstenite::tungstenite::Message::Binary(writer)
     }
@@ -134,7 +140,8 @@ impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
 impl From<Envelope<ClientToServerMessage>> for tokio_tungstenite::tungstenite::Message {
     fn from(val: Envelope<ClientToServerMessage>) -> Self {
         let mut writer = Vec::new();
-        ciborium::into_writer(&val, &mut writer).expect("Failed to serialize ClientToServerMessage");
+        ciborium::into_writer(&val, &mut writer)
+            .expect("Failed to serialize ClientToServerMessage");
 
         tokio_tungstenite::tungstenite::Message::Binary(writer)
     }

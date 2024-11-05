@@ -3,12 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use opsqueue::common::chunk::InvalidChunkIndexError;
 use opsqueue::common::submission::Metadata;
-use opsqueue::object_store::{ChunkType, ObjectStoreClient};
+use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use pyo3::prelude::*;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::strategy;
+use ux_serde::u63;
+
+use crate::errors::{CError, CPyResult, FatalPythonException};
 
 // In development, check 10 times per second so we respond early to Ctrl+C
 // But in production, only once per second so we don't fight as much over the GIL
@@ -56,8 +60,9 @@ pub struct ChunkIndex {
 #[pymethods]
 impl ChunkIndex {
     #[new]
-    fn new(id: i64) -> Self {
-        Self { id }
+    fn new(id: i64) -> CPyResult<Self, InvalidChunkIndexError> {
+        let _is_inner_valid = opsqueue::common::chunk::ChunkIndex::new(id).map_err(CError)?;
+        Ok(ChunkIndex { id })
     }
 
     fn __repr__(&self) -> String {
@@ -73,7 +78,15 @@ impl From<ChunkIndex> for chunk::ChunkIndex {
 
 impl From<chunk::ChunkIndex> for ChunkIndex {
     fn from(val: chunk::ChunkIndex) -> Self {
-        ChunkIndex { id: val.into() }
+        ChunkIndex::from(u63::from(val))
+    }
+}
+
+impl From<u63> for ChunkIndex {
+    fn from(value: u63) -> Self {
+        ChunkIndex {
+            id: u64::from(value) as i64,
+        }
     }
 }
 
@@ -120,7 +133,7 @@ impl Chunk {
         c: chunk::Chunk,
         s: submission::Submission,
         object_store_client: &ObjectStoreClient,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, ChunkRetrievalError> {
         let (content, prefix) = match c.input_content {
             Some(bytes) => (bytes, None),
             None => {
@@ -306,7 +319,7 @@ pub async fn run_unless_interrupted<T, E>(
     future: impl IntoFuture<Output = Result<T, E>>,
 ) -> Result<T, E>
 where
-    E: From<PyErr>,
+    E: From<FatalPythonException>,
 {
     tokio::select! {
         res = future => res,
@@ -314,11 +327,11 @@ where
     }
 }
 
-pub async fn check_signals_in_background() -> PyErr {
+pub async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
         if let Err(err) = Python::with_gil(|py| py.check_signals()) {
-            return err;
+            return err.into();
         }
     }
 }

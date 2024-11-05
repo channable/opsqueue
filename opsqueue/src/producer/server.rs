@@ -12,7 +12,6 @@ pub async fn serve_for_tests(database_pool: sqlx::SqlitePool, server_addr: Box<s
         .await;
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: sqlx::SqlitePool,
@@ -23,12 +22,16 @@ impl ServerState {
         ServerState { pool }
     }
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
-        let app = Router::new().nest("/producer", self.build_router()) ;
+        let app = Router::new().nest("/producer", self.build_router());
 
-        let listener = tokio::net::TcpListener::bind(&*server_addr).await.expect("Failed to bind to producer server address");
+        let listener = tokio::net::TcpListener::bind(&*server_addr)
+            .await
+            .expect("Failed to bind to producer server address");
 
         tracing::info!("Producer HTTP server listening at {server_addr}...");
-        axum::serve(listener, app).await.expect("Failed to start producer server");
+        axum::serve(listener, app)
+            .await
+            .expect("Failed to start producer server");
     }
 
     pub fn build_router(self) -> Router<()> {
@@ -43,10 +46,8 @@ impl ServerState {
             .route("/submissions/:submission_id", get(submission_status))
             // TODO: Cancel a submission from the producer side
             .with_state(self)
-
     }
 }
-
 
 // Make our own error that wraps `anyhow::Error`.
 struct ServerError(anyhow::Error);
@@ -81,20 +82,22 @@ async fn submission_status(
 async fn insert_submission(
     State(state): State<ServerState>,
     Json(request): Json<InsertSubmission>,
-) -> Result<Json<InsertSubmissionResponse>, ServerError> {
+) -> Result<Json<SubmissionId>, ServerError> {
     let mut conn = state.pool.acquire().await?;
     let (prefix, chunk_contents) = match request.chunk_contents {
-        ChunkContents::Direct{contents} => (None, contents),
-        ChunkContents::SeeObjectStorage{prefix, count} => (Some(prefix), (0..count).map(|_index| None).collect()),
+        ChunkContents::Direct { contents } => (None, contents),
+        ChunkContents::SeeObjectStorage { prefix, count } => {
+            (Some(prefix), (0..count).map(|_index| None).collect())
+        }
     };
-    let submission_id =
-      submission::insert_submission_from_chunks(
+    let submission_id = submission::insert_submission_from_chunks(
         prefix,
         chunk_contents,
         request.metadata,
-        &mut conn)
-      .await?;
-    Ok(Json(InsertSubmissionResponse { id: submission_id }))
+        &mut conn,
+    )
+    .await?;
+    Ok(Json(submission_id))
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -109,12 +112,12 @@ pub enum ChunkContents {
     /// to recover the contents of a chunk in the consumer.
     ///
     /// This is what you should use in production.
-    SeeObjectStorage{prefix: String, count: i64},
+    SeeObjectStorage { prefix: String, count: i64 },
     /// Directly pass the contents of each chunk in Opsqueue itself.
     ///
     /// NOTE: This is useful for small tests/examples,
     /// but significantly less scalable than using `SeeObjectStorage`.
-    Direct{contents: Vec<chunk::Content>},
+    Direct { contents: Vec<chunk::Content> },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

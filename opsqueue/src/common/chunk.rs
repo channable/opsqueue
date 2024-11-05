@@ -8,13 +8,38 @@ use serde::{Deserialize, Serialize};
 use sqlx::{query, Connection, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 #[cfg(feature = "server-logic")]
 use sqlx::{query_as, SqliteConnection};
+use ux_serde::u63;
+
+#[cfg(feature = "server-logic")]
+use super::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
 
 use super::submission::SubmissionId;
+use super::MayBeZero;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct ChunkIndex(i64);
+
+#[derive(thiserror::Error, Debug)]
+#[error("{0} is not a valid chunk index")]
+pub struct InvalidChunkIndexError(pub i64);
+
+impl ChunkIndex {
+    pub fn new(index: i64) -> Result<Self, InvalidChunkIndexError> {
+        if index < 0 {
+            Err(InvalidChunkIndexError(index))
+        } else {
+            Ok(ChunkIndex(index))
+        }
+    }
+}
+
+impl MayBeZero for ChunkIndex {
+    fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+}
 
 impl std::fmt::Display for ChunkIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,15 +66,24 @@ impl<'q> sqlx::Encode<'q, Sqlite> for ChunkIndex {
     }
 }
 
+/// NOTE: Only exists to please SQLx! Do not use directly!
+///
+/// Use the u63 conversion instead.
 impl From<i64> for ChunkIndex {
     fn from(value: i64) -> Self {
         ChunkIndex(value)
     }
 }
 
-impl From<ChunkIndex> for i64 {
+impl From<ChunkIndex> for u63 {
     fn from(value: ChunkIndex) -> Self {
-        value.0
+        u63::new(value.0 as u64)
+    }
+}
+
+impl From<u63> for ChunkIndex {
+    fn from(value: u63) -> Self {
+        ChunkIndex(u64::from(value) as i64)
     }
 }
 
@@ -93,7 +127,6 @@ impl Chunk {
     }
 }
 
-
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
 pub async fn insert_chunk(
@@ -117,12 +150,20 @@ pub async fn complete_chunk(
     full_chunk_id: ChunkId,
     output_content: Option<Vec<u8>>,
     conn: &mut SqliteConnection,
-) -> sqlx::Result<()> {
-    conn.transaction(|tx| Box::pin(async move {
-        complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
-        super::submission::maybe_complete_submission(full_chunk_id.0, tx).await?;
-        Ok(())
-    })).await
+) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            complete_chunk_raw(full_chunk_id, output_content, &mut **tx).await?;
+            super::submission::maybe_complete_submission(full_chunk_id.0, tx)
+                .await
+                .map_err(|e| match e {
+                    E::L(e) => E::L(e),
+                    E::R(e) => E::R(E::L(e)),
+                })?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -166,22 +207,30 @@ pub async fn retry_or_fail_chunk(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.transaction(|tx| Box::pin(async move {
-        const MAX_RETRIES: i64 = 10;
-        let (submission_id, chunk_index) = full_chunk_id;
-        let fields = query!("
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            const MAX_RETRIES: i64 = 10;
+            let (submission_id, chunk_index) = full_chunk_id;
+            let fields = query!(
+                "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = ? AND chunk_index = ?
         RETURNING retries
         ;
-        ", submission_id, chunk_index).fetch_one(&mut **tx).await?;
-        if fields.retries >= MAX_RETRIES {
-            super::submission::fail_submission(submission_id, chunk_index, failure, tx).await?
-        }
-    Ok(())
-    })).await
+        ",
+                submission_id,
+                chunk_index
+            )
+            .fetch_one(&mut **tx)
+            .await?;
+            if fields.retries >= MAX_RETRIES {
+                super::submission::fail_submission(submission_id, chunk_index, failure, tx).await?
+            }
+            Ok(())
+        })
+    })
+    .await
 }
-
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument]
@@ -240,16 +289,12 @@ pub async fn get_chunk_completed(
 
 #[cfg(feature = "server-logic")]
 #[tracing::instrument(skip(chunks, conn))]
-pub async fn insert_many_chunks<Tx, Conn, Iter>(
-    chunks: Iter,
-    mut conn: Tx,
-) -> sqlx::Result<()>
+pub async fn insert_many_chunks<Tx, Conn, Iter>(chunks: Iter, mut conn: Tx) -> sqlx::Result<()>
 where
     for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
     Tx: Deref<Target = Conn> + DerefMut,
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
-
 {
     let chunks_per_query = 1000;
 

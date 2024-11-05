@@ -5,11 +5,20 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 
 use crate::common::chunk;
+use crate::common::errors::DatabaseError;
 use crate::consumer::strategy::Strategy;
-use crate::{common::{chunk::{Chunk, ChunkId}, submission::Submission}, consumer::reserver::Reserver};
+use crate::{
+    common::{
+        chunk::{Chunk, ChunkId},
+        submission::Submission,
+    },
+    consumer::reserver::Reserver,
+};
 
 use super::ServerState;
-
+use crate::common::errors::{
+    ChunkNotFound, E, IncorrectUsage, LimitIsZero, SubmissionNotFound,
+};
 
 // TODO: We currently clone the arc-like pool and reserver,
 // but we could probably just give this struct a lifetime,
@@ -41,7 +50,6 @@ impl ConsumerState {
         }
     }
 
-
     /// Select chunks, and store them in the reserver, to make sure that re-running the same selection returns different results as long as they are reserved.
     ///
     /// - `query_fun` is a 'strategy' function returning a stream of chunks, something like `sqlx::query!("SELECT * FROM chunks WHERE ...").fetch(conn)`
@@ -69,18 +77,27 @@ impl ConsumerState {
     }
 
     #[tracing::instrument(skip(self, stale_chunks_notifier))]
+    #[allow(clippy::type_complexity)]
     pub async fn fetch_and_reserve_chunks(
         &mut self,
         strategy: Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
-    ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
+    ) -> Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>> {
+        if limit == 0 {
+            return Err(E::R(IncorrectUsage(LimitIsZero())));
+        }
         let mut conn = self.pool.acquire().await?;
         let stream = strategy.execute(&mut conn);
-        let new_reservations = self.reserve_chunks(stream, limit, stale_chunks_notifier)
+        let new_reservations = self
+            .reserve_chunks(stream, limit, stale_chunks_notifier)
             .await?;
 
-        self.reservations.extend(new_reservations.iter().map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)));
+        self.reservations.extend(
+            new_reservations
+                .iter()
+                .map(|(chunk, _submission)| (chunk.submission_id, chunk.chunk_index)),
+        );
 
         Ok(new_reservations)
     }
@@ -90,7 +107,7 @@ impl ConsumerState {
         &mut self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
@@ -100,11 +117,7 @@ impl ConsumerState {
         res
     }
 
-    pub async fn fail_chunk(
-        &mut self,
-        id: ChunkId,
-        failure: String,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         // NOTE: Even in the unlikely event the query fails,
         // we want the chunk to be un-reserved
