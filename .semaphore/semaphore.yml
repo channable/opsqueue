@@ -41,11 +41,8 @@ global_job_config:
       - ssh-add ~/.ssh/id_ed25519
       - set -evo pipefail
 
-      ## NOTE: --use-cache is disabled by now because it gives problems with force-pushing
-      ## (which we do regularly as we do rebasing)
-      ## # With `--use-cache` we get a full clone that is cached by semaphore so that fetching is faster.
-      ## - checkout --use-cache
-      - checkout
+      # With `--use-cache` we get a full clone that is cached by semaphore so that fetching is faster.
+      - checkout --use-cache
       - .semaphore/prologue.sh
       - source $HOME/.nix-profile/etc/profile.d/nix.sh
 
