@@ -177,7 +177,7 @@ impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompl
         Self {
             id: value.id.into(),
             completed_at: value.completed_at,
-            chunks_total: value.chunks_total,
+            chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
         }
     }
@@ -285,7 +285,7 @@ impl SubmissionFailed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
-    pub chunks_total: i64,
+    pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
     pub completed_at: DateTime<Utc>,
 }
