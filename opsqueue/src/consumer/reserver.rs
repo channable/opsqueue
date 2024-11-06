@@ -1,5 +1,6 @@
 use std::{fmt::Debug, hash::Hash, time::Duration};
 
+use metrics::{counter, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
@@ -49,11 +50,13 @@ where
 
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
-            // Reservation succeeded
+            counter!("reserver_succeeded_reservations").increment(1);
+
             Some(entry.into_value().0)
         } else {
-            tracing::trace!("Reservation of {key:?} failed!");
             // Someone else reserved this first
+            tracing::trace!("Reservation of {key:?} failed!");
+            counter!("reserver_failed_reservations").increment(1);
             None
         }
     }
@@ -86,12 +89,12 @@ where
     pub fn run_pending_tasks_periodically(
         &self,
         cancellation_token: CancellationToken,
-        task_tracker: TaskTracker,
     ) {
         let bg_reserver_handle = self.clone();
-        task_tracker.spawn(async move {
+        tokio::spawn(async move {
             loop {
                 bg_reserver_handle.run_pending_tasks();
+                gauge!("reserver_chunks_reserved_count").set(bg_reserver_handle.0.entry_count() as u32);
                 tokio::select! {
                     () = cancellation_token.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}

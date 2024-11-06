@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use metrics::{counter, gauge};
+use metrics::gauge;
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
@@ -61,10 +61,15 @@ impl ServerState {
         }
     }
 
+    pub fn run_pending_tasks_periodically(self) -> Self {
+        self.reserver.run_pending_tasks_periodically(self.cancellation_token.clone());
+        self
+    }
+
     pub fn build_router(self: ServerState) -> Router<()> {
         Router::new()
-            .route("/", get(ws_accept_handler))
-            .with_state(self)
+        .route("/", get(ws_accept_handler))
+        .with_state(self)
     }
 }
 
