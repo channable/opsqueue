@@ -153,6 +153,7 @@ impl Chunk {
 pub mod db {
     use super::*;
 use std::ops::{Deref, DerefMut};
+use metrics::counter;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
@@ -216,7 +217,7 @@ pub async fn complete_chunk(
     conn: &mut SqliteConnection,
 ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
 
-    conn.immediate_write_transaction(|tx| {
+    let res = conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             complete_chunk_raw(chunk_id, output_content, tx).await?;
             crate::common::submission::db::maybe_complete_submission(chunk_id.submission_id, tx)
@@ -228,7 +229,11 @@ pub async fn complete_chunk(
             Ok(())
         })
     })
-    .await
+    .await;
+
+    counter!("chunks_completed").increment(1);
+
+    res
 }
 
 #[tracing::instrument]
@@ -299,12 +304,15 @@ pub async fn retry_or_fail_chunk(
             .fetch_one(&mut **tx)
             .await?;
             if fields.retries >= MAX_RETRIES {
-                crate::common::submission::db::fail_submission_notx(submission_id, chunk_index, failure, tx).await?
+                crate::common::submission::db::fail_submission_notx(submission_id, chunk_index, failure, tx).await?;
             }
-            Ok(())
+            Ok::<_, sqlx::Error>(())
         })
     })
-    .await
+    .await?;
+    counter!("chunks_failed").increment(1);
+
+    Ok(())
 }
 
 #[tracing::instrument]
@@ -333,6 +341,8 @@ pub async fn move_chunk_to_failed_chunks(
     submission_id,
     chunk_index,
     ).fetch_one(conn).await?;
+
+    counter!("chunks_failed").increment(1);
     Ok(())
 }
 
@@ -412,7 +422,7 @@ pub async fn skip_remaining_chunks(
 ) -> sqlx::Result<()> {
     let now = chrono::prelude::Utc::now();
 
-    sqlx::query!("
+    let query_res = sqlx::query!("
     SAVEPOINT skip_remaining_chunks;
 
     INSERT INTO chunks_failed
@@ -427,6 +437,8 @@ pub async fn skip_remaining_chunks(
     submission_id,
     submission_id,
     ).execute(conn).await?;
+
+    counter!("chunks_skipped").increment(query_res.rows_affected());
     Ok(())
 }
 

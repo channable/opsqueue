@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
+use axum_prometheus::metrics::histogram;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -94,6 +96,8 @@ impl ConsumerState {
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>> {
+        let start = tokio::time::Instant::now();
+
         if limit == 0 {
             return Err(E::R(IncorrectUsage(LimitIsZero())));
         }
@@ -109,6 +113,9 @@ impl ConsumerState {
                 .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
         );
 
+        histogram!("consumer_fetch_and_reserve_chunks_duration", 
+        &[("limit", limit.to_string()), ("strategy", format!("{strategy:?}"))]
+    ).record(start.elapsed());
         Ok(new_reservations)
     }
 
@@ -118,6 +125,8 @@ impl ConsumerState {
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), DatabaseError> {
+        let start = tokio::time::Instant::now();
+
         let pool = self.pool.clone();
         let reservations = self.reservations.clone();
         let reserver = self.reserver.clone();
@@ -136,10 +145,14 @@ impl ConsumerState {
                 tracing::error!("Failed to fail chunk: {:?}", res);
             }
         });
+
+        histogram!("consumer_complete_chunk_duration").record(start.elapsed());
         Ok(())
     }
 
     pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), DatabaseError> {
+        let start = tokio::time::Instant::now();
+
         let pool = self.pool.clone();
         let reservations = self.reservations.clone();
         let reserver = self.reserver.clone();
@@ -158,6 +171,8 @@ impl ConsumerState {
                 tracing::error!("Failed to fail chunk: {:?}", res);
             }
         });
+
+        histogram!("consumer_fail_chunk_duration").record(start.elapsed());
         Ok(())
     }
 }

@@ -4,6 +4,7 @@ use std::{
 };
 
 use axum::{routing::get, Router};
+use axum_prometheus::PrometheusMetricLayer;
 use backon::{BackoffBuilder, FibonacciBuilder};
 use http::StatusCode;
 
@@ -11,6 +12,10 @@ use sqlx::sqlite::SqlitePool;
 
 use tokio::select;
 use tokio_util::sync::CancellationToken;
+
+/// Taken from axum_prometheus::utils::SECONDS_DURATION_BUCKETS
+/// but including two more buckets at the lower end
+pub const SECONDS_DURATION_BUCKETS: &[f64; 13] = &[0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
 
 // TOOD: Set max retries to `None`;
 // will require either writing our own Backoff (iterator)
@@ -60,6 +65,7 @@ pub fn build_router(
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
 ) -> Router<()> {
+    use axum_prometheus::{metrics_exporter_prometheus::{Matcher, PrometheusBuilder}, utils::SECONDS_DURATION_BUCKETS, PrometheusMetricLayerBuilder, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
     use tokio::sync::Notify;
     let notify_on_insert = Arc::new(Notify::new());
 
@@ -71,17 +77,39 @@ pub fn build_router(
     )
     .build_router();
     let producer_routes = crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
+
+    let (prometheus_middleware, prometheus_metrics_handle) = // PrometheusMetricLayer::pair();
+      PrometheusMetricLayerBuilder::new()
+      .with_prefix("opsqueue")
+      .with_ignore_patterns(&["/metrics"])
+      .enable_response_body_size(true)
+      // .with_default_metrics()
+      .with_metrics_from_fn(|| {
+            PrometheusBuilder::default()
+                .set_buckets_for_metric(
+                    Matcher::Full(AXUM_HTTP_REQUESTS_DURATION_SECONDS.to_string()),
+                    SECONDS_DURATION_BUCKETS,
+                )
+                .unwrap()
+                .install_recorder()
+                .unwrap()
+        })
+      .build_pair();
+
     let routes = Router::new()
-        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
         .nest("/producer", producer_routes)
-        .nest("/consumer", consumer_routes);
+        .nest("/consumer", consumer_routes)
+        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
+        .route("/metrics", get(|| async move {prometheus_metrics_handle.render() }));
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(tower_http::trace::DefaultMakeSpan::new())
         .on_request(tower_http::trace::DefaultOnRequest::new())
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
-    routes.layer(tracing_middleware)
+    routes
+    .layer(prometheus_middleware)
+    .layer(tracing_middleware)
 }
 
 /// Used as a very simple health check by consul.
@@ -117,3 +145,4 @@ pub async fn app_watchdog(
     // Set to unhealthy when shutting down
     app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
 }
+

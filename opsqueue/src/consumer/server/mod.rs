@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
+use metrics::{counter, gauge};
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
@@ -72,7 +73,14 @@ async fn ws_accept_handler(
     State(state): State<ServerState>,
 ) -> axum::response::Response {
     ws.on_upgrade(|ws_stream| async move {
-        let res = conn::ConsumerConn::new(&state, ws_stream).run().await;
+        gauge!("consumers_connected").increment(1);
+
+        let res = 
+            conn::ConsumerConn::new(&state, ws_stream)
+            .run()
+            .await;
+
         tracing::warn!("Closed websocket connection, reason: {:?}", &res);
+        gauge!("consumers_connected").decrement(1);
     })
 }

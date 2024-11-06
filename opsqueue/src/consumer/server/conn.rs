@@ -65,6 +65,8 @@ impl ConsumerConn {
         }
     }
 
+    /// Runs the consumer websocket connection loop
+    /// Blocks until the loop is stopped (because the connection is closed intentionally or by network failure).
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
         loop {
             select! {

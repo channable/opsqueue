@@ -258,14 +258,21 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-    conn.immediate_write_transaction(|tx| {
+    use metrics::counter;
+    let chunks_total = submission.chunks_total.into();
+
+    let res = conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
             insert_submission_raw(submission, &mut **tx).await?;
             super::chunk::db::insert_many_chunks(chunks, &mut **tx).await?;
             Ok(())
         })
     })
-    .await
+    .await;
+
+    counter!("total_submissions").increment(1);
+    counter!("total_chunks").increment(chunks_total);
+    res
 }
 
 #[cfg(feature = "server-logic")]
