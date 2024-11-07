@@ -218,7 +218,7 @@ dependencies = [
  "http",
  "http-body",
  "matchit",
- "metrics 0.23.0",
+ "metrics",
  "metrics-exporter-prometheus",
  "once_cell",
  "pin-project",
@@ -1278,16 +1278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metrics"
-version = "0.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae428771d17306715c5091d446327d1cfdedc82185c65ba8423ab404e45bf10"
-dependencies = [
- "ahash",
- "portable-atomic",
-]
-
-[[package]]
 name = "metrics-exporter-prometheus"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1299,7 +1289,7 @@ dependencies = [
  "hyper-util",
  "indexmap 2.6.0",
  "ipnet",
- "metrics 0.23.0",
+ "metrics",
  "metrics-util",
  "quanta",
  "thiserror",
@@ -1316,7 +1306,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "metrics 0.23.0",
+ "metrics",
  "num_cpus",
  "quanta",
  "sketches-ddsketch",
@@ -1592,7 +1582,6 @@ dependencies = [
  "futures",
  "http",
  "log",
- "metrics 0.24.0",
  "moka",
  "moro-local",
  "object_store",

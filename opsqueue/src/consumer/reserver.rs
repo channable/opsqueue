@@ -1,6 +1,6 @@
 use std::{fmt::Debug, hash::Hash, time::Duration};
 
-use metrics::{counter, gauge};
+use axum_prometheus::metrics::{counter, describe_gauge, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
@@ -91,10 +91,13 @@ where
         cancellation_token: CancellationToken,
     ) {
         let bg_reserver_handle = self.clone();
+        tracing::error!("Starting 'run_pending_tasks_periodically");
         tokio::spawn(async move {
             loop {
+                tracing::error!("Running the pending tasks");
                 bg_reserver_handle.run_pending_tasks();
                 gauge!("reserver_chunks_reserved_count").set(bg_reserver_handle.0.entry_count() as u32);
+                tracing::error!("Finished a run of the pending tasks, count: {}", bg_reserver_handle.0.entry_count());
                 tokio::select! {
                     () = cancellation_token.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}

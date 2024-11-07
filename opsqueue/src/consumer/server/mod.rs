@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use metrics::gauge;
+use axum_prometheus::metrics::gauge;
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 

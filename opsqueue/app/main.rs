@@ -1,7 +1,8 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, Arc, LazyLock},
     time::Duration,
 };
+use axum_prometheus::metrics::describe_gauge;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
@@ -9,6 +10,7 @@ pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
 #[tokio::main]
 async fn main() {
+
     println!("Starting Opsqueue");
 
     let server_addr = Box::from("0.0.0.0:3999");
@@ -16,21 +18,32 @@ async fn main() {
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
     let cancellation_token = CancellationToken::new();
+
+    // Set up Prometheus early because metrics that try to register before it is set up
+    // will not be seen otherwise
+    let prometheus_config  = opsqueue::server::setup_prometheus();
+
+
+    describe_gauge!("reserver_chunks_reserved_count", "Number of chunks currently reserved by the reserver, i.e. being worked on by the consumers");
+
     let _ = setup_tracing();
 
     tracing::info!("Finished setting up tracing subscriber");
+
 
     let database_filename = DATABASE_FILENAME;
 
     let db_pool = opsqueue::db::open_and_setup(database_filename).await;
 
     moro_local::async_scope!(|scope| {
+
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
             &server_addr,
             &db_pool,
             reservation_expiration,
             &cancellation_token,
             &app_healthy_flag,
+            prometheus_config
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate

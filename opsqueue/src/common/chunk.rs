@@ -153,7 +153,7 @@ impl Chunk {
 pub mod db {
     use super::*;
 use std::ops::{Deref, DerefMut};
-use metrics::counter;
+use axum_prometheus::metrics::counter;
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};

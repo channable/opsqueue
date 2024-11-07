@@ -258,7 +258,7 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-    use metrics::counter;
+    use axum_prometheus::metrics::counter;
     let chunks_total = submission.chunks_total.into();
 
     let res = conn.immediate_write_transaction(|tx| {

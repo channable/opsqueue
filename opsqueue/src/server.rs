@@ -1,16 +1,16 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
+    cell::LazyCell, sync::{atomic::AtomicBool, Arc, LazyLock}, time::Duration
 };
 
 use axum::{routing::get, Router};
-use axum_prometheus::PrometheusMetricLayerBuilder;
+use axum_prometheus::{metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, PrometheusMetricLayerBuilder, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
 use backon::{BackoffBuilder, FibonacciBuilder};
 use http::StatusCode;
 
 use sqlx::sqlite::SqlitePool;
 
 use tokio::select;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 // TOOD: Set max retries to `None`;
@@ -32,15 +32,18 @@ pub async fn serve_producer_and_consumer(
     reservation_expiration: Duration,
     cancellation_token: &CancellationToken,
     app_healthy_flag: &Arc<AtomicBool>,
-) -> Result<(), std::io::Error> {
-    use backon::Retryable;
+    prometheus_config: PrometheusConfig,
 
-    (|| async {
+) -> Result<(), std::io::Error> {
+    // use backon::Retryable;
+
+    // (|| async {
     let router = build_router(
         pool.clone(),
         reservation_expiration,
         cancellation_token.clone(),
         app_healthy_flag.clone(),
+        prometheus_config.clone(),
     );
     let listener = tokio::net::TcpListener::bind(server_addr)
         .await?;
@@ -49,9 +52,9 @@ pub async fn serve_producer_and_consumer(
         .with_graceful_shutdown(cancellation_token.clone().cancelled_owned())
         .await?;
     Ok(())
-    }).retry(retry_policy()).notify(|e, d| {
-        tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}")
-    }).await
+    // }).retry(retry_policy()).notify(|e, d| {
+    //     tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}")
+    // }).await
 }
 
 #[cfg(feature = "server-logic")]
@@ -60,8 +63,8 @@ pub fn build_router(
     reservation_expiration: Duration,
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
+    prometheus_config: PrometheusConfig,
 ) -> Router<()> {
-    use tokio::sync::Notify;
 
     let notify_on_insert = Arc::new(Notify::new());
 
@@ -75,19 +78,12 @@ pub fn build_router(
     .build_router();
     let producer_routes = crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
 
-    let (prometheus_middleware, prometheus_metrics_handle) = // PrometheusMetricLayer::pair();
-      PrometheusMetricLayerBuilder::new()
-      .with_prefix("opsqueue")
-      .with_ignore_patterns(&["/metrics"])
-      .enable_response_body_size(true)
-      .with_default_metrics()
-      .build_pair();
 
     let routes = Router::new()
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes)
         .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
-        .route("/metrics", get(|| async move {prometheus_metrics_handle.render() }));
+        .route("/metrics", get(|| async move {prometheus_config.1.render() }));
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(tower_http::trace::DefaultMakeSpan::new())
@@ -95,7 +91,7 @@ pub fn build_router(
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
     routes
-        .layer(prometheus_middleware)
+        .layer(prometheus_config.0)
         .layer(tracing_middleware)
 }
 
@@ -133,3 +129,20 @@ pub async fn app_watchdog(
     app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
+pub type PrometheusConfig = (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle);
+
+#[must_use]
+pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle) {
+    // PrometheusMetricLayer::pair()
+    let metric_layer = PrometheusMetricLayer::new();
+    // This is the default if you use `PrometheusMetricLayer::pair`.
+    let metric_handle = PrometheusBuilder::new()
+       .set_buckets_for_metric(
+           Matcher::Full(AXUM_HTTP_REQUESTS_DURATION_SECONDS.to_string()),
+           SECONDS_DURATION_BUCKETS,
+       )
+       .expect("Building Prometheus failed")
+       .install_recorder()
+       .expect("Installing global Prometheus recorder failed");
+    (metric_layer, metric_handle)
+}
