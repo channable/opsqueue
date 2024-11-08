@@ -1,9 +1,8 @@
 use std::{
-    cell::LazyCell, sync::{atomic::AtomicBool, Arc, LazyLock}, time::Duration
+    sync::{atomic::AtomicBool, Arc}, time::Duration
 };
 
 use axum::{routing::get, Router};
-use axum_prometheus::{metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, PrometheusMetricLayerBuilder, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
 use backon::{BackoffBuilder, FibonacciBuilder};
 use http::StatusCode;
 
@@ -32,12 +31,12 @@ pub async fn serve_producer_and_consumer(
     reservation_expiration: Duration,
     cancellation_token: &CancellationToken,
     app_healthy_flag: &Arc<AtomicBool>,
-    prometheus_config: PrometheusConfig,
+    prometheus_config: crate::prometheus::PrometheusConfig,
 
 ) -> Result<(), std::io::Error> {
-    // use backon::Retryable;
+    use backon::Retryable;
 
-    // (|| async {
+    (|| async {
     let router = build_router(
         pool.clone(),
         reservation_expiration,
@@ -52,9 +51,9 @@ pub async fn serve_producer_and_consumer(
         .with_graceful_shutdown(cancellation_token.clone().cancelled_owned())
         .await?;
     Ok(())
-    // }).retry(retry_policy()).notify(|e, d| {
-    //     tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}")
-    // }).await
+    }).retry(retry_policy()).notify(|e, d| {
+        tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}")
+    }).await
 }
 
 #[cfg(feature = "server-logic")]
@@ -63,7 +62,7 @@ pub fn build_router(
     reservation_expiration: Duration,
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
-    prometheus_config: PrometheusConfig,
+    prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
 
     let notify_on_insert = Arc::new(Notify::new());
@@ -127,22 +126,4 @@ pub async fn app_watchdog(
     }
     // Set to unhealthy when shutting down
     app_healthy_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub type PrometheusConfig = (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle);
-
-#[must_use]
-pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle) {
-    // PrometheusMetricLayer::pair()
-    let metric_layer = PrometheusMetricLayer::new();
-    // This is the default if you use `PrometheusMetricLayer::pair`.
-    let metric_handle = PrometheusBuilder::new()
-       .set_buckets_for_metric(
-           Matcher::Full(AXUM_HTTP_REQUESTS_DURATION_SECONDS.to_string()),
-           SECONDS_DURATION_BUCKETS,
-       )
-       .expect("Building Prometheus failed")
-       .install_recorder()
-       .expect("Installing global Prometheus recorder failed");
-    (metric_layer, metric_handle)
 }

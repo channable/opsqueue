@@ -76,7 +76,8 @@ pub async fn ensure_db_migrated(db: &SqlitePool) {
 /// holds the write lock for the DB for a (too) long time.
 pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
     async move {
-        let mut tx = pool.begin().await?;
+        let mut conn = pool.acquire().await?;
+        let mut tx = conn.begin().await?;
         let _count = crate::common::submission::db::count_submissions(&mut *tx).await?;
         Ok::<_, anyhow::Error>(())
     }

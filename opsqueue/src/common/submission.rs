@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::time::Duration;
 
+use axum_prometheus::metrics::counter;
 use chrono::{DateTime, Utc};
 use ux_serde::u63;
 
@@ -258,7 +259,7 @@ where
     Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
     <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
 {
-    use axum_prometheus::metrics::counter;
+    use axum_prometheus::metrics::{counter, gauge};
     let chunks_total = submission.chunks_total.into();
 
     let res = conn.immediate_write_transaction(|tx| {
@@ -270,8 +271,9 @@ where
     })
     .await;
 
-    counter!("total_submissions").increment(1);
-    counter!("total_chunks").increment(chunks_total);
+    counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
+    counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
+    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(chunks_total as f64);
     res
 }
 
@@ -409,6 +411,7 @@ pub async fn complete_submission_raw(
     id: SubmissionId,
     conn: impl SqliteExecutor<'_>,
 ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -432,6 +435,7 @@ pub async fn complete_submission_raw(
         sqlx::Error::RowNotFound => E::R(SubmissionNotFound(id)),
         e => E::L(DatabaseError::from(e)),
     })?;
+    counter!(crate::prometheus::SUBMISSIONS_COMPLETED_COUNTER).increment(1);
     Ok(())
 }
 
@@ -459,6 +463,7 @@ pub async fn fail_submission_raw(
     )
     .fetch_one(conn)
     .await?;
+    counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
     Ok(())
 }
 

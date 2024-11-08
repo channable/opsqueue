@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use axum_prometheus::metrics::histogram;
 use futures::Stream;
@@ -113,7 +112,7 @@ impl ConsumerState {
                 .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
         );
 
-        histogram!("consumer_fetch_and_reserve_chunks_duration", 
+        histogram!(crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM, 
         &[("limit", limit.to_string()), ("strategy", format!("{strategy:?}"))]
     ).record(start.elapsed());
         Ok(new_reservations)
@@ -146,7 +145,7 @@ impl ConsumerState {
             }
         });
 
-        histogram!("consumer_complete_chunk_duration").record(start.elapsed());
+        histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
         Ok(())
     }
 
@@ -172,7 +171,7 @@ impl ConsumerState {
             }
         });
 
-        histogram!("consumer_fail_chunk_duration").record(start.elapsed());
+        histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
         Ok(())
     }
 }

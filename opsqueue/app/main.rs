@@ -1,8 +1,7 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc, LazyLock},
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
-use axum_prometheus::metrics::describe_gauge;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
@@ -21,10 +20,8 @@ async fn main() {
 
     // Set up Prometheus early because metrics that try to register before it is set up
     // will not be seen otherwise
-    let prometheus_config  = opsqueue::server::setup_prometheus();
+    let prometheus_config  = opsqueue::prometheus::setup_prometheus();
 
-
-    describe_gauge!("reserver_chunks_reserved_count", "Number of chunks currently reserved by the reserver, i.e. being worked on by the consumers");
 
     let _ = setup_tracing();
 
@@ -34,6 +31,9 @@ async fn main() {
     let database_filename = DATABASE_FILENAME;
 
     let db_pool = opsqueue::db::open_and_setup(database_filename).await;
+
+    opsqueue::prometheus::prefill_special_metrics(&db_pool).await
+        .expect("Failed to initialize basic metrics from current contents of the DB");
 
     moro_local::async_scope!(|scope| {
 

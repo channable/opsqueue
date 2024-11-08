@@ -153,7 +153,7 @@ impl Chunk {
 pub mod db {
     use super::*;
 use std::ops::{Deref, DerefMut};
-use axum_prometheus::metrics::counter;
+use axum_prometheus::metrics::{counter, gauge};
 use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
@@ -207,6 +207,7 @@ pub async fn insert_chunk(
     )
     .execute(conn)
     .await?;
+    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
     Ok(())
 }
 
@@ -231,7 +232,8 @@ pub async fn complete_chunk(
     })
     .await;
 
-    counter!("chunks_completed").increment(1);
+    counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
 
     res
 }
@@ -295,8 +297,7 @@ pub async fn retry_or_fail_chunk(
                 "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = ? AND chunk_index = ?
-        RETURNING retries
-        ;
+        RETURNING retries;
         ",
                 submission_id,
                 chunk_index
@@ -305,12 +306,18 @@ pub async fn retry_or_fail_chunk(
             .await?;
             if fields.retries >= MAX_RETRIES {
                 crate::common::submission::db::fail_submission_notx(submission_id, chunk_index, failure, tx).await?;
+
+                counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
+                gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                Ok::<_, sqlx::Error>(())
+            } else {
+                counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
+                gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                Ok::<_, sqlx::Error>(())
             }
-            Ok::<_, sqlx::Error>(())
         })
     })
     .await?;
-    counter!("chunks_failed").increment(1);
 
     Ok(())
 }
@@ -342,7 +349,8 @@ pub async fn move_chunk_to_failed_chunks(
     chunk_index,
     ).fetch_one(conn).await?;
 
-    counter!("chunks_failed").increment(1);
+    counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
+    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
     Ok(())
 }
 
@@ -438,28 +446,10 @@ pub async fn skip_remaining_chunks(
     submission_id,
     ).execute(conn).await?;
 
-    counter!("chunks_skipped").increment(query_res.rows_affected());
+    counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
+    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(query_res.rows_affected() as f64);
     Ok(())
 }
-
-// #[tracing::instrument]
-// pub async fn select_random_chunks(db: impl sqlx::SqliteExecutor<'_>, count: u32) -> Vec<Chunk> {
-//     // TODO: Document what we're doing here exactly
-//     let count_div10 = std::cmp::max(count / 10, 100);
-//     sqlx::query_as!(
-//         Chunk,
-//         "SELECT submission_id, chunk_index, input_content, retries FROM chunks JOIN
-//     (SELECT rowid as rid FROM chunks
-//         WHERE random() % $1 = 0  -- Reduce rowids by Nx
-//         LIMIT $2) AS srid
-//     ON chunks.rowid = srid.rid;",
-//         count_div10,
-//         count
-//     )
-//     .fetch_all(db)
-//     .await
-//     .unwrap()
-// }
 
 #[tracing::instrument]
 pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {

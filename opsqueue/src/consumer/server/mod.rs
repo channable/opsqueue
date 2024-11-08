@@ -78,7 +78,7 @@ async fn ws_accept_handler(
     State(state): State<ServerState>,
 ) -> axum::response::Response {
     ws.on_upgrade(|ws_stream| async move {
-        gauge!("consumers_connected").increment(1);
+        gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).increment(1);
 
         let res = 
             conn::ConsumerConn::new(&state, ws_stream)
@@ -86,6 +86,6 @@ async fn ws_accept_handler(
             .await;
 
         tracing::warn!("Closed websocket connection, reason: {:?}", &res);
-        gauge!("consumers_connected").decrement(1);
+        gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).decrement(1);
     })
 }
