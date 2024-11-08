@@ -50,6 +50,9 @@ At some point, this will make the other operations, especially insertion, too sl
 
 In the rest of this document, the strategies and their potential implementation are each described in detail, and some tricks/ideas on making the right tradeoff w.r.t. what indexes to create while keeping the database manageable are given at the end.
 
+Of the above strategies, currently `Random`, `NewestFirst` and `OldestFirst` are implemented, exactly as described below.
+The other strategies, most of which depend on the metadata of a particular submission in one way or another, are not implemented yet. Describing these composable strategies and a potential way to implement them with a balance between preformance and flexibility is the main goal of this proposal.
+
 ## Assumptions & Invariants
 
 It is good to be explicit with the assumptions I'll be making in this document.
