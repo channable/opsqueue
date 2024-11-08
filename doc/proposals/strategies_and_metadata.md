@@ -2,7 +2,7 @@
 
 Two core principles of Opsqueue are:
 1. We want to be able to support backlogs of many millions of chunks (billions of operations).
-1. We want to make usage of the system as flexible as possible, as long as it doesn't break (1).
+1. We want to make usage of the system as flexible as possible, as long as it doesn't conflict with the first point.
 
 In the past we've looked at providing a few basic strategies, and then stating "if you want other strategies, you'll have to modify Opsqueue", with 'modify' being either compiling a fork of, or using some kind of to-be-designed 'plug-in mechanism'.
 
@@ -11,7 +11,7 @@ then people can configure their strategy without having to change Opsqueue itsel
 
 The question is however: can we make this efficient enough?
 
-I believe to have figured out an approach to make the strategies that a programmer can use to customize what work and in which order is picked up from the queue, without sacrificing scalability.
+I believe that it is possible to have a reasonably-scalable system without programmers having to recompile Opsqueue when they want more flexibility in the strategies. That is, to allow (within reasonable bounds) programmers to mix and match (and compose) strategies at will without hampering opsqueue's scalability.
 
 ## Building blocks
 
@@ -107,7 +107,7 @@ Because of how this is implemented, we want the queries that are generated from 
 
 ## The Strategy building blocks in detail
 
-### Newest / Oldest
+### NewestFirst / OldestFirst
 
 These are the simplest strategies to implement.
 Since submissions and chunks are stored using the `submission_id`, which is a Snowflake ID containing the insertion timestamp, as primary key,
@@ -116,6 +116,10 @@ these translate to simply using an
 ```sql
 SELECT submission_id, chunk_index FROM chunks ORDER BY submission_id {ASC | DESC}
 ```
+
+As Falco noted, there is a risk of starvation specifically when using `NewestFirst`, when the consumer(s) cannot work faster than work is coming in (_equally fast_ is not enough).
+As such we might want to leave it out from the initial version; it is of course also possible to emulate it using `CustomPriority`.
+
 
 ### Random
 
@@ -207,8 +211,8 @@ For example, one could envision a single queue being used but with two kinds of 
 The following are trivially fast:
 
 
-- `SelectOnly(key, val, Oldest)`
-- `SelectOnly(key, val, Newest)`
+- `SelectOnly(key, val, OldestFirst)`
+- `SelectOnly(key, val, NewestFirst)`
 
 because they can query the metadata table directly, and then join the chunks table on that.
 
@@ -222,7 +226,7 @@ Note that it is possible nest `SelectOnly` calls, and this is still reasonably f
 
 #### CustomPriority
 
-In some cases a user might want to pick a completely different order than `Newest`/`Oldest`/`Random`.
+In some cases a user might want to pick a completely different order than `NewestFirst`/`OldestFirst`/`Random`.
 
 A very simple solution for this, is to allow people to set a custom priority per Submission.
 The reason to consider this as something separate from other metadata keys, is because we might want to make a different choice on whether to add an extra index or not for this type.
@@ -297,7 +301,7 @@ When metadata is _not_ used, those indexes/tables will be empty and therefore so
 
 ##### Alternative: Don't add them
 
-It also is possible to just _not_ create such a new join table / index for `SelectOnly`, or only do it for one of them, and instead disallow usage of `Random` inside of them (only allow `Newest` and `Oldest`).
+It also is possible to just _not_ create such a new join table / index for `SelectOnly`, or only do it for one of them, and instead disallow usage of `Random` inside of them (only allow `NewestFirst` and `OldestFirst`).
 
 ##### Per-key tables
 
@@ -313,6 +317,6 @@ However, I recommend keeping this final optimization in mind for a possible futu
 - Are the proposed Strategy implementations clear and sensible?
 - Do we want to add the per-chunk indexes for `SelectOnly` and `CustomPriority`?
   - With or without the 'cheap index' idea?
-  - Or do we want to restrict 'can only be used with `Oldest`/`Newest` but not with `Random`?
+  - Or do we want to restrict 'can only be used with `OldestFirst`/`NewestFirst` but not with `Random`?
 - Do we want to include `MaxSimultaneous` or leave it out for now?
 - Do we want a percentage-based version of `MaxSimultaneous` as well or not?
