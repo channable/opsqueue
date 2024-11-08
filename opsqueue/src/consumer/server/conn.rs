@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    common::{chunk::ChunkId, errors::DatabaseError},
+    common::{chunk::ChunkId, errors::{DatabaseError, E}},
     consumer::{common::{
         AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
         SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS,
@@ -168,7 +168,16 @@ impl ConsumerConn {
                     .fetch_and_reserve_chunks(strategy.clone(), max, &self.tx)
                     .await;
                 match chunks_or_err {
-                    Err(e) => Some(ChunksReserved(Err(e))),
+                    Err(e) => {
+                        tracing::error!("Failed to reserve chunks: {}", e);
+                        match e {
+                            // In the unlikely event of a DatabaseError,
+                            // this is not the client's fault but _our_ fault.
+                            // Therefore, we send the client an empty vec back, and log the error.
+                            E::L(DatabaseError(_)) => Some(ChunksReserved(Ok(Vec::new()))),
+                            E::R(incorrect_usage) => Some(ChunksReserved(Err(incorrect_usage)))
+                        }
+                    },
                     Ok(vals) if !vals.is_empty() => Some(ChunksReserved(Ok(vals))),
                     Ok(_) => {
                         // No work to do right now. Retry when new work is inserted.

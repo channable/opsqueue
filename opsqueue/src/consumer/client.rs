@@ -329,10 +329,7 @@ impl Client {
         let SyncServerToClientResponse::ChunksReserved(resp) = self
             .sync_request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
-        let chunks = resp.map_err(|err| match err {
-            E::L(e) => E::L(e.into()),
-            E::R(e) => E::R(e),
-        })?;
+        let chunks = resp.map_err(|err| E::R(err))?;
         Ok(chunks)
     }
 

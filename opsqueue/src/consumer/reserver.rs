@@ -1,13 +1,14 @@
-use std::{fmt::Debug, hash::Hash, time::Duration};
+use std::{fmt::Debug, hash::Hash, sync::Arc, time::{Duration, Instant}};
 
 use axum_prometheus::metrics::{counter, gauge};
+use std::sync::Mutex;
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
-pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>), FxBuildHasher>);
+pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>, Arc<Mutex<()>>);
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
 where
@@ -27,7 +28,7 @@ where
     pub fn new(reservation_expiration: Duration) -> Self {
         let cache = Cache::builder()
             .time_to_live(reservation_expiration)
-            .eviction_listener(|_key, val: (V, UnboundedSender<V>), cause| {
+            .eviction_listener(|_key, val: (V, UnboundedSender<V>, _), cause| {
                 if cause == RemovalCause::Expired {
                     // Only error case is if receiver is no longer listening
                     // In that case, nobody cares about the value being evicted anymore.
@@ -38,7 +39,7 @@ where
             // We're not worried about HashDoS as the consumers are trusted code,
             // so let's use a faster hash than SipHash
             .build_with_hasher(rustc_hash::FxBuildHasher);
-        Reserver(cache)
+        Reserver(cache, Default::default())
     }
 
     /// Attempts to reserve a particular key-val.
@@ -46,7 +47,9 @@ where
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
-        let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone()));
+        // TODO temporarily try how performance looks with explicit lock
+        // let _lock = self.1.lock().expect("No poisoning");
+        let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone(), Instant::now()));
 
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
@@ -65,8 +68,17 @@ where
     /// Afterwards, it is possible to reserve it again.
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
-    pub fn finish_reservation(&self, key: &K) {
-        self.0.invalidate(key)
+    pub fn finish_reservation(&self, key: &K) -> Option<Instant> {
+        match self.0.remove(key) {
+            None => {
+                tracing::error!("Attempted to finish non-existent reservation: {key:?}");
+                None
+            },
+            Some((_val, _sender, reserved_at)) => {
+                Some(reserved_at)
+            }
+
+        }
         // let res = self.0.remove(key);
         // if !res.is_some() {
         //     tracing::error!("Attempted to finish non-existent reservation: {key:?}");

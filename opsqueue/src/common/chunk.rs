@@ -124,6 +124,7 @@ impl From<ChunkId> for (SubmissionId, ChunkIndex) {
 pub type Content = Option<Vec<u8>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
 pub struct Chunk {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,

@@ -1,7 +1,6 @@
 use std::fmt::Display;
 use std::time::Duration;
 
-use axum_prometheus::metrics::counter;
 use chrono::{DateTime, Utc};
 use ux_serde::u63;
 
@@ -191,6 +190,9 @@ use crate::db::SqliteConnectionExt;
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
+#[cfg(feature = "server-logic")]
+use axum_prometheus::metrics::{counter, histogram};
+
 use super::*;
 
 impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
@@ -245,6 +247,7 @@ pub async fn insert_submission_raw(
     )
     .execute(conn)
     .await?;
+
     Ok(())
 }
 
@@ -261,6 +264,7 @@ where
 {
     use axum_prometheus::metrics::{counter, gauge};
     let chunks_total = submission.chunks_total.into();
+    tracing::debug!("Inserting submission {}", submission.id);
 
     let res = conn.immediate_write_transaction(|tx| {
         Box::pin(async move {
@@ -412,6 +416,7 @@ pub async fn complete_submission_raw(
     conn: impl SqliteExecutor<'_>,
 ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
 
+
     let now = chrono::prelude::Utc::now();
     query!(
         "
@@ -436,6 +441,8 @@ pub async fn complete_submission_raw(
         e => E::L(DatabaseError::from(e)),
     })?;
     counter!(crate::prometheus::SUBMISSIONS_COMPLETED_COUNTER).increment(1);
+    histogram!(crate::prometheus::SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM).record(crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()));
+    tracing::debug!("Completed submission {id}, timestamp {}", id.timestamp());
     Ok(())
 }
 
@@ -464,6 +471,8 @@ pub async fn fail_submission_raw(
     .fetch_one(conn)
     .await?;
     counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
+    histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()));
+
     Ok(())
 }
 
