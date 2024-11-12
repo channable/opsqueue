@@ -1,14 +1,13 @@
-use std::{fmt::Debug, hash::Hash, sync::Arc, time::{Duration, Instant}};
+use std::{fmt::Debug, hash::Hash, time::{Duration, Instant}};
 
 use axum_prometheus::metrics::{counter, gauge};
-use std::sync::Mutex;
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
-pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>, Arc<Mutex<()>>);
+pub struct Reserver<K, V>(Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>);
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
 where
@@ -39,7 +38,7 @@ where
             // We're not worried about HashDoS as the consumers are trusted code,
             // so let's use a faster hash than SipHash
             .build_with_hasher(rustc_hash::FxBuildHasher);
-        Reserver(cache, Default::default())
+        Reserver(cache)
     }
 
     /// Attempts to reserve a particular key-val.
@@ -47,8 +46,6 @@ where
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
-        // TODO temporarily try how performance looks with explicit lock
-        // let _lock = self.1.lock().expect("No poisoning");
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone(), Instant::now()));
 
         if entry.is_fresh() {
@@ -79,10 +76,6 @@ where
             }
 
         }
-        // let res = self.0.remove(key);
-        // if !res.is_some() {
-        //     tracing::error!("Attempted to finish non-existent reservation: {key:?}");
-        // }
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up

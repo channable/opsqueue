@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use axum_prometheus::metrics::histogram;
-use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 
@@ -117,7 +116,7 @@ impl ConsumerState {
                 .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
         );
 
-        histogram!(crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM, 
+        histogram!(crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,
         &[("limit", limit.to_string()), ("strategy", format!("{strategy:?}"))]
     ).record(start.elapsed());
         Ok(new_reservations)
@@ -141,9 +140,7 @@ impl ConsumerState {
                 reservations.lock().expect("No poison").remove(&id);
                 // NOTE: Even in the unlikely event the query fails,
                 // we want the chunk to be un-reserved
-                reserver.finish_reservation(&id).map(|started_at| {
-                    histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed())
-                });
+                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) }
                 Ok(())
             }.await;
 
@@ -169,9 +166,7 @@ impl ConsumerState {
                 reservations.lock().expect("No poison").remove(&id);
                 // NOTE: Even in the unlikely event the query fails,
                 // we want the chunk to be un-reserved
-                reserver.finish_reservation(&id).map(|started_at| {
-                    histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed())
-                });
+                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) }
                 Ok(())
             }.await;
 

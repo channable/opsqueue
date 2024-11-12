@@ -6,13 +6,8 @@ use futures::stream::BoxStream;
 #[cfg(feature = "server-logic")]
 use sqlx::{SqliteConnection, SqliteExecutor};
 
-use crate::common::chunk::Chunk;
 #[cfg(feature = "server-logic")]
-use crate::common::chunk::ChunkId;
-// #[cfg(feature = "server-logic")]
-// use crate::common::chunk::ChunkIndex;
-// #[cfg(feature = "server-logic")]
-// use crate::common::submission::SubmissionId;
+use crate::common::chunk::Chunk;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
@@ -21,17 +16,6 @@ pub enum Strategy {
     Random,
     // Custom(CustomStrategy), // TODO
 }
-
-// #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// pub struct CustomStrategy {
-//     /// Name, used for debugging.
-//     pub name: String,
-//     /// Function pointer to the custom strategy's implementation.
-//     pub implementation: fn(&mut SqliteConnection) -> ChunkStream<'_>,
-// }
-
-#[cfg(feature = "server-logic")]
-type ChunkIdStream<'a> = BoxStream<'a, Result<ChunkId, sqlx::Error>>;
 
 #[cfg(feature = "server-logic")]
 pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;

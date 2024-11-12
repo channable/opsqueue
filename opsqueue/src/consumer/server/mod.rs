@@ -80,7 +80,7 @@ async fn ws_accept_handler(
     ws.on_upgrade(|ws_stream| async move {
         gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).increment(1);
 
-        let res = 
+        let res =
             conn::ConsumerConn::new(&state, ws_stream)
             .run()
             .await;

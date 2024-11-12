@@ -37,7 +37,7 @@ pub fn describe_metrics() {
     describe_counter!(CHUNKS_RETRIED_COUNTER, Unit::Count, "Number of chunks that failed temporarily and will be retried");
     describe_counter!(CHUNKS_SKIPPED_COUNTER, Unit::Count, "Number of chunks skipped (because another chunk in the submission failed)");
     describe_counter!(CHUNKS_TOTAL_COUNTER, Unit::Count, "Total count of chunks (in backlog + completed + failed), i.e. total that ever entered the system");
-    // We could calculate the backlog size from TOTAL - COMPLETED - FAILED - SKIPPED 
+    // We could calculate the backlog size from TOTAL - COMPLETED - FAILED - SKIPPED
     // but since it will commonly be used for checking whether we should autoscale,
     // it's much nicer to measure/expose it directly
     describe_gauge!(CHUNKS_BACKLOG_GAUGE, Unit::Count, "Number of chunks in the backlog. Note that this is a _gauge_ reflecting the accurate state of the DB");
@@ -77,7 +77,7 @@ pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum
 }
 
 /// Initializes certain metrics that depend on the contents of the DB at app startup
-/// 
+///
 /// Instead of asking the DB for a count very frequently, we only fetch the count at startup
 /// and keep it up-to-date over the lifespan of the application
 pub async fn prefill_special_metrics(db_pool: &SqlitePool) -> anyhow::Result<()> {
@@ -88,7 +88,7 @@ pub async fn prefill_special_metrics(db_pool: &SqlitePool) -> anyhow::Result<()>
 }
 
 /// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
-/// 
+///
 /// Adapted from https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;

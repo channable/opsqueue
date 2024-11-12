@@ -1,6 +1,5 @@
 import logging
 from opsqueue.consumer import ConsumerClient, Strategy
-import time
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 

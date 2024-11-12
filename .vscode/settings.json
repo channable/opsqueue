@@ -1,5 +1,3 @@
 {
-    "python.analysis.extraPaths": [
-        "./libs/opsqueue_python/python"
-    ]
+  "python.analysis.extraPaths": ["./libs/opsqueue_python/python"]
 }
