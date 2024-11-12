@@ -1,30 +1,30 @@
 use axum_prometheus::{metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit}, metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
 use sqlx::SqlitePool;
 
-pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total";
-pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed";
-pub const SUBMISSIONS_FAILED_COUNTER: &str = "submissions_failed";
-pub const SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM: &str = "submissions_complete_duration";
-pub const SUBMISSIONS_DURATION_FAIL_HISTOGRAM: &str = "submissions_fail_duration";
+pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total_count";
+pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed_count";
+pub const SUBMISSIONS_FAILED_COUNTER: &str = "submissions_failed_count";
+pub const SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM: &str = "submissions_complete_duration_seconds";
+pub const SUBMISSIONS_DURATION_FAIL_HISTOGRAM: &str = "submissions_fail_duration_seconds";
 
-pub const CHUNKS_COMPLETED_COUNTER: &str = "chunks_completed";
-pub const CHUNKS_FAILED_COUNTER: &str = "chunks_failed";
-pub const CHUNKS_RETRIED_COUNTER: &str = "chunks_retried";
-pub const CHUNKS_SKIPPED_COUNTER: &str = "chunks_skipped";
-pub const CHUNKS_TOTAL_COUNTER: &str = "chunks_total";
-pub const CHUNKS_BACKLOG_GAUGE: &str = "chunks_in_backlog";
+pub const CHUNKS_COMPLETED_COUNTER: &str = "chunks_completed_count";
+pub const CHUNKS_FAILED_COUNTER: &str = "chunks_failed_count";
+pub const CHUNKS_RETRIED_COUNTER: &str = "chunks_retried_count";
+pub const CHUNKS_SKIPPED_COUNTER: &str = "chunks_skipped_count";
+pub const CHUNKS_TOTAL_COUNTER: &str = "chunks_total_count";
+pub const CHUNKS_BACKLOG_GAUGE: &str = "chunks_in_backlog_count";
 
-pub const CHUNKS_DURATION_COMPLETED_HISTOGRAM: &str = "chunks_duration_completed";
-pub const CHUNKS_DURATION_FAILED_HISTOGRAM: &str = "chunks_duration_failure";
+pub const CHUNKS_DURATION_COMPLETED_HISTOGRAM: &str = "chunks_duration_completed_seconds";
+pub const CHUNKS_DURATION_FAILED_HISTOGRAM: &str = "chunks_duration_failure_seconds";
 
-pub const RESERVER_RESERVATIONS_SUCCEEDED_COUNTER: &str = "reserver_reservations_succeeded";
-pub const RESERVER_RESERVATIONS_FAILED_COUNTER: &str = "reserver_reservations_failed";
-pub const RESERVER_CHUNKS_RESERVED_GAUGE: &str = "reserver_chunks_reserved";
+pub const RESERVER_RESERVATIONS_SUCCEEDED_COUNTER: &str = "reserver_reservations_succeeded_count";
+pub const RESERVER_RESERVATIONS_FAILED_COUNTER: &str = "reserver_reservations_failed_count";
+pub const RESERVER_CHUNKS_RESERVED_GAUGE: &str = "reserver_chunks_reserved_count";
 
-pub const CONSUMERS_CONNECTED_GAUGE: &str = "consumers_connected";
-pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str = "consumer_fetch_and_reserve_chunks_duration";
-pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration";
-pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_complete_chunk_duration";
+pub const CONSUMERS_CONNECTED_GAUGE: &str = "consumers_connected_count";
+pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str = "consumer_fetch_and_reserve_chunks_duration_seconds";
+pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
+pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
 
 pub fn describe_metrics() {
     describe_counter!(SUBMISSIONS_TOTAL_COUNTER, Unit::Count, "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system");
