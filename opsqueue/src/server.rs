@@ -80,18 +80,24 @@ pub fn build_router(
 
     let routes = Router::new()
         .nest("/producer", producer_routes)
-        .nest("/consumer", consumer_routes)
-        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
-        .route("/metrics", get(|| async move {prometheus_config.1.render() }));
+        .nest("/consumer", consumer_routes);
 
+    // NOTE: For the initial release, these values make sense for extra introspection.
+    // In some future version, we probably want to lower these log levels down to DEBUG
+    // and stop logging a pair of lines for every HTTP request.
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new())
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO))
         .on_request(tower_http::trace::DefaultOnRequest::new())
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
-    routes
-        .layer(prometheus_config.0)
+    let traced_routes = routes
         .layer(tracing_middleware)
+        .layer(prometheus_config.0);
+
+    // We do not want to trace, log nor gather metrics for the `ping` or `metrics` endpoints
+    traced_routes
+        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
+        .route("/metrics", get(|| async move {prometheus_config.1.render() }))
 }
 
 /// Used as a very simple health check by consul.
