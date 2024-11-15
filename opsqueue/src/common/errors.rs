@@ -5,18 +5,18 @@ use crate::consumer::common::SyncServerToClientResponse;
 
 use super::{chunk::ChunkId, submission::SubmissionId};
 
-#[derive(Error, Debug, Clone, Serialize, Deserialize)]
-#[error("Low-level database error: {0}")]
-pub struct DatabaseError(#[from] pub serde_error::Error);
-
-#[derive(Error, Debug)]
-#[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]
-pub struct UnexpectedOpsqueueConsumerServerResponse(pub SyncServerToClientResponse);
+// #[derive(Error, Debug, Clone, Serialize, Deserialize)]
+// #[error("Low-level database error: {0:?}")]
+// pub struct DatabaseError(#[from] pub serde_error::Error);
+#[cfg_attr(feature = "server-logic", derive(Error, Debug))]
+#[cfg_attr(feature = "server-logic",error("Low-level database error: {0:?}"))]
+#[cfg(feature = "server-logic")]
+pub struct DatabaseError(#[from] pub sqlx::Error);
 
 #[cfg(feature = "server-logic")]
-impl From<sqlx::Error> for DatabaseError {
-    fn from(value: sqlx::Error) -> Self {
-        DatabaseError(serde_error::Error::new(&value))
+impl<T> From<DatabaseError> for E<DatabaseError, T> {
+    fn from(e: DatabaseError) -> Self {
+        E::L(e)
     }
 }
 
@@ -28,11 +28,10 @@ pub struct ChunkNotFound(pub ChunkId);
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
 
-impl<T> From<DatabaseError> for E<DatabaseError, T> {
-    fn from(e: DatabaseError) -> Self {
-        E::L(e)
-    }
-}
+#[derive(Error, Debug)]
+#[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]
+pub struct UnexpectedOpsqueueConsumerServerResponse(pub SyncServerToClientResponse);
+
 
 /// We roll our own version of `either::E` so that we're not limited by the orphan rule.
 ///

@@ -2,12 +2,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use futures::Stream;
+use axum_prometheus::metrics::histogram;
 use futures::StreamExt;
 use futures::TryStreamExt;
 
 use crate::common::chunk;
 use crate::common::errors::DatabaseError;
+use crate::consumer::strategy::ChunkStream;
 use crate::consumer::strategy::Strategy;
 use crate::{
     common::{
@@ -40,7 +41,9 @@ impl Drop for ConsumerState {
 
         let reservations = self.reservations.lock().unwrap();
         for reservation in &*reservations {
-            self.reserver.finish_reservation(reservation)
+            // We're not tracking chunk durations that are unreserved during consumer shutdown,
+            // as those will be by definition unfinished
+            let _ = self.reserver.finish_reservation(reservation);
         }
     }
 }
@@ -61,23 +64,25 @@ impl ConsumerState {
     ///    Of course, we'll return less if the stream is exhausted before `limit` is reached.
     /// - `stale_chunks_notifier` is a Tokio channel, which the reserver will automatically invoke when a particular chunk reservation has expired.
     #[tracing::instrument(skip(self, stream, limit, stale_chunks_notifier))]
-    async fn reserve_chunks(
-        &self,
-        stream: impl Stream<Item = Result<ChunkId, sqlx::Error>>,
+    async fn reserve_chunks<'a>(
+        &'a self,
+        stream: ChunkStream<'a>,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         stream
-            .try_filter_map(|chunk_id| async move {
-                Ok(self
+            .try_filter_map(|chunk| async move {
+                let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+                    let val = self
                     .reserver
-                    .try_reserve(chunk_id, chunk_id, stale_chunks_notifier))
+                    .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
+                    .map(|_| chunk);
+                Ok(val)
             })
-            .and_then(|chunk_id| {
+            .and_then(|chunk| {
                 async move {
                     let conn = &mut self.pool.acquire().await?;
-                    let chunk = crate::common::chunk::db::get_chunk(chunk_id, &mut **conn).await?;
-                    let submission = crate::common::submission::db::get_submission(chunk_id.submission_id, &mut **conn).await.expect("TODO: map error");
+                    let submission = crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn).await.expect("get_submission while reserving failed");
                     Ok((chunk, submission))
                 }
             })
@@ -94,6 +99,8 @@ impl ConsumerState {
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>> {
+        let start = tokio::time::Instant::now();
+
         if limit == 0 {
             return Err(E::R(IncorrectUsage(LimitIsZero())));
         }
@@ -109,6 +116,9 @@ impl ConsumerState {
                 .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
         );
 
+        histogram!(crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,
+        &[("limit", limit.to_string()), ("strategy", format!("{strategy:?}"))]
+    ).record(start.elapsed());
         Ok(new_reservations)
     }
 
@@ -118,6 +128,8 @@ impl ConsumerState {
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), DatabaseError> {
+        let start = tokio::time::Instant::now();
+
         let pool = self.pool.clone();
         let reservations = self.reservations.clone();
         let reserver = self.reserver.clone();
@@ -128,18 +140,22 @@ impl ConsumerState {
                 reservations.lock().expect("No poison").remove(&id);
                 // NOTE: Even in the unlikely event the query fails,
                 // we want the chunk to be un-reserved
-                reserver.finish_reservation(&id);
+                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) }
                 Ok(())
             }.await;
 
             if res.is_err() {
-                tracing::error!("Failed to fail chunk: {:?}", res);
+                tracing::error!("Failed to complete chunk: {:?}", res);
             }
         });
+
+        histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
         Ok(())
     }
 
     pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), DatabaseError> {
+        let start = tokio::time::Instant::now();
+
         let pool = self.pool.clone();
         let reservations = self.reservations.clone();
         let reserver = self.reserver.clone();
@@ -150,7 +166,7 @@ impl ConsumerState {
                 reservations.lock().expect("No poison").remove(&id);
                 // NOTE: Even in the unlikely event the query fails,
                 // we want the chunk to be un-reserved
-                reserver.finish_reservation(&id);
+                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) }
                 Ok(())
             }.await;
 
@@ -158,6 +174,8 @@ impl ConsumerState {
                 tracing::error!("Failed to fail chunk: {:?}", res);
             }
         });
+
+        histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
         Ok(())
     }
 }

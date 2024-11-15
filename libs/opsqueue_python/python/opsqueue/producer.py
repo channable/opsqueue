@@ -13,6 +13,8 @@ from opsqueue.common import (
 from . import opsqueue_internal
 from .opsqueue_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
 
+__all__ = ["ProducerClient", "SubmissionId", "SubmissionStatus"]
+
 
 class ProducerClient:
     """

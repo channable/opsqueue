@@ -59,6 +59,8 @@ ux_serde = { version = "0.2.0", features = ["std", "serde"] }
 backon = { version = "1.2.0", features = ["tokio-sleep"] }
 rand = "0.8.5"
 rustc-hash = "2.0.0"
+# prometheus = {version = "0.13.4", optional = true}
+axum-prometheus = {version = "0.7.0", optional = true}
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -83,7 +85,8 @@ server-logic = [
     "dep:tracing-opentelemetry",
     "dep:moka",
     "dep:axum",
-    "dep:tower-http"
+    "dep:tower-http",
+    "dep:axum-prometheus",
     ]
 # Dependencies only in use by the client libraries:
 client-logic = [

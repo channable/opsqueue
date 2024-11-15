@@ -2,9 +2,7 @@ use std::{future::Future, ops::{Deref, DerefMut}, time::Duration};
 
 use futures::future::BoxFuture;
 use sqlx::{
-    migrate::MigrateDatabase,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-    Connection, Sqlite, SqliteConnection, SqlitePool, Executor,
+    migrate::MigrateDatabase, sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous}, Connection, Executor, Sqlite, SqliteConnection, SqlitePool
 };
 
 /// Connects to the SQLite database,
@@ -35,7 +33,10 @@ pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
 }
 
 pub async fn db_connect_pool(database_filename: &str) -> SqlitePool {
-    SqlitePool::connect_with(db_options(database_filename))
+    SqlitePoolOptions::new()
+        .min_connections(16)
+        .max_connections(1024)
+        .connect_with(db_options(database_filename))
         .await
         .expect("Could not connect to sqlite DB")
 }
@@ -76,7 +77,8 @@ pub async fn ensure_db_migrated(db: &SqlitePool) {
 /// holds the write lock for the DB for a (too) long time.
 pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
     async move {
-        let mut tx = pool.begin().await?;
+        let mut conn = pool.acquire().await?;
+        let mut tx = conn.begin().await?;
         let _count = crate::common::submission::db::count_submissions(&mut *tx).await?;
         Ok::<_, anyhow::Error>(())
     }

@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
+use axum_prometheus::metrics::gauge;
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
@@ -60,10 +61,15 @@ impl ServerState {
         }
     }
 
+    pub fn run_pending_tasks_periodically(self) -> Self {
+        self.reserver.run_pending_tasks_periodically(self.cancellation_token.clone());
+        self
+    }
+
     pub fn build_router(self: ServerState) -> Router<()> {
         Router::new()
-            .route("/", get(ws_accept_handler))
-            .with_state(self)
+        .route("/", get(ws_accept_handler))
+        .with_state(self)
     }
 }
 
@@ -72,7 +78,14 @@ async fn ws_accept_handler(
     State(state): State<ServerState>,
 ) -> axum::response::Response {
     ws.on_upgrade(|ws_stream| async move {
-        let res = conn::ConsumerConn::new(&state, ws_stream).run().await;
+        gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).increment(1);
+
+        let res =
+            conn::ConsumerConn::new(&state, ws_stream)
+            .run()
+            .await;
+
         tracing::warn!("Closed websocket connection, reason: {:?}", &res);
+        gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).decrement(1);
     })
 }

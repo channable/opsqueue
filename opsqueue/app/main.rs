@@ -9,6 +9,7 @@ pub const DATABASE_FILENAME: &str = "opsqueue.db";
 
 #[tokio::main]
 async fn main() {
+
     println!("Starting Opsqueue");
 
     let server_addr = Box::from("0.0.0.0:3999");
@@ -16,21 +17,33 @@ async fn main() {
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
     let cancellation_token = CancellationToken::new();
+
+    // Set up Prometheus early because metrics that try to register before it is set up
+    // will not be seen otherwise
+    let prometheus_config  = opsqueue::prometheus::setup_prometheus();
+
+
     let _ = setup_tracing();
 
     tracing::info!("Finished setting up tracing subscriber");
+
 
     let database_filename = DATABASE_FILENAME;
 
     let db_pool = opsqueue::db::open_and_setup(database_filename).await;
 
+    opsqueue::prometheus::prefill_special_metrics(&db_pool).await
+        .expect("Failed to initialize basic metrics from current contents of the DB");
+
     moro_local::async_scope!(|scope| {
+
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
             &server_addr,
             &db_pool,
             reservation_expiration,
             &cancellation_token,
             &app_healthy_flag,
+            prometheus_config
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate

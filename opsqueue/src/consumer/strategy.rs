@@ -7,11 +7,7 @@ use futures::stream::BoxStream;
 use sqlx::{SqliteConnection, SqliteExecutor};
 
 #[cfg(feature = "server-logic")]
-use crate::common::chunk::ChunkId;
-#[cfg(feature = "server-logic")]
-use crate::common::chunk::ChunkIndex;
-#[cfg(feature = "server-logic")]
-use crate::common::submission::SubmissionId;
+use crate::common::chunk::Chunk;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
@@ -21,20 +17,12 @@ pub enum Strategy {
     // Custom(CustomStrategy), // TODO
 }
 
-// #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-// pub struct CustomStrategy {
-//     /// Name, used for debugging.
-//     pub name: String,
-//     /// Function pointer to the custom strategy's implementation.
-//     pub implementation: fn(&mut SqliteConnection) -> ChunkStream<'_>,
-// }
-
 #[cfg(feature = "server-logic")]
-type ChunkIdStream<'a> = BoxStream<'a, Result<ChunkId, sqlx::Error>>;
+pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 
 #[cfg(feature = "server-logic")]
 impl Strategy {
-    pub fn execute<'c>(&self, db_conn: &'c mut SqliteConnection) -> ChunkIdStream<'c> {
+    pub fn execute<'c>(&self, db_conn: &'c mut SqliteConnection) -> ChunkStream<'c> {
         match self {
             Strategy::Oldest => oldest_chunks_stream(db_conn),
             Strategy::Newest => newest_chunks_stream(db_conn),
@@ -48,11 +36,13 @@ impl Strategy {
 #[cfg(feature = "server-logic")]
 pub fn oldest_chunks_stream<'c>(
     db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkIdStream<'c> {
-    sqlx::query_as!(ChunkId, r#"
+) -> ChunkStream<'c> {
+    sqlx::query_as!(Chunk, r#"
         SELECT
-            chunks.submission_id AS "submission_id: SubmissionId"
-            , chunks.chunk_index AS "chunk_index: ChunkIndex"
+            chunks.submission_id AS "submission_id: _"
+            , chunks.chunk_index AS "chunk_index: _"
+            , input_content AS "input_content: _"
+            , retries
          FROM chunks
         ORDER BY submission_id ASC
     "#
@@ -64,11 +54,13 @@ pub fn oldest_chunks_stream<'c>(
 #[cfg(feature = "server-logic")]
 pub fn newest_chunks_stream<'c>(
     db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkIdStream<'c> {
-    sqlx::query_as!(ChunkId, r#"
+) -> ChunkStream<'c> {
+    sqlx::query_as!(Chunk, r#"
         SELECT
-            chunks.submission_id AS "submission_id: SubmissionId"
-            , chunks.chunk_index AS "chunk_index: ChunkIndex"
+            chunks.submission_id AS "submission_id: _"
+            , chunks.chunk_index AS "chunk_index: _"
+            , input_content AS "input_content: _"
+            , retries
         FROM chunks
         ORDER BY submission_id DESC
     "#
@@ -102,7 +94,7 @@ pub fn newest_chunks_stream<'c>(
 #[cfg(feature = "server-logic")]
 pub fn random_chunks_stream<'c>(
     db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkIdStream<'c> {
+) -> ChunkStream<'c> {
     let random_offset: u16 = rand::random();
     // NOTE 1: Until https://github.com/launchbadge/sqlx/issues/1151
     // is fixed, we'll have to use the runtime `query_as`
@@ -115,14 +107,18 @@ pub fn random_chunks_stream<'c>(
     let query =
         r#"
         SELECT
-              chunks.submission_id
-            , chunks.chunk_index
+            submission_id
+            , chunk_index
+            , input_content
+            , retries
         FROM chunks
         WHERE chunks.random_order >= ?
         UNION ALL
         SELECT
-              chunks.submission_id
-            , chunks.chunk_index
+            submission_id
+            , chunk_index
+            , input_content
+            , retries
         FROM chunks
         WHERE chunks.random_order < ?
     "#;

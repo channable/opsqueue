@@ -1,0 +1,3 @@
+{
+  "python.analysis.extraPaths": ["./libs/opsqueue_python/python"]
+}

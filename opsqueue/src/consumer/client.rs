@@ -24,7 +24,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::{
     common::{
         chunk::{self, Chunk, ChunkId},
-        errors::{DatabaseError, E, IncorrectUsage, LimitIsZero},
+        errors::{E, IncorrectUsage, LimitIsZero},
         submission::Submission,
     },
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
@@ -329,10 +329,7 @@ impl Client {
         let SyncServerToClientResponse::ChunksReserved(resp) = self
             .sync_request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
-        let chunks = resp.map_err(|err| match err {
-            E::L(e) => E::L(e.into()),
-            E::R(e) => E::R(e),
-        })?;
+        let chunks = resp.map_err(E::R)?;
         Ok(chunks)
     }
 
@@ -368,8 +365,6 @@ pub enum InternalConsumerClientError {
         actual: SyncServerToClientResponse,
         expected: Box<str>,
     },
-    #[error("Low-level database error: {0}")]
-    DatabaseError(#[from] DatabaseError),
 }
 
 impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> {

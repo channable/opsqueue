@@ -1,6 +1,5 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
+    sync::{atomic::AtomicBool, Arc}, time::Duration
 };
 
 use axum::{routing::get, Router};
@@ -10,6 +9,7 @@ use http::StatusCode;
 use sqlx::sqlite::SqlitePool;
 
 use tokio::select;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 // TOOD: Set max retries to `None`;
@@ -31,6 +31,8 @@ pub async fn serve_producer_and_consumer(
     reservation_expiration: Duration,
     cancellation_token: &CancellationToken,
     app_healthy_flag: &Arc<AtomicBool>,
+    prometheus_config: crate::prometheus::PrometheusConfig,
+
 ) -> Result<(), std::io::Error> {
     use backon::Retryable;
 
@@ -40,6 +42,7 @@ pub async fn serve_producer_and_consumer(
         reservation_expiration,
         cancellation_token.clone(),
         app_healthy_flag.clone(),
+        prometheus_config.clone(),
     );
     let listener = tokio::net::TcpListener::bind(server_addr)
         .await?;
@@ -59,8 +62,9 @@ pub fn build_router(
     reservation_expiration: Duration,
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
+    prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
-    use tokio::sync::Notify;
+
     let notify_on_insert = Arc::new(Notify::new());
 
     let consumer_routes = crate::consumer::server::ServerState::new(
@@ -69,19 +73,31 @@ pub fn build_router(
         cancellation_token.clone(),
         reservation_expiration,
     )
+    .run_pending_tasks_periodically()
     .build_router();
     let producer_routes = crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
+
+
     let routes = Router::new()
-        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
 
+    // NOTE: For the initial release, these values make sense for extra introspection.
+    // In some future version, we probably want to lower these log levels down to DEBUG
+    // and stop logging a pair of lines for every HTTP request.
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new())
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO))
         .on_request(tower_http::trace::DefaultOnRequest::new())
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
-    routes.layer(tracing_middleware)
+    let traced_routes = routes
+        .layer(tracing_middleware)
+        .layer(prometheus_config.0);
+
+    // We do not want to trace, log nor gather metrics for the `ping` or `metrics` endpoints
+    traced_routes
+        .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
+        .route("/metrics", get(|| async move {prometheus_config.1.render() }))
 }
 
 /// Used as a very simple health check by consul.

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::chunk;
 use crate::common::chunk::{Chunk, ChunkId};
 
-use crate::common::errors::{DatabaseError, E, IncorrectUsage, LimitIsZero};
+use crate::common::errors::{IncorrectUsage, LimitIsZero};
 use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
 
@@ -44,7 +44,7 @@ pub enum ServerToClientMessage {
 pub enum SyncServerToClientResponse {
     #[allow(clippy::type_complexity)]
     ChunksReserved(
-        Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>>,
+        Result<Vec<(Chunk, Submission)>, IncorrectUsage<LimitIsZero>>,
     ),
     // ChunkCompleted,
     // ChunkFailed,

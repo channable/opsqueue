@@ -13,6 +13,8 @@ from .common import (
 
 DEFAULT_STRATEGY = Strategy.Newest
 
+__all__ = ["ConsumerClient", "Strategy", "Chunk", "SubmissionId"]
+
 
 class ConsumerClient:
     """
