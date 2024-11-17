@@ -22,7 +22,7 @@ repos:
         language: system
       - id: rustfmt
         name: rustfmt
-        entry: rustfmt
+        entry: cargo fmt
         language: system
         pass_filenames: false
       - id: mypy
