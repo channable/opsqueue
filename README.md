@@ -42,6 +42,8 @@ To test (the binary and the rust-side of all producer/consumer libraries):
 cargo test
 ```
 
+_To run integration tests, see below._
+
 To run the main `opsqueue` executable:
 
 ```bash
@@ -94,11 +96,23 @@ ipython
 ```
 Note that the `maturin develop` step needs to be repeated after making any changes to the Rust code.
 
-For full/final builds, just use Nix which will call `maturin build` internally.
+For full/final builds, just use Nix which will call `maturin build -r` internally.
 
 [Maturin usage guide](https://www.maturin.rs/tutorial).
 
 See the `example.py` in the respective directories for a tiny example on how to use the two libraries.
+
+## Running Python integration tests
+
+`./build.py test integration`, or alternatively:
+
+1. Go to `./libs/opsqueue_python`
+2. Make sure you run `maturin develop` so the code is up-to-date
+3. Run `pytest` from this directory with all options you like.
+
+**Be aware that this `pytest` is part of the maturin virtual env**. 
+That is the only way to allow it to see the development artefacts from `maturin develop`.
+Therefore, do _not_ try to run `pytest` from another directory, because it will not work with the `pytest` available in Nix.
 
 ## Running Litestream
 

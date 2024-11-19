@@ -1,6 +1,6 @@
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
-build-server-logic = "maturin"
+build-backend="maturin"
 
 [project]
 name = "opsqueue"
@@ -15,3 +15,13 @@ dynamic = ["version"]
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "opsqueue.opsqueue_internal"
+
+[tool.pytest.ini_options]
+# We ensure tests never rely on global state,
+# by running them in a random order, and in parallel:
+addopts = "--random-order --workers=auto"
+# NOTE: We rely on `pytest-parallel` rather than `pytest-xdist`
+# since we currently rely on `multiprocessing`'s `fork` strategy,
+# which is incompatible
+# since pytest-xdist always spawns threads internally
+# c.f. https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods

@@ -11,7 +11,10 @@ use tracing::level_filters::LevelFilter;
 async fn main() {
     let config = Arc::new(Config::parse());
 
-    println!("Starting Opsqueue");
+    let _ = setup_tracing();
+    tracing::info!("Starting Opsqueue");
+
+    tracing::info!("Finished setting up tracing subscriber");
 
     let server_addr = Box::from(format!("0.0.0.0:{}", config.port));
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
@@ -21,10 +24,6 @@ async fn main() {
     // Set up Prometheus early because metrics that try to register before it is set up
     // will not be seen otherwise
     let prometheus_config = opsqueue::prometheus::setup_prometheus();
-
-    let _ = setup_tracing();
-
-    tracing::info!("Finished setting up tracing subscriber");
 
     let db_pool =
         opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
@@ -50,6 +49,8 @@ async fn main() {
             &db_pool,
             cancellation_token.clone(),
         ));
+
+        tracing::info!("Startup complete; listening on {}", &server_addr);
 
         tokio::signal::ctrl_c()
             .await

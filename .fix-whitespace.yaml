@@ -16,4 +16,5 @@ excluded-files:
   - "result/**"
   - ".ruff_cache/**"
   - ".direnv/**"
+  - ".venv*/**"
   - "target/**"

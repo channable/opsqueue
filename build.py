@@ -34,45 +34,59 @@ def cli_build() -> None:
 def cli_build_opsqueue() -> None:
     """
     Build opsqueue (the executable) through Nix
+    in the release profile
     """
     print(nix.build("nix/nixpkgs-pinned.nix", version=None, attribute="opsqueue"))
 
 
-@cli_build.command("opsqueue_consumer")
-def cli_build_opsqueue_consumer() -> None:
+@cli_build.command("opsqueue_python")
+def cli_build_opsqueue_python() -> None:
     """
     Build the opsqueue_consumer library through Nix
+    in the release profile
     """
     print(
         nix.build(
             "nix/nixpkgs-pinned.nix",
             version=None,
-            attribute="pythonChannable.pkgs.opsqueue_consumer",
+            attribute="pythonChannable.pkgs.opsqueue_python",
         )
     )
 
 
-@cli_build.command("opsqueue_producer")
-def cli_build_opsqueue_producer() -> None:
+@cli.command("run", add_help_option=False)
+@click.argument(
+    "opsqueue-arguments",
+    nargs=-1,
+)
+def cli_run(opsqueue_arguments: tuple[str]) -> None:
     """
-    Build the opsqueue_producer library through Nix
+    builds-and-runs the opsqueue executable,
+    compiled from local sources using Cargo, with the development profile.
+
+    To pass arguments to opsqueue and see more detailed help, use:
+    `./build.py run -- --more --options="here"`
+
+    Detailed help:
+
+    `./build.py run -- --help
     """
-    print(
-        nix.build(
-            "nix/nixpkgs-pinned.nix",
-            version=None,
-            attribute="pythonChannable.pkgs.opsqueue_producer",
-        )
-    )
+    subprocess.run(("cargo", "run", "--bin", "opsqueue", "--") + opsqueue_arguments)
 
 
-@cli.group("check")
-def cli_check() -> None:
+@cli.group("check", invoke_without_command=True)
+@click.pass_context
+def cli_check(ctx: click.Context) -> None:
     """
     Run linters, optionally with automatic fixes.
 
+    When invoked without any subcommand, runs all checks.
+
+    ./build.py check
     ./build.py check style [--fix]
     """
+    if ctx.invoked_subcommand is None:
+        run_check_style(False)
 
 
 @cli_check.command("style")
@@ -85,7 +99,10 @@ def cli_check_style(fix: bool) -> None:
     """
     Run a set of linters.
     """
+    run_check_style(fix)
 
+
+def run_check_style(fix: bool) -> None:
     if fix is False:
         pre_commit_config = ".pre-commit-config-check.yaml"
     else:
@@ -104,6 +121,79 @@ def cli_check_style(fix: bool) -> None:
             bold=True,
         )
         sys.exit(e.returncode)
+
+
+@cli.group("test", invoke_without_command=True)
+@click.pass_context
+def cli_test(ctx) -> None:
+    """
+    Commands to run tests.
+
+    When invoked with no subcommand, runs all test suites.
+    """
+    if ctx.invoked_subcommand is None:
+        run_unit_tests(())
+        run_integration_tests(())
+
+
+@cli_test.command("unit")
+@click.argument(
+    "test-arguments",
+    nargs=-1,
+)
+def cli_test_unit(test_arguments: tuple[str]) -> None:
+    """
+    Runs unit tests (using `cargo test`).
+
+    Extra arguments (after `--`) are forwarded to `cargo test`.
+    """
+    run_unit_tests(test_arguments)
+
+
+def run_unit_tests(test_arguments: tuple[str]) -> None:
+    subprocess.run(("cargo", "test", "--all-features", "--") + test_arguments)
+
+
+@cli_test.command("integration")
+@click.argument(
+    "test-arguments",
+    nargs=-1,
+)
+def cli_test_integration(test_arguments: tuple[str]) -> None:
+    """
+    Runs integration tests (using a specially prepared `pytest`)
+
+    Extra arguments (after `--`) are forwarded to `pytest`.
+
+    If you need to debug tests:
+
+    * use pytest's `--log-cli-level=info` (or `=debug`) argument
+    to get more detailed logs from the producer/consumer clients
+
+    * use `RUST_LOG="opsqueue=info"`
+    (or `opsqueue=debug` or `debug` for even more verbosity),
+    together with to the pytest option `-s` AKA `--capture=no`,
+    to debug the opsqueue binary itself.
+
+    Example: `RUST_LOG="opsqueue=info" ./build.py test integration -- --log-cli-level=debug
+    """
+    run_integration_tests(test_arguments)
+
+
+def run_integration_tests(test_arguments: tuple[str]) -> None:
+    command = f"""
+        set -e
+        # Used by the integration tests
+        # Make sure it's up-to-date now to not slow down the first test that calls it
+        cargo build --bin opsqueue
+        cd libs/opsqueue_python
+        source "./.setup_local_venv.sh"
+
+        maturin develop
+
+        pytest --color=yes {" ".join(test_arguments)}
+    """
+    subprocess.check_call(command, shell=True)
 
 
 if __name__ == "__main__":
