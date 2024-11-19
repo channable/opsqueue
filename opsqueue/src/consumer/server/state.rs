@@ -42,7 +42,7 @@ impl Drop for ConsumerState {
         for reservation in &*reservations {
             // We're not tracking chunk durations that are unreserved during consumer shutdown,
             // as those will be by definition unfinished
-            let _ = self.reserver.finish_reservation(reservation);
+            let _ = self.reserver.finish_reservation_sync(reservation);
         }
     }
 }

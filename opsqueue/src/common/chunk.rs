@@ -301,47 +301,47 @@ pub mod db {
         chunk_id: ChunkId,
         failure: String,
         conn: &mut SqliteConnection,
-    ) -> sqlx::Result<()> {
-        conn.transaction(|tx| {
-            Box::pin(async move {
-                const MAX_RETRIES: i64 = 10;
-                let ChunkId {
-                    submission_id,
-                    chunk_index,
-                } = chunk_id;
-                let fields = query!(
-                    "
+    ) -> sqlx::Result<bool> {
+        let failed_permanently = conn
+            .transaction(|tx| {
+                Box::pin(async move {
+                    const MAX_RETRIES: i64 = 10;
+                    let ChunkId {
+                        submission_id,
+                        chunk_index,
+                    } = chunk_id;
+                    let fields = query!(
+                        "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = ? AND chunk_index = ?
         RETURNING retries;
         ",
-                    submission_id,
-                    chunk_index
-                )
-                .fetch_one(&mut **tx)
-                .await?;
-                if fields.retries >= MAX_RETRIES {
-                    crate::common::submission::db::fail_submission_notx(
                         submission_id,
-                        chunk_index,
-                        failure,
-                        tx,
+                        chunk_index
                     )
+                    .fetch_one(&mut **tx)
                     .await?;
+                    if fields.retries >= MAX_RETRIES {
+                        crate::common::submission::db::fail_submission_notx(
+                            submission_id,
+                            chunk_index,
+                            failure,
+                            tx,
+                        )
+                        .await?;
 
-                    counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
-                    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-                    Ok::<_, sqlx::Error>(())
-                } else {
-                    counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
-                    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-                    Ok::<_, sqlx::Error>(())
-                }
+                        counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
+                        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                        Ok::<_, sqlx::Error>(true)
+                    } else {
+                        counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
+                        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                        Ok::<_, sqlx::Error>(false)
+                    }
+                })
             })
-        })
-        .await?;
-
-        Ok(())
+            .await?;
+        Ok(failed_permanently)
     }
 
     #[tracing::instrument]
