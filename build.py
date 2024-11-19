@@ -132,8 +132,8 @@ def cli_test(ctx) -> None:
     When invoked with no subcommand, runs all test suites.
     """
     if ctx.invoked_subcommand is None:
-        run_unit_tests(())
-        run_integration_tests(())
+        for cmd in cli_test.commands.values():
+            ctx.invoke(cmd)
 
 
 @cli_test.command("unit")
