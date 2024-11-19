@@ -9,7 +9,7 @@ use axum_prometheus::metrics::{gauge, histogram};
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
-use crate::{common::chunk::ChunkId, db::DBPools};
+use crate::{common::chunk::ChunkId, config::Config, db::DBPools};
 
 use super::reserver::Reserver;
 
@@ -23,7 +23,8 @@ pub async fn serve_for_tests(
     reservation_expiration: Duration,
 ) {
     let notify_on_insert = Arc::new(Notify::new());
-    let state = ServerState::new(pool, notify_on_insert, cancellation_token.clone(), reservation_expiration);
+    let config: Arc<Config> = Arc::new(Default::default());
+    let state = ServerState::new(pool, notify_on_insert, cancellation_token.clone(), reservation_expiration, &config);
     let router = ServerState::build_router(state);
     let app = Router::new().nest("/consumer", router);
     let listener = tokio::net::TcpListener::bind(&*server_addr)
@@ -45,6 +46,7 @@ pub struct ServerState {
     notify_on_insert: Arc<Notify>,
     cancellation_token: CancellationToken,
     reserver: Reserver<ChunkId, ChunkId>,
+    config: Arc<Config>,
 }
 
 impl ServerState {
@@ -53,6 +55,7 @@ impl ServerState {
         notify_on_insert: Arc<Notify>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
+        config: &Arc<Config>,
     ) -> Self {
         let reserver = Reserver::new(reservation_expiration);
         let (completer, completer_tx) = Completer::new(&pool.write_pool, &reserver);
@@ -63,6 +66,7 @@ impl ServerState {
             notify_on_insert,
             cancellation_token,
             reserver,
+            config: config.clone(),
         }
     }
 

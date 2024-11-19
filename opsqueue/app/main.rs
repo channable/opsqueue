@@ -2,18 +2,18 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
+use opsqueue::config::Config;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
-
-pub const DATABASE_FILENAME: &str = "opsqueue.db";
+use clap::Parser;
 
 #[tokio::main]
 async fn main() {
+    let config = Arc::new(Config::parse());
 
     println!("Starting Opsqueue");
 
-    let server_addr = Box::from("0.0.0.0:3999");
-    let reservation_expiration = Duration::from_secs(60 * 60); // 1 hour
+    let server_addr = Box::from(format!("0.0.0.0:{}", config.port));
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
 
     let cancellation_token = CancellationToken::new();
@@ -28,9 +28,7 @@ async fn main() {
     tracing::info!("Finished setting up tracing subscriber");
 
 
-    let database_filename = DATABASE_FILENAME;
-
-    let db_pool = opsqueue::db::open_and_setup(database_filename).await;
+    let db_pool = opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
 
     opsqueue::prometheus::prefill_special_metrics(&db_pool).await
         .expect("Failed to initialize basic metrics from current contents of the DB");
@@ -38,9 +36,10 @@ async fn main() {
     moro_local::async_scope!(|scope| {
 
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
+            &config,
             &server_addr,
             &db_pool,
-            reservation_expiration,
+            config.reservation_expiration.into(),
             &cancellation_token,
             &app_healthy_flag,
             prometheus_config

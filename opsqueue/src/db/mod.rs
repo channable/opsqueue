@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZero, time::Duration};
 
 use sqlx::{
     migrate::MigrateDatabase, sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous}, Connection, Sqlite, SqliteConnection, SqlitePool
@@ -29,9 +29,9 @@ pub struct DBPools {
 ///
 /// This function should be called on app startup;
 /// it will panic when the database cannot be opened or migrated.
-pub async fn open_and_setup(database_filename: &str) -> DBPools {
+pub async fn open_and_setup(database_filename: &str, max_read_pool_size: NonZero<u32>) -> DBPools {
     ensure_db_exists(database_filename).await;
-    let read_pool = db_connect_read_pool(database_filename).await;
+    let read_pool = db_connect_read_pool(database_filename, max_read_pool_size).await;
     let write_pool = db_connect_write_pool(database_filename).await;
     ensure_db_migrated(&write_pool).await;
     DBPools{read_pool, write_pool}
@@ -51,10 +51,10 @@ pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
         // NOTE: we do _not_ set PRAGMA temp_store = 2 (MEMORY) because as long as the page cache has room those will use memory anyway (and if it is full we need the disk)
 }
 
-pub async fn db_connect_read_pool(database_filename: &str) -> SqlitePool {
+pub async fn db_connect_read_pool(database_filename: &str, max_read_pool_size: NonZero<u32>) -> SqlitePool {
     SqlitePoolOptions::new()
         .min_connections(16)
-        .max_connections(1024)
+        .max_connections(max_read_pool_size.into())
         .connect_with(db_options(database_filename))
         .await
         .expect("Could not connect to sqlite DB")

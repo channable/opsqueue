@@ -8,11 +8,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    common::{chunk::ChunkId, errors::{DatabaseError, E}},
-    consumer::{common::{
+    common::{chunk::ChunkId, errors::{DatabaseError, E}}, consumer::{common::{
         AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
-        SyncServerToClientResponse, HEARTBEAT_INTERVAL, MAX_MISSABLE_HEARTBEATS,
-    }, strategy::Strategy},
+        SyncServerToClientResponse
+    }, strategy::Strategy}
 };
 
 use super::{state::ConsumerState, ServerState};
@@ -32,6 +31,7 @@ pub struct ConsumerConn {
     notify_on_insert: Arc<Notify>,
     heartbeat_interval: tokio::time::Interval,
     heartbeats_missed: usize,
+    max_missable_heartbeats: usize,
     // Channel with which the rest of the server can send messages to this particular client
     tx: UnboundedSender<ChunkId>,
     rx: UnboundedReceiver<ChunkId>,
@@ -42,7 +42,7 @@ pub struct ConsumerConn {
 
 impl ConsumerConn {
     pub fn new(server_state: &Arc<ServerState>, ws_stream: WebSocket) -> Self {
-        let heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        let heartbeat_interval = tokio::time::interval(server_state.config.heartbeat_interval.into());
         let heartbeats_missed = 0;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (tx2, rx2) = tokio::sync::mpsc::unbounded_channel();
@@ -57,6 +57,7 @@ impl ConsumerConn {
             notify_on_insert,
             heartbeat_interval,
             heartbeats_missed,
+            max_missable_heartbeats: server_state.config.max_missable_heartbeats,
             tx,
             rx,
             tx2,
@@ -118,7 +119,7 @@ impl ConsumerConn {
     // Sends the next heartbeat, or exits with an error if too many were already missed.
     async fn beat_heart(&mut self) -> Result<(), ConsumerConnError> {
         tracing::debug!("Sending heartbeat");
-        if self.heartbeats_missed > MAX_MISSABLE_HEARTBEATS {
+        if self.heartbeats_missed > self.max_missable_heartbeats {
             tracing::warn!("Too many heartbeat misses, closing connection.");
             Err(ConsumerConnError::HeartbeatFailure)
         } else {

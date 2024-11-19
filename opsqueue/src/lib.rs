@@ -13,3 +13,6 @@ pub mod server;
 
 #[cfg(feature = "server-logic")]
 pub mod prometheus;
+
+#[cfg(feature = "server-logic")]
+pub mod config;
