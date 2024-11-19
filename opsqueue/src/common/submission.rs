@@ -321,6 +321,28 @@ pub mod db {
         Ok(submission)
     }
 
+    #[tracing::instrument]
+    pub async fn lookup_id_by_prefix(
+        prefix: &str,
+        conn: &mut SqliteConnection,
+    ) -> Result<Option<SubmissionId>, DatabaseError> {
+        let row = query!(
+            r#"
+            SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = ?
+            UNION ALL
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = ?
+            UNION ALL
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = ?
+            "#,
+            prefix,
+            prefix,
+            prefix
+        )
+        .fetch_optional(conn)
+        .await?;
+        Ok(row.map(|row| row.id))
+    }
+
     #[cfg(feature = "server-logic")]
     #[tracing::instrument]
     pub async fn submission_status(

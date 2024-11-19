@@ -170,7 +170,15 @@ pub struct Client {
 
 impl Client {
     pub async fn new(url: &str) -> anyhow::Result<Self> {
-        let endpoint_uri = Uri::from_str(&format!("{url}/consumer"))?;
+        // Ensure that the given URL is always a websocket URL; tungstenite requires this
+        let endpoint_url = if url.starts_with("ws://") || url.starts_with("wss://") {
+            format!("{url}/consumer")
+        } else {
+            format!("ws://{url}/consumer")
+        };
+        let endpoint_uri = Uri::from_str(&endpoint_url)?;
+        log::debug!("Connecting to: {}", endpoint_uri);
+
         let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
         let (websocket_conn, _resp) = tokio_tungstenite::connect_async(endpoint_uri).await?;

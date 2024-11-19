@@ -99,6 +99,31 @@ impl Client {
         })
         .await
     }
+
+    pub async fn lookup_submission_id_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<SubmissionId>, InternalProducerClientError> {
+        (|| async {
+            let endpoint_url = &self.endpoint_url;
+            let resp = self
+                .http_client
+                .get(format!(
+                    "http://{endpoint_url}/submissions/lookup_id_by_prefix/{prefix}"
+                ))
+                .send()
+                .await?;
+            let bytes = resp.bytes().await?;
+            let body = serde_json::from_slice(&bytes)?;
+            Ok(body)
+        })
+        .retry(retry_policy())
+        .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+        })
+        .await
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

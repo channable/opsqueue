@@ -27,10 +27,10 @@ repos:
         pass_filenames: false
       - id: mypy
         name: mypy
-        entry: mypy --strict
+        entry: mypy --strict ./libs/opsqueue_python
+        pass_filenames: false
         language: system
         types: [python]
-        exclude: extra|example\.py
       - id: nixfmt
         name: nixfmt
         entry: nixfmt --strict

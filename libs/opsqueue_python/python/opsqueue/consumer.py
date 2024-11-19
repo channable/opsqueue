@@ -24,6 +24,20 @@ class ConsumerClient:
     __slots__ = "inner"
 
     def __init__(self, opsqueue_url: str, object_store_url: str):
+        """
+        Creates a new consumer client.
+
+        - opsqueue_url: URL at which the opsqueue binary can be reached.
+
+        - object_store_url: URL to reach the object store in which chunks are stored.
+            Use `file:///some/local/path` for local testing.
+            Use `gs://bucket/path` for a GCS bucket.
+            See https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html for details.
+
+        The persistent connection to opsqueue is established lazily on first use.
+
+        Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
+        """
         self.inner = opsqueue_internal.ConsumerClient(opsqueue_url, object_store_url)
 
     def run_each_op(

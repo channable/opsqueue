@@ -26,6 +26,15 @@ impl<'de, T: MayBeZero + Debug + serde::Deserialize<'de>> serde::Deserialize<'de
     }
 }
 
+impl<T> NonZero<T> {
+    pub fn inner(&self) -> &T {
+        &self.0
+    }
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 #[error("Given a zero-value where a non-zero value is expected: {0:?}")]
 pub struct NonZeroIsZero<T>(T);

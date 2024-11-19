@@ -19,7 +19,9 @@ __all__ = ["ProducerClient", "SubmissionId", "SubmissionStatus"]
 class ProducerClient:
     """
     Opsqueue producer client. Allows sending of large collections of operations ('submissions')
-    and waiting for all of them to be done.
+    and waiting for them to be completed.
+
+    Can also be used for basic introspection/debugging/maintenance of an opsqueue queue.
     """
 
     __slots__ = "inner"
@@ -27,6 +29,13 @@ class ProducerClient:
     def __init__(self, opsqueue_url: str, object_store_url: str):
         """
         Creates a new producer client.
+
+        - opsqueue_url: URL at which the opsqueue binary can be reached.
+
+        - object_store_url: URL to reach the object store in which chunks are stored.
+            Use `file:///some/local/path` for local testing.
+            Use `gs://bucket/path` for a GCS bucket.
+            See https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html for details.
 
         Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
         """
@@ -39,7 +48,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
-    ) -> Iterator[bytes]:
+    ) -> Iterator[Any]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
 
@@ -80,7 +89,27 @@ class ProducerClient:
             _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
         )
 
-    def stream_completed_submission(
+    def blocking_stream_completed_submission(
+        self,
+        submission_id: SubmissionId,
+        *,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+    ) -> Iterator[Any]:
+        """
+        Blocks until the submission is completed.
+        Then, returns the operation-results, as an iterator that lazily
+        looks up each of the chunk-results one by one from the object storage.
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
+        - TODO special exception for when the submission fails.
+        """
+        return _unchunk_iterator(
+            self.blocking_stream_completed_submission_chunks(submission_id),
+            serialization_format,
+        )
+
+    def try_stream_completed_submission(
         self,
         submission_id: SubmissionId,
         *,
@@ -91,11 +120,12 @@ class ProducerClient:
         looks up each of the chunk-results one by one from the object storage.
 
         Raises:
-        - TODO `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
+        - `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return _unchunk_iterator(
-            self.inner.stream_completed_submission(submission_id), serialization_format
+            self.try_stream_completed_submission_chunks(submission_id),
+            serialization_format,
         )
 
     def run_submission_chunks(
@@ -112,7 +142,8 @@ class ProducerClient:
         - `InternalProducerClientError` if there is a low-level internal error.
         - TODO special exception for when the submission fails.
         """
-        return self.inner.run_submission_chunks(chunk_contents, metadata=metadata)  # type: ignore[no-any-return]
+        submission_id = self.insert_submission_chunks(chunk_contents, metadata=metadata)
+        return self.blocking_stream_completed_submission_chunks(submission_id)
 
     def insert_submission_chunks(
         self, chunk_contents: Iterable[bytes], *, metadata: None | bytes = None
@@ -124,24 +155,40 @@ class ProducerClient:
         Raises:
         - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
         """
         return self.inner.insert_submission_chunks(
             iter(chunk_contents), metadata=metadata
         )
 
-    def stream_completed_submission_chunks(
+    def blocking_stream_completed_submission_chunks(
         self, submission_id: SubmissionId
     ) -> Iterator[bytes]:
         """
+        Blocks until the submission is completed, and returns an iterator that lazily
+        looks up the chunk-results one by one from the object storage.
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
+        - TODO special exception for when the submission fails.
+        """
+        return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
+
+    def try_stream_completed_submission_chunks(
+        self, submission_id: SubmissionId
+    ) -> Iterator[bytes]:
+        """
+        Non-blocking version of `blocking_stream_completed_submission_chunks`.
+        Will fail with a `SubmissionNotCompletedYet` exception
+        if called before the submission is completed.
+
         Returns the chunk-results of a completed submission, as an iterator that lazily
         looks up the chunk-results one by one from the object storage.
 
         Raises:
-        - TODO `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
+        - `SubmissionNotCompletedYet` if the submission you want to stream is not in the completed state.
         - `InternalProducerClientError` if there is a low-level internal error.
         """
-        return self.inner.stream_completed_submission(submission_id)  # type: ignore[no-any-return]
+        return self.inner.try_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
     def count_submissions(self) -> int:
         """
@@ -172,6 +219,19 @@ class ProducerClient:
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.inner.get_submission_status(submission_id)
+
+    def lookup_submission_id_by_prefix(self, prefix: str) -> SubmissionId | None:
+        """
+        Attempts to find the submission ID if only the prefix of the submission
+        (AKA the path at which the submision's chunks are stored in the object store)
+        is known.
+
+        Returns `None` if no submission could be found.
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
+        """
+        return self.inner.lookup_submission_id_by_prefix(prefix)
 
     def is_completed(self, submission_id: SubmissionId) -> bool:
         raise NotImplementedError

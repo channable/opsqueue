@@ -4,7 +4,7 @@ from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
-client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/")
+client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/multi/")
 
 input_iter = range(0, 1_000_000)
 output_iter = client.run_submission(input_iter, chunk_size=10)

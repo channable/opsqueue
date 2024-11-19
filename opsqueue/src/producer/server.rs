@@ -51,6 +51,10 @@ impl ServerState {
                 get(submissions_count_completed),
             )
             .route("/submissions/count", get(submissions_count))
+            .route(
+                "/submissions/lookup_id_by_prefix/:prefix",
+                get(lookup_submission_id_by_prefix),
+            )
             .route("/submissions/:submission_id", get(submission_status))
             // TODO: Cancel a submission from the producer side
             .with_state(self)
@@ -86,6 +90,15 @@ async fn submission_status(
     let mut conn = state.pool.read_pool.acquire().await?;
     let status = submission::db::submission_status(submission_id, &mut conn).await?;
     Ok(Json(status))
+}
+
+async fn lookup_submission_id_by_prefix(
+    State(state): State<ServerState>,
+    Path(prefix): Path<String>,
+) -> Result<Json<Option<SubmissionId>>, ServerError> {
+    let mut conn = state.pool.read_pool.acquire().await?;
+    let submission_id = submission::db::lookup_id_by_prefix(&prefix, &mut conn).await?;
+    Ok(Json(submission_id))
 }
 
 async fn insert_submission(

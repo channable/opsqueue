@@ -26,7 +26,7 @@ use crate::{
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
-const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(1000);
+const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(5000);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass]
@@ -112,6 +112,25 @@ impl ProducerClient {
         })
     }
 
+    /// Attempts to find the submission ID if only the prefix of the submission
+    /// (AKA the path at which the submision's chunks are stored in the object store)
+    /// is known.
+    pub fn lookup_submission_id_by_prefix(
+        &self,
+        py: Python<'_>,
+        prefix: &str,
+    ) -> CPyResult<Option<SubmissionId>, E<FatalPythonException, InternalProducerClientError>> {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .lookup_submission_id_by_prefix(prefix)
+                    .await
+                    .map(|opt| opt.map(Into::into))
+                    .map_err(|e| CError(R(e)))
+            })
+        })
+    }
+
     #[pyo3(signature = (chunk_contents, metadata=None))]
     pub fn insert_submission_direct(
         &self,
@@ -157,6 +176,7 @@ impl ProducerClient {
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
         py.allow_threads(|| {
             let prefix = uuid::Uuid::new_v4().to_string();
+            log::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = Python::with_gil(|py| {
                 self.block_unless_interrupted(async {
                     let chunk_contents = chunk_contents.bind(py);
@@ -170,11 +190,12 @@ impl ProducerClient {
             })?;
             let chunk_count =
                 NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).map_err(|e| R(L(e)))?;
+            log::debug!("Finished uploading to object store. {prefix} contains {} chunks", u64::from(*chunk_count.inner()));
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
                     chunk_contents: ChunkContents::SeeObjectStorage {
-                        prefix,
+                        prefix: prefix.clone(),
                         count: chunk_count,
                     },
                     metadata,
@@ -182,13 +203,16 @@ impl ProducerClient {
                 self.producer_client
                     .insert_submission(&submission)
                     .await
-                    .map(|submission_id| submission_id.into())
+                    .map(|submission_id| {
+                        log::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
+                        submission_id.into()
+                    })
                     .map_err(|e| R(R(R(e))).into())
             })
         })
     }
 
-    pub fn stream_completed_submission(
+    pub fn try_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
         id: SubmissionId,
@@ -232,17 +256,47 @@ impl ProducerClient {
         ],
     > {
         let submission_id = self.insert_submission_chunks(py, chunk_contents, metadata)?;
+        let res = self
+            .blocking_stream_completed_submission_chunks(py, submission_id)
+            .map_err(|CError(e)| match e {
+                L(e) => CError(L(e)),
+                R(e) => CError(R(R(R(e)))),
+            })?;
+        Ok(res)
+    }
+
+    /// Blocks (and short-polls) until the submission is completed.
+    ///
+    /// We start with a small short-polling interval
+    /// to reduce the latency of tiny submissions.
+    /// This interval is then doubled for each subsequent poll,
+    /// until we check every few seconds.
+    #[allow(clippy::type_complexity)]
+    pub fn blocking_stream_completed_submission_chunks(
+        &self,
+        py: Python<'_>,
+        submission_id: SubmissionId,
+    ) -> CPyResult<PyChunksIter, E![FatalPythonException, InternalProducerClientError]> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
+                let mut interval = Duration::from_millis(10);
                 loop {
                     if let Some(py_stream) = self
                         .maybe_stream_completed_submission(submission_id)
                         .await
-                        .map_err(|CError(e)| CError(R(R(R(e)))))?
+                        .map_err(|CError(e)| CError(R(e)))?
                     {
                         return Ok(py_stream);
                     }
-                    tokio::time::sleep(SUBMISSION_POLLING_INTERVAL).await;
+                    log::debug!(
+                        "Submission {} not completed yet. Sleeping for {interval:?}...",
+                        submission_id.id
+                    );
+                    tokio::time::sleep(interval).await;
+                    if interval < SUBMISSION_POLLING_INTERVAL {
+                        interval *= 2;
+                        interval = interval.min(SUBMISSION_POLLING_INTERVAL);
+                    }
                 }
             })
         })
@@ -272,6 +326,10 @@ impl ProducerClient {
     ) -> CPyResult<Option<PyChunksIter>, InternalProducerClientError> {
         match self.producer_client.get_submission(id.into()).await? {
             Some(submission::SubmissionStatus::Completed(submission)) => {
+                log::debug!(
+                    "Submission {} completed! Streaming result-chunks from object store",
+                    id.id
+                );
                 let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
                     PyChunksIter::new(self, prefix, submission.chunks_total.into()).await;
