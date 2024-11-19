@@ -159,7 +159,7 @@ use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
 
-use crate::db::SqliteConnectionExt;
+use sqlx::Connection;
 
 
 impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
@@ -219,7 +219,7 @@ pub async fn complete_chunk(
     conn: &mut SqliteConnection,
 ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
 
-    let res = conn.immediate_write_transaction(|tx| {
+    let res = conn.transaction(|tx| {
         Box::pin(async move {
             complete_chunk_raw(chunk_id, output_content, tx).await?;
             crate::common::submission::db::maybe_complete_submission(chunk_id.submission_id, tx)
@@ -290,7 +290,7 @@ pub async fn retry_or_fail_chunk(
     failure: String,
     conn: &mut SqliteConnection,
 ) -> sqlx::Result<()> {
-    conn.immediate_write_transaction(|tx| {
+    conn.transaction(|tx| {
         Box::pin(async move {
             const MAX_RETRIES: i64 = 10;
             let ChunkId{submission_id, chunk_index} = chunk_id;
@@ -485,7 +485,7 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 pub mod test {
     use crate::common::submission::{Submission, SubmissionStatus};
     use crate::common::submission::db::insert_submission_raw;
-    use crate::db::SqliteConnectionExt;
+    use sqlx::Connection;
 
     use super::*;
     use super::db::*;
@@ -529,7 +529,7 @@ pub mod test {
 
         insert_submission_raw(submission, &mut *conn).await.unwrap();
 
-        conn.immediate_write_transaction(|tx| Box::pin(async move {
+        conn.transaction(|tx| Box::pin(async move {
             complete_chunk_raw(
                 (chunk.submission_id, chunk.chunk_index).into(),
                 Some(vec![6, 7, 8, 9]),

@@ -18,6 +18,7 @@ use crate::{
     consumer::reserver::Reserver,
 };
 
+use super::CompleterMessage;
 use super::ServerState;
 use crate::common::errors::{
     E, IncorrectUsage, LimitIsZero,
@@ -34,6 +35,7 @@ pub struct ConsumerState {
     reserver: Reserver<ChunkId, ChunkId>,
     // The following are the consumer-specific chunks that are currently reserved.
     reservations: Arc<Mutex<HashSet<ChunkId>>>,
+    server_state: Arc<ServerState>,
 }
 
 impl Drop for ConsumerState {
@@ -49,11 +51,12 @@ impl Drop for ConsumerState {
 }
 
 impl ConsumerState {
-    pub fn new(server_state: &ServerState) -> Self {
+    pub fn new(server_state: &Arc<ServerState>) -> Self {
         Self {
-            pool: server_state.pool.clone(),
+            pool: server_state.pool.read_pool.clone(),
             reserver: server_state.reserver.clone(),
             reservations: Arc::new(Mutex::new(HashSet::new())),
+            server_state: server_state.clone(),
         }
     }
 
@@ -127,55 +130,59 @@ impl ConsumerState {
         &mut self,
         id: ChunkId,
         output_content: chunk::Content,
-    ) -> Result<(), DatabaseError> {
-        let start = tokio::time::Instant::now();
+    ) {
+        // Only possible error indicates sender is closed, which means we're shutting down
+        let _ = self.server_state.completer_tx.send(CompleterMessage::Complete{id, output_content, reservations: self.reservations.clone()}).await;
+        // let start = tokio::time::Instant::now();
 
-        let pool = self.pool.clone();
-        let reservations = self.reservations.clone();
-        let reserver = self.reserver.clone();
-        tokio::spawn(async move {
-            let res: Result<(), anyhow::Error> = async move {
-                let mut conn = pool.acquire().await?;
-                chunk::db::complete_chunk(id, output_content, &mut conn).await?;
-                reservations.lock().expect("No poison").remove(&id);
-                // NOTE: Even in the unlikely event the query fails,
-                // we want the chunk to be un-reserved
-                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) }
-                Ok(())
-            }.await;
+        // let pool = self.pool.clone();
+        // let reservations = self.reservations.clone();
+        // let reserver = self.reserver.clone();
+        // tokio::spawn(async move {
+        //     let res: Result<(), anyhow::Error> = async move {
+        //         let mut conn = pool.acquire().await?;
+        //         chunk::db::complete_chunk(id, output_content, &mut conn).await?;
+        //         reservations.lock().expect("No poison").remove(&id);
+        //         // NOTE: Even in the unlikely event the query fails,
+        //         // we want the chunk to be un-reserved
+        //         if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) }
+        //         Ok(())
+        //     }.await;
 
-            if res.is_err() {
-                tracing::error!("Failed to complete chunk: {:?}", res);
-            }
-        });
+        //     if res.is_err() {
+        //         tracing::error!("Failed to complete chunk: {:?}", res);
+        //     }
+        // });
 
-        histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
-        Ok(())
+        // histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
+        // Ok(())
     }
 
-    pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) -> Result<(), DatabaseError> {
-        let start = tokio::time::Instant::now();
+    pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) {
+        let _ = self.server_state.completer_tx.send(CompleterMessage::Fail{id, failure, reservations: self.reservations.clone()}).await;
 
-        let pool = self.pool.clone();
-        let reservations = self.reservations.clone();
-        let reserver = self.reserver.clone();
-        tokio::spawn(async move {
-            let res: Result<(), anyhow::Error> = async move {
-                let mut conn = pool.acquire().await?;
-                chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await?;
-                reservations.lock().expect("No poison").remove(&id);
-                // NOTE: Even in the unlikely event the query fails,
-                // we want the chunk to be un-reserved
-                if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) }
-                Ok(())
-            }.await;
+        // let start = tokio::time::Instant::now();
 
-            if res.is_err() {
-                tracing::error!("Failed to fail chunk: {:?}", res);
-            }
-        });
+        // let pool = self.pool.clone();
+        // let reservations = self.reservations.clone();
+        // let reserver = self.reserver.clone();
+        // tokio::spawn(async move {
+        //     let res: Result<(), anyhow::Error> = async move {
+        //         let mut conn = pool.acquire().await?;
+        //         chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await?;
+        //         reservations.lock().expect("No poison").remove(&id);
+        //         // NOTE: Even in the unlikely event the query fails,
+        //         // we want the chunk to be un-reserved
+        //         if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) }
+        //         Ok(())
+        //     }.await;
 
-        histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
-        Ok(())
+        //     if res.is_err() {
+        //         tracing::error!("Failed to fail chunk: {:?}", res);
+        //     }
+        // });
+
+        // histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
+        // Ok(())
     }
 }

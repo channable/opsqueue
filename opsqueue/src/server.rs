@@ -6,11 +6,11 @@ use axum::{routing::get, Router};
 use backon::{BackoffBuilder, FibonacciBuilder};
 use http::StatusCode;
 
-use sqlx::sqlite::SqlitePool;
 
 use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use crate::db::DBPools;
 
 // TOOD: Set max retries to `None`;
 // will require either writing our own Backoff (iterator)
@@ -27,7 +27,7 @@ fn retry_policy() -> impl BackoffBuilder {
 #[cfg(feature = "server-logic")]
 pub async fn serve_producer_and_consumer(
     server_addr: &str,
-    pool: &SqlitePool,
+    pool: &DBPools,
     reservation_expiration: Duration,
     cancellation_token: &CancellationToken,
     app_healthy_flag: &Arc<AtomicBool>,
@@ -58,7 +58,7 @@ pub async fn serve_producer_and_consumer(
 
 #[cfg(feature = "server-logic")]
 pub fn build_router(
-    pool: SqlitePool,
+    pool: DBPools,
     reservation_expiration: Duration,
     cancellation_token: CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
@@ -73,7 +73,7 @@ pub fn build_router(
         cancellation_token.clone(),
         reservation_expiration,
     )
-    .run_pending_tasks_periodically()
+    .run_background()
     .build_router();
     let producer_routes = crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
 
@@ -116,13 +116,14 @@ async fn ping(app_heatlhy_flag: Arc<AtomicBool>) -> (StatusCode, &'static str) {
 #[cfg(feature = "server-logic")]
 pub async fn app_watchdog(
     app_healthy_flag: Arc<AtomicBool>,
-    pool: &SqlitePool,
+    pool: &DBPools,
     cancellation_token: CancellationToken,
 ) {
+
     loop {
         // For now this is just a single check, but in the future
         // we might have many checks; we first gather them and then write to the atomic bool once.
-        let is_app_healthy = crate::db::is_db_healthy(pool).await;
+        let is_app_healthy = crate::db::is_db_healthy(&pool.write_pool).await;
         app_healthy_flag.store(is_app_healthy, std::sync::atomic::Ordering::Relaxed);
 
         select! {

@@ -186,9 +186,8 @@ impl Submission {
 #[cfg(feature = "server-logic")]
 pub mod db {
 use crate::common::errors::{DatabaseError, E, SubmissionNotFound};
-use crate::db::SqliteConnectionExt;
 #[cfg(feature = "server-logic")]
-use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor};
+use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor, Connection};
 
 #[cfg(feature = "server-logic")]
 use axum_prometheus::metrics::{counter, histogram};
@@ -266,7 +265,7 @@ where
     let chunks_total = submission.chunks_total.into();
     tracing::debug!("Inserting submission {}", submission.id);
 
-    let res = conn.immediate_write_transaction(|tx| {
+    let res = conn.transaction(|tx| {
         Box::pin(async move {
             insert_submission_raw(submission, &mut **tx).await?;
             super::chunk::db::insert_many_chunks(chunks, &mut **tx).await?;
@@ -393,19 +392,19 @@ pub async fn maybe_complete_submission(
     id: SubmissionId,
     conn: &mut SqliteConnection,
 ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
-    // conn.immediate_write_transaction(|tx| {
-        // Box::pin(async move {
-            let submission = get_submission(id, &mut *conn).await?;
+    conn.transaction(|tx| {
+        Box::pin(async move {
+            let submission = get_submission(id, &mut **tx).await?;
 
             if submission.chunks_done == submission.chunks_total {
-                complete_submission_raw(id, &mut *conn).await?;
+                complete_submission_raw(id, &mut **tx).await?;
                 Ok(true)
             } else {
                 Ok(false)
             }
-        // })
-    // })
-    // .await
+        })
+    })
+    .await
 }
 
 #[cfg(feature = "server-logic")]
@@ -543,7 +542,7 @@ pub async fn cleanup_old(
     conn: &mut SqliteConnection,
     older_than: DateTime<Utc>,
 ) -> sqlx::Result<()> {
-    conn.immediate_write_transaction(|tx| {
+    conn.transaction(|tx| {
         Box::pin(async move {
             query!(
                 "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",

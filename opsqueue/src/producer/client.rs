@@ -112,10 +112,12 @@ pub enum InternalProducerClientError {
 impl InternalProducerClientError {
     pub fn is_ephemeral(&self) -> bool {
         match self {
+            // We consider this ephemeral as on ungraceful queue shutdown/restart
+            // we could have received an _incomplete_ response
+            Self::ResponseDecodingError(_) => true,
             // NOTE: reqwest doesn't make this very easy as it has a single error typed used for _everything_
             // Maybe a different HTTP client library is nicer in this regard?
-            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout(),
-            Self::ResponseDecodingError(_) => false,
+            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout() || inner.is_decode(),
         }
     }
 }
@@ -126,15 +128,16 @@ mod tests {
     use ux_serde::u63;
 
     use crate::{
-        common::submission::{self, SubmissionStatus},
-        producer::common::ChunkContents,
+        common::submission::{self, SubmissionStatus}, db::DBPools, producer::common::ChunkContents
     };
 
     use super::*;
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
+        let db_pools = DBPools{read_pool: pool.clone(), write_pool: pool.clone() };
+
         tokio::spawn(
-            super::super::server::serve_for_tests(pool.clone(), url.into()),
+            super::super::server::serve_for_tests(db_pools, url.into()),
         );
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
         tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime

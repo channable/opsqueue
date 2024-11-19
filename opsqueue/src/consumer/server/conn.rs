@@ -41,7 +41,7 @@ pub struct ConsumerConn {
 }
 
 impl ConsumerConn {
-    pub fn new(server_state: &ServerState, ws_stream: WebSocket) -> Self {
+    pub fn new(server_state: &Arc<ServerState>, ws_stream: WebSocket) -> Self {
         let heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
         let heartbeats_missed = 0;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -195,12 +195,12 @@ impl ConsumerConn {
             CompleteChunk { id, output_content } => {
                 self.consumer_state
                     .complete_chunk(id, output_content)
-                    .await
-                    .map_err(anyhow::Error::from)?;
+                    .await;
+                    // .map_err(anyhow::Error::from)?;
                 None
             }
             FailChunk { id, failure } => {
-                self.consumer_state.fail_chunk(id, failure).await?;
+                self.consumer_state.fail_chunk(id, failure).await;
                 None
             }
         };
