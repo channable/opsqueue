@@ -3,21 +3,31 @@ use std::{sync::Arc, time::Duration};
 use axum::extract::ws::{Message, WebSocket};
 use tokio::{
     select,
-    sync::{mpsc::{UnboundedReceiver, UnboundedSender}, Notify},
+    sync::{
+        mpsc::{UnboundedReceiver, UnboundedSender},
+        Notify,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    common::{chunk::ChunkId, errors::{DatabaseError, E}}, consumer::{common::{
-        AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
-        SyncServerToClientResponse
-    }, strategy::Strategy}
+    common::{
+        chunk::ChunkId,
+        errors::{DatabaseError, E},
+    },
+    consumer::{
+        common::{
+            AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
+            SyncServerToClientResponse,
+        },
+        strategy::Strategy,
+    },
 };
 
 use super::{state::ConsumerState, ServerState};
 
 #[derive(Debug, Clone)]
-pub struct RetryReservation{
+pub struct RetryReservation {
     nonce: usize,
     max: usize,
     strategy: Strategy,
@@ -42,7 +52,8 @@ pub struct ConsumerConn {
 
 impl ConsumerConn {
     pub fn new(server_state: &Arc<ServerState>, ws_stream: WebSocket) -> Self {
-        let heartbeat_interval = tokio::time::interval(server_state.config.heartbeat_interval.into());
+        let heartbeat_interval =
+            tokio::time::interval(server_state.config.heartbeat_interval.into());
         let heartbeats_missed = 0;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (tx2, rx2) = tokio::sync::mpsc::unbounded_channel();
@@ -176,28 +187,33 @@ impl ConsumerConn {
                             // this is not the client's fault but _our_ fault.
                             // Therefore, we send the client an empty vec back, and log the error.
                             E::L(DatabaseError(_)) => Some(ChunksReserved(Ok(Vec::new()))),
-                            E::R(incorrect_usage) => Some(ChunksReserved(Err(incorrect_usage)))
+                            E::R(incorrect_usage) => Some(ChunksReserved(Err(incorrect_usage))),
                         }
-                    },
+                    }
                     Ok(vals) if !vals.is_empty() => Some(ChunksReserved(Ok(vals))),
                     Ok(_) => {
                         // No work to do right now. Retry when new work is inserted.
-                        tracing::debug!("No work to do for {} / {max} / {strategy:?}, retrying later", msg.nonce);
+                        tracing::debug!(
+                            "No work to do for {} / {max} / {strategy:?}, retrying later",
+                            msg.nonce
+                        );
                         let notifier = self.notify_on_insert.clone();
                         let tx2 = self.tx2.clone();
                         tokio::spawn(async move {
                             notifier.notified().await;
-                            let _ = tx2.send(RetryReservation{nonce: msg.nonce, max, strategy});
+                            let _ = tx2.send(RetryReservation {
+                                nonce: msg.nonce,
+                                max,
+                                strategy,
+                            });
                         });
                         None
                     }
                 }
             }
             CompleteChunk { id, output_content } => {
-                self.consumer_state
-                    .complete_chunk(id, output_content)
-                    .await;
-                    // .map_err(anyhow::Error::from)?;
+                self.consumer_state.complete_chunk(id, output_content).await;
+                // .map_err(anyhow::Error::from)?;
                 None
             }
             FailChunk { id, failure } => {

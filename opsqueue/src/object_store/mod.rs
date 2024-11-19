@@ -155,7 +155,8 @@ impl ObjectStoreClient {
     ) -> Result<(), ChunkStorageError> {
         use ChunkStorageError::*;
         let path = self.chunk_path(submission_prefix, chunk_index, chunk_type);
-        self.0.object_store
+        self.0
+            .object_store
             .put(&path, content.into())
             .await
             .map_err(|e| ObjectStoreError {
@@ -203,9 +204,10 @@ impl ObjectStoreClient {
         let initial_state = (self.clone(), submission_prefix, u63::new(0));
         stream::unfold(initial_state, move |(client, prefix, index)| async move {
             if index >= chunk_count {
-                return None
+                return None;
             }
-            let element = client.retrieve_chunk(&prefix, index.into(), chunk_type)
+            let element = client
+                .retrieve_chunk(&prefix, index.into(), chunk_type)
                 .await;
             let new_state = (client, prefix, index + u63::new(1));
 

@@ -9,7 +9,7 @@ use super::{chunk::ChunkId, submission::SubmissionId};
 // #[error("Low-level database error: {0:?}")]
 // pub struct DatabaseError(#[from] pub serde_error::Error);
 #[cfg_attr(feature = "server-logic", derive(Error, Debug))]
-#[cfg_attr(feature = "server-logic",error("Low-level database error: {0:?}"))]
+#[cfg_attr(feature = "server-logic", error("Low-level database error: {0:?}"))]
 #[cfg(feature = "server-logic")]
 pub struct DatabaseError(#[from] pub sqlx::Error);
 
@@ -31,7 +31,6 @@ pub struct SubmissionNotFound(pub SubmissionId);
 #[derive(Error, Debug)]
 #[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]
 pub struct UnexpectedOpsqueueConsumerServerResponse(pub SyncServerToClientResponse);
-
 
 /// We roll our own version of `either::E` so that we're not limited by the orphan rule.
 ///
@@ -121,4 +120,4 @@ pub struct LimitIsZero();
 /// (`SubmissionId`, `ChunkIndex`, etc.)
 #[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
 #[error("out of range integral type conversion attempted")]
-pub struct TryFromIntError(pub(crate)());
+pub struct TryFromIntError(pub(crate) ());

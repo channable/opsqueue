@@ -4,9 +4,15 @@ use std::time::Duration;
 
 use futures::{stream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::errors::{E::{self, L, R}, IncorrectUsage, LimitIsZero},
+    common::errors::{
+        IncorrectUsage, LimitIsZero,
+        E::{self, L, R},
+    },
     consumer::client::InternalConsumerClientError,
-    object_store::{ChunkRetrievalError, ChunkStorageError, ChunkType, NewObjectStoreClientError, ObjectStoreClient},
+    object_store::{
+        ChunkRetrievalError, ChunkStorageError, ChunkType, NewObjectStoreClientError,
+        ObjectStoreClient,
+    },
     E,
 };
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
@@ -77,12 +83,14 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> CPyResult<(),
+    ) -> CPyResult<
+        (),
         E![
             FatalPythonException,
             ChunkStorageError,
-            InternalConsumerClientError]
-        > {
+            InternalConsumerClientError
+        ],
+    > {
         py.allow_threads(|| {
             self.complete_chunk_gilless(
                 submission_id,
@@ -205,7 +213,6 @@ impl ConsumerClient {
     }
 }
 
-
 // What follows are internal helper functions
 // that are not available directly from Python
 impl ConsumerClient {
@@ -238,10 +245,7 @@ impl ConsumerClient {
         Vec<Chunk>,
         E<
             FatalPythonException,
-            E<
-                ChunkRetrievalError,
-                E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-            >,
+            E<ChunkRetrievalError, E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>,
         >,
     > {
         // TODO: Currently we do short-polling here if there are no chunks available.
@@ -270,26 +274,36 @@ impl ConsumerClient {
         submission_prefix: Option<String>,
         chunk_index: ChunkIndex,
         output_content: Vec<u8>,
-    ) -> CPyResult<(),
+    ) -> CPyResult<
+        (),
         E![
             FatalPythonException,
             ChunkStorageError,
-            InternalConsumerClientError]
-        >
-        {
+            InternalConsumerClientError
+        ],
+    > {
         let chunk_id = (submission_id.into(), chunk_index.into()).into();
         self.block_unless_interrupted(async move {
             match submission_prefix {
-                None => {
-                    self.client
-                        .complete_chunk(chunk_id, Some(output_content))
-                        .await.map_err(|e| CError(R(R(e))))
-                }
+                None => self
+                    .client
+                    .complete_chunk(chunk_id, Some(output_content))
+                    .await
+                    .map_err(|e| CError(R(R(e)))),
                 Some(prefix) => {
                     self.object_store_client
-                        .store_chunk(&prefix, chunk_id.chunk_index, ChunkType::Output, output_content)
-                        .await.map_err(|e| CError(R(L(e))))?;
-                    self.client.complete_chunk(chunk_id, None).await.map_err(|e| CError(R(R(e))))
+                        .store_chunk(
+                            &prefix,
+                            chunk_id.chunk_index,
+                            ChunkType::Output,
+                            output_content,
+                        )
+                        .await
+                        .map_err(|e| CError(R(L(e))))?;
+                    self.client
+                        .complete_chunk(chunk_id, None)
+                        .await
+                        .map_err(|e| CError(R(R(e))))
                 }
             }
         })
@@ -318,10 +332,7 @@ impl ConsumerClient {
         strategy: opsqueue::consumer::strategy::Strategy,
     ) -> Result<
         Vec<Chunk>,
-        E<
-            ChunkRetrievalError,
-            E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-        >,
+        E<ChunkRetrievalError, E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>,
     > {
         let chunks = self.client.reserve_chunks(max, strategy).await?;
         stream::iter(chunks)

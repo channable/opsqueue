@@ -36,7 +36,6 @@ pub struct Config {
     #[arg(long, default_value = "10 minutes")]
     pub reservation_expiration: humantime::Duration,
 
-
     /// Maximum number of SQLite connections to keep in memory for reading.
     /// Connections will only be opened when needed.
     ///
@@ -73,10 +72,19 @@ impl Default for Config {
         use std::str::FromStr;
         let port = 3999;
         let database_filename = "opsqueue.db".to_string();
-        let reservation_expiration = humantime::Duration::from_str("10 minutes").expect("valid humantime");
+        let reservation_expiration =
+            humantime::Duration::from_str("10 minutes").expect("valid humantime");
         let max_read_pool_size = NonZero::new(256).unwrap();
-        let heartbeat_interval = humantime::Duration::from_str("10 seconds").expect("valid humantime");
+        let heartbeat_interval =
+            humantime::Duration::from_str("10 seconds").expect("valid humantime");
         let max_missable_heartbeats = 3;
-        Config{port, database_filename, reservation_expiration, max_read_pool_size, heartbeat_interval, max_missable_heartbeats}
+        Config {
+            port,
+            database_filename,
+            reservation_expiration,
+            max_read_pool_size,
+            heartbeat_interval,
+            max_missable_heartbeats,
+        }
     }
 }

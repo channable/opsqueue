@@ -1,4 +1,9 @@
-use axum_prometheus::{metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit}, metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
+use axum_prometheus::{
+    metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit},
+    metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
+    utils::SECONDS_DURATION_BUCKETS,
+    GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS,
+};
 
 use crate::db::DBPools;
 
@@ -23,20 +28,45 @@ pub const RESERVER_RESERVATIONS_FAILED_COUNTER: &str = "reserver_reservations_fa
 pub const RESERVER_CHUNKS_RESERVED_GAUGE: &str = "reserver_chunks_reserved_count";
 
 pub const CONSUMERS_CONNECTED_GAUGE: &str = "consumers_connected_count";
-pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str = "consumer_fetch_and_reserve_chunks_duration_seconds";
+pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str =
+    "consumer_fetch_and_reserve_chunks_duration_seconds";
 pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
 pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
 
 pub fn describe_metrics() {
     describe_counter!(SUBMISSIONS_TOTAL_COUNTER, Unit::Count, "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system");
-    describe_counter!(SUBMISSIONS_COMPLETED_COUNTER, Unit::Count, "Number of submissions completed successfully");
-    describe_counter!(SUBMISSIONS_FAILED_COUNTER, Unit::Count, "Number of submissions failed permanently");
+    describe_counter!(
+        SUBMISSIONS_COMPLETED_COUNTER,
+        Unit::Count,
+        "Number of submissions completed successfully"
+    );
+    describe_counter!(
+        SUBMISSIONS_FAILED_COUNTER,
+        Unit::Count,
+        "Number of submissions failed permanently"
+    );
     describe_histogram!(SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its final chunk being completed. Does not count failed submissions.");
 
-    describe_counter!(CHUNKS_COMPLETED_COUNTER, Unit::Count, "Number of chunks completed");
-    describe_counter!(CHUNKS_FAILED_COUNTER, Unit::Count, "Number of chunks failed permanently (retries exhausted). Does not include skipped chunks");
-    describe_counter!(CHUNKS_RETRIED_COUNTER, Unit::Count, "Number of chunks that failed temporarily and will be retried");
-    describe_counter!(CHUNKS_SKIPPED_COUNTER, Unit::Count, "Number of chunks skipped (because another chunk in the submission failed)");
+    describe_counter!(
+        CHUNKS_COMPLETED_COUNTER,
+        Unit::Count,
+        "Number of chunks completed"
+    );
+    describe_counter!(
+        CHUNKS_FAILED_COUNTER,
+        Unit::Count,
+        "Number of chunks failed permanently (retries exhausted). Does not include skipped chunks"
+    );
+    describe_counter!(
+        CHUNKS_RETRIED_COUNTER,
+        Unit::Count,
+        "Number of chunks that failed temporarily and will be retried"
+    );
+    describe_counter!(
+        CHUNKS_SKIPPED_COUNTER,
+        Unit::Count,
+        "Number of chunks skipped (because another chunk in the submission failed)"
+    );
     describe_counter!(CHUNKS_TOTAL_COUNTER, Unit::Count, "Total count of chunks (in backlog + completed + failed), i.e. total that ever entered the system");
     // We could calculate the backlog size from TOTAL - COMPLETED - FAILED - SKIPPED
     // but since it will commonly be used for checking whether we should autoscale,
@@ -47,30 +77,45 @@ pub fn describe_metrics() {
 
     describe_gauge!(RESERVER_CHUNKS_RESERVED_GAUGE, Unit::Count, "Number of chunks currently reserved by the reserver, i.e. being worked on by the consumers");
 
-    describe_gauge!(CONSUMERS_CONNECTED_GAUGE, Unit::Count, "Number of healthy websocket connections between the system and consumers");
+    describe_gauge!(
+        CONSUMERS_CONNECTED_GAUGE,
+        Unit::Count,
+        "Number of healthy websocket connections between the system and consumers"
+    );
     describe_histogram!(CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM, Unit::Seconds, "Time spent by Opsqueue (SQLite + reserver) to reserve `limit` chunks for a consumer using strategy `strategy`");
-    describe_histogram!(CONSUMER_COMPLETE_CHUNK_DURATION, Unit::Seconds, "Time spent by Opsqueue to mark a given chunk as completed");
-    describe_histogram!(CONSUMER_FAIL_CHUNK_DURATION, Unit::Seconds, "Time spent by Opsqueue to mark a given chunk as failed");
-
+    describe_histogram!(
+        CONSUMER_COMPLETE_CHUNK_DURATION,
+        Unit::Seconds,
+        "Time spent by Opsqueue to mark a given chunk as completed"
+    );
+    describe_histogram!(
+        CONSUMER_FAIL_CHUNK_DURATION,
+        Unit::Seconds,
+        "Time spent by Opsqueue to mark a given chunk as failed"
+    );
 }
 
-
-pub type PrometheusConfig = (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle);
+pub type PrometheusConfig = (
+    GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>,
+    PrometheusHandle,
+);
 
 #[must_use]
-pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>, PrometheusHandle) {
-
+pub fn setup_prometheus() -> (
+    GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>,
+    PrometheusHandle,
+) {
     // PrometheusMetricLayer::pair()
     let metric_layer = PrometheusMetricLayer::new();
     // This is the default if you use `PrometheusMetricLayer::pair`.
     let metric_handle = PrometheusBuilder::new()
-       .set_buckets_for_metric(
-           Matcher::Full(AXUM_HTTP_REQUESTS_DURATION_SECONDS.to_string()),
-           SECONDS_DURATION_BUCKETS,
-       )
-       .expect("Building Prometheus failed")
-       .install_recorder()
-       .expect("Installing global Prometheus recorder failed");
+        .set_buckets_for_metric(
+            Matcher::Full(AXUM_HTTP_REQUESTS_DURATION_SECONDS.to_string()),
+            SECONDS_DURATION_BUCKETS,
+        )
+        .expect("Building Prometheus failed")
+        .install_recorder()
+        .expect("Installing global Prometheus recorder failed");
 
     describe_metrics();
 
@@ -82,7 +127,9 @@ pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum
 /// Instead of asking the DB for a count very frequently, we only fetch the count at startup
 /// and keep it up-to-date over the lifespan of the application
 pub async fn prefill_special_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
-    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&db_pool.read_pool).await?.into();
+    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&db_pool.read_pool)
+        .await?
+        .into();
     gauge!(CHUNKS_BACKLOG_GAUGE).set(chunk_count as f64);
 
     Ok(())

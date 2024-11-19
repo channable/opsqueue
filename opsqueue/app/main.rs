@@ -1,11 +1,11 @@
+use clap::Parser;
+use opsqueue::config::Config;
 use std::{
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
-use opsqueue::config::Config;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
-use clap::Parser;
 
 #[tokio::main]
 async fn main() {
@@ -20,21 +20,20 @@ async fn main() {
 
     // Set up Prometheus early because metrics that try to register before it is set up
     // will not be seen otherwise
-    let prometheus_config  = opsqueue::prometheus::setup_prometheus();
-
+    let prometheus_config = opsqueue::prometheus::setup_prometheus();
 
     let _ = setup_tracing();
 
     tracing::info!("Finished setting up tracing subscriber");
 
+    let db_pool =
+        opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
 
-    let db_pool = opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
-
-    opsqueue::prometheus::prefill_special_metrics(&db_pool).await
+    opsqueue::prometheus::prefill_special_metrics(&db_pool)
+        .await
         .expect("Failed to initialize basic metrics from current contents of the DB");
 
     moro_local::async_scope!(|scope| {
-
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
             &config,
             &server_addr,
@@ -42,7 +41,7 @@ async fn main() {
             config.reservation_expiration.into(),
             &cancellation_token,
             &app_healthy_flag,
-            prometheus_config
+            prometheus_config,
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
@@ -64,7 +63,8 @@ async fn main() {
         // Gives things a little time to shut down, but not much :-)
         tokio::time::sleep(Duration::from_millis(500)).await;
         scope.terminate::<()>(()).await;
-    }).await;
+    })
+    .await;
 
     println!();
     println!("Opsqueue Stopped");

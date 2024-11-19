@@ -1,9 +1,7 @@
-
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
 use ux_serde::u63;
-
 
 use super::errors::TryFromIntError;
 use super::submission::SubmissionId;
@@ -18,9 +16,7 @@ pub struct ChunkIndex(u63);
 
 impl std::fmt::Debug for ChunkIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("ChunkIndex")
-            .field(&self.0)
-            .finish()
+        f.debug_tuple("ChunkIndex").field(&self.0).finish()
     }
 }
 
@@ -57,7 +53,6 @@ impl std::fmt::Display for ChunkIndex {
     }
 }
 
-
 impl From<ChunkIndex> for u63 {
     fn from(value: ChunkIndex) -> Self {
         value.0
@@ -69,7 +64,6 @@ impl From<u63> for ChunkIndex {
         ChunkIndex(value)
     }
 }
-
 
 impl From<ChunkIndex> for u64 {
     fn from(value: ChunkIndex) -> Self {
@@ -102,16 +96,21 @@ impl TryFrom<usize> for ChunkIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
-pub struct ChunkId{
+pub struct ChunkId {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
 }
 
 impl From<(SubmissionId, ChunkIndex)> for ChunkId {
     fn from(value: (SubmissionId, ChunkIndex)) -> Self {
-        Self{submission_id: value.0, chunk_index: value.1}
+        Self {
+            submission_id: value.0,
+            chunk_index: value.1,
+        }
     }
 }
 
@@ -153,101 +152,109 @@ impl Chunk {
 #[cfg(feature = "server-logic")]
 pub mod db {
     use super::*;
-use std::ops::{Deref, DerefMut};
-use axum_prometheus::metrics::{counter, gauge};
-use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
-use sqlx::{query_as, SqliteConnection};
-use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
+    use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
+    use axum_prometheus::metrics::{counter, gauge};
+    use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
+    use sqlx::{query_as, SqliteConnection};
+    use std::ops::{Deref, DerefMut};
 
-use sqlx::Connection;
+    use sqlx::Connection;
 
-
-impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
-    fn encode_by_ref(
+    impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
+        fn encode_by_ref(
             &self,
             buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
-    }
+            <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
+        }
 
-    fn encode(self, buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
+        fn encode(
+            self,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
         where
-            Self: Sized, {
-        <i64 as sqlx::Encode<'q, Sqlite>>::encode(i64::from(self), buf)
+            Self: Sized,
+        {
+            <i64 as sqlx::Encode<'q, Sqlite>>::encode(i64::from(self), buf)
+        }
     }
-}
 
-impl sqlx::Type<Sqlite> for ChunkIndex {
-    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
-        <u64 as sqlx::Type<Sqlite>>::compatible(ty)
+    impl sqlx::Type<Sqlite> for ChunkIndex {
+        fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
+            <u64 as sqlx::Type<Sqlite>>::compatible(ty)
+        }
+        fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
+            <u64 as sqlx::Type<Sqlite>>::type_info()
+        }
     }
-    fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
-        <u64 as sqlx::Type<Sqlite>>::type_info()
+
+    impl<'q> sqlx::Decode<'q, Sqlite> for ChunkIndex {
+        fn decode(
+            value: <Sqlite as sqlx::Database>::ValueRef<'q>,
+        ) -> Result<Self, sqlx::error::BoxDynError> {
+            let inner = <u64 as sqlx::Decode<'q, Sqlite>>::decode(value)?;
+            let x = ChunkIndex::try_from(inner)?;
+            Ok(x)
+        }
     }
-}
 
-impl<'q> sqlx::Decode<'q, Sqlite> for ChunkIndex {
-    fn decode(value: <Sqlite as sqlx::Database>::ValueRef<'q>) -> Result<Self, sqlx::error::BoxDynError> {
-        let inner = <u64 as sqlx::Decode<'q, Sqlite>>::decode(value)?;
-        let x = ChunkIndex::try_from(inner)?;
-        Ok(x)
+    #[tracing::instrument]
+    pub async fn insert_chunk(
+        chunk: Chunk,
+        conn: impl Executor<'_, Database = Sqlite>,
+    ) -> sqlx::Result<()> {
+        query!(
+            "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES (?, ?, ?)",
+            chunk.submission_id,
+            chunk.chunk_index,
+            chunk.input_content
+        )
+        .execute(conn)
+        .await?;
+        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
+        Ok(())
     }
-}
 
+    #[tracing::instrument]
+    pub async fn complete_chunk(
+        chunk_id: ChunkId,
+        output_content: Option<Vec<u8>>,
+        conn: &mut SqliteConnection,
+    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
+        let res = conn
+            .transaction(|tx| {
+                Box::pin(async move {
+                    complete_chunk_raw(chunk_id, output_content, tx).await?;
+                    crate::common::submission::db::maybe_complete_submission(
+                        chunk_id.submission_id,
+                        tx,
+                    )
+                    .await
+                    .map_err(|e| match e {
+                        E::L(e) => E::L(e),
+                        E::R(e) => E::R(E::L(e)),
+                    })?;
+                    Ok(())
+                })
+            })
+            .await;
 
-#[tracing::instrument]
-pub async fn insert_chunk(
-    chunk: Chunk,
-    conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<()> {
-    query!(
-        "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES (?, ?, ?)",
-        chunk.submission_id,
-        chunk.chunk_index,
-        chunk.input_content
-    )
-    .execute(conn)
-    .await?;
-    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
-    Ok(())
-}
+        counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
 
-#[tracing::instrument]
-pub async fn complete_chunk(
-    chunk_id: ChunkId,
-    output_content: Option<Vec<u8>>,
-    conn: &mut SqliteConnection,
-) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
+        res
+    }
 
-    let res = conn.transaction(|tx| {
-        Box::pin(async move {
-            complete_chunk_raw(chunk_id, output_content, tx).await?;
-            crate::common::submission::db::maybe_complete_submission(chunk_id.submission_id, tx)
-                .await
-                .map_err(|e| match e {
-                    E::L(e) => E::L(e),
-                    E::R(e) => E::R(E::L(e)),
-                })?;
-            Ok(())
-        })
-    })
-    .await;
-
-    counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
-    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-
-    res
-}
-
-#[tracing::instrument]
-/// Do not call directly! MUST be called inside a transaction!
-pub async fn complete_chunk_raw(
-    chunk_id: ChunkId,
-    output_content: Option<Vec<u8>>,
-    conn: &mut SqliteConnection,
-) -> sqlx::Result<()> {
+    #[tracing::instrument]
+    /// Do not call directly! MUST be called inside a transaction!
+    pub async fn complete_chunk_raw(
+        chunk_id: ChunkId,
+        output_content: Option<Vec<u8>>,
+        conn: &mut SqliteConnection,
+    ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
-        query!("
+        query!(
+            "
 
         INSERT INTO chunks_completed
         (submission_id, chunk_index, output_content, completed_at)
@@ -258,13 +265,15 @@ pub async fn complete_chunk_raw(
         RETURNING submission_id, chunk_index;
         ;
         ",
-        output_content,
-        now,
-        chunk_id.submission_id,
-        chunk_id.chunk_index,
-        chunk_id.submission_id,
-        chunk_id.chunk_index,
-        ).fetch_one(&mut *conn).await?;
+            output_content,
+            now,
+            chunk_id.submission_id,
+            chunk_id.chunk_index,
+            chunk_id.submission_id,
+            chunk_id.chunk_index,
+        )
+        .fetch_one(&mut *conn)
+        .await?;
         // Defense in depth: Above query should never be called twice on the same chunk.
         // If it _does_ happen, it means that either a consumer is attempting a chunk they didn't reserve,
         // or we gave out the same reservation twice.
@@ -276,62 +285,77 @@ pub async fn complete_chunk_raw(
         // (Not doing that resulted in a hard-to-track-down bug in the past.
         // https://github.com/channable/opsqueue/issues/76
         // )
-        query!("
+        query!(
+            "
         UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
         ",
-        chunk_id.submission_id,
-        ).execute(&mut *conn).await?;
-    Ok(())
-}
+            chunk_id.submission_id,
+        )
+        .execute(&mut *conn)
+        .await?;
+        Ok(())
+    }
 
-#[tracing::instrument]
-pub async fn retry_or_fail_chunk(
-    chunk_id: ChunkId,
-    failure: String,
-    conn: &mut SqliteConnection,
-) -> sqlx::Result<()> {
-    conn.transaction(|tx| {
-        Box::pin(async move {
-            const MAX_RETRIES: i64 = 10;
-            let ChunkId{submission_id, chunk_index} = chunk_id;
-            let fields = query!(
-                "
+    #[tracing::instrument]
+    pub async fn retry_or_fail_chunk(
+        chunk_id: ChunkId,
+        failure: String,
+        conn: &mut SqliteConnection,
+    ) -> sqlx::Result<()> {
+        conn.transaction(|tx| {
+            Box::pin(async move {
+                const MAX_RETRIES: i64 = 10;
+                let ChunkId {
+                    submission_id,
+                    chunk_index,
+                } = chunk_id;
+                let fields = query!(
+                    "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = ? AND chunk_index = ?
         RETURNING retries;
         ",
-                submission_id,
-                chunk_index
-            )
-            .fetch_one(&mut **tx)
-            .await?;
-            if fields.retries >= MAX_RETRIES {
-                crate::common::submission::db::fail_submission_notx(submission_id, chunk_index, failure, tx).await?;
+                    submission_id,
+                    chunk_index
+                )
+                .fetch_one(&mut **tx)
+                .await?;
+                if fields.retries >= MAX_RETRIES {
+                    crate::common::submission::db::fail_submission_notx(
+                        submission_id,
+                        chunk_index,
+                        failure,
+                        tx,
+                    )
+                    .await?;
 
-                counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
-                gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-                Ok::<_, sqlx::Error>(())
-            } else {
-                counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
-                gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-                Ok::<_, sqlx::Error>(())
-            }
+                    counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
+                    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                    Ok::<_, sqlx::Error>(())
+                } else {
+                    counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
+                    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                    Ok::<_, sqlx::Error>(())
+                }
+            })
         })
-    })
-    .await?;
+        .await?;
 
-    Ok(())
-}
+        Ok(())
+    }
 
-#[tracing::instrument]
-pub async fn move_chunk_to_failed_chunks(
-    chunk_id: ChunkId,
-    failure: String,
-    conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<()> {
-    let now = chrono::prelude::Utc::now();
-    let ChunkId{submission_id, chunk_index} = chunk_id;
-    query!("
+    #[tracing::instrument]
+    pub async fn move_chunk_to_failed_chunks(
+        chunk_id: ChunkId,
+        failure: String,
+        conn: impl Executor<'_, Database = Sqlite>,
+    ) -> sqlx::Result<()> {
+        let now = chrono::prelude::Utc::now();
+        let ChunkId {
+            submission_id,
+            chunk_index,
+        } = chunk_id;
+        query!("
     SAVEPOINT move_chunk_to_failed_chunks;
 
     INSERT INTO chunks_failed
@@ -350,18 +374,19 @@ pub async fn move_chunk_to_failed_chunks(
     chunk_index,
     ).fetch_one(conn).await?;
 
-    counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
-    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-    Ok(())
-}
+        counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
+        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+        Ok(())
+    }
 
-#[tracing::instrument]
-pub async fn get_chunk(
-    full_chunk_id: ChunkId,
-    conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<Chunk> {
-    query_as!(
-        Chunk, r#"
+    #[tracing::instrument]
+    pub async fn get_chunk(
+        full_chunk_id: ChunkId,
+        conn: impl Executor<'_, Database = Sqlite>,
+    ) -> sqlx::Result<Chunk> {
+        query_as!(
+            Chunk,
+            r#"
         SELECT
             submission_id AS "submission_id: SubmissionId"
             , chunk_index AS "chunk_index: ChunkIndex"
@@ -369,19 +394,21 @@ pub async fn get_chunk(
             , retries
         FROM chunks WHERE submission_id =? AND chunk_index =?
         "#,
-        full_chunk_id.submission_id,
-        full_chunk_id.chunk_index
-    )
-    .fetch_one(conn)
-    .await
-}
+            full_chunk_id.submission_id,
+            full_chunk_id.chunk_index
+        )
+        .fetch_one(conn)
+        .await
+    }
 
-#[tracing::instrument]
-pub async fn get_chunk_completed(
-    full_chunk_id: (i64, i64),
-    conn: impl Executor<'_, Database = Sqlite>,
-) -> sqlx::Result<ChunkCompleted> {
-    query_as!(ChunkCompleted, r#"
+    #[tracing::instrument]
+    pub async fn get_chunk_completed(
+        full_chunk_id: (i64, i64),
+        conn: impl Executor<'_, Database = Sqlite>,
+    ) -> sqlx::Result<ChunkCompleted> {
+        query_as!(
+            ChunkCompleted,
+            r#"
         SELECT
             submission_id AS "submission_id: SubmissionId"
             , chunk_index AS "chunk_index: ChunkIndex"
@@ -389,49 +416,52 @@ pub async fn get_chunk_completed(
             , completed_at AS "completed_at: DateTime<Utc>"
         FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?
         "#,
-        full_chunk_id.0,
-        full_chunk_id.1
-    ).fetch_one(conn).await
-}
-
-#[tracing::instrument(skip(chunks, conn))]
-pub async fn insert_many_chunks<Tx, Conn, Iter>(chunks: Iter, mut conn: Tx) -> sqlx::Result<()>
-where
-    for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
-    Tx: Deref<Target = Conn> + DerefMut,
-    Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
-    <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
-{
-    let chunks_per_query = 1000;
-
-    // let start = std::time::Instant::now();
-    let mut iter = chunks.into_iter().peekable();
-    while iter.peek().is_some() {
-        let query_chunks = iter.by_ref().take(chunks_per_query);
-
-        let mut query_builder: QueryBuilder<Sqlite> =
-            QueryBuilder::new("INSERT INTO chunks (submission_id, chunk_index, input_content) ");
-        query_builder.push_values(query_chunks, |mut b, chunk| {
-            b.push_bind(chunk.submission_id)
-                .push_bind(chunk.chunk_index)
-                .push_bind(chunk.input_content.clone());
-        });
-        let query = query_builder.build();
-
-        query.execute(conn.deref_mut()).await?;
+            full_chunk_id.0,
+            full_chunk_id.1
+        )
+        .fetch_one(conn)
+        .await
     }
 
-    Ok(())
-}
+    #[tracing::instrument(skip(chunks, conn))]
+    pub async fn insert_many_chunks<Tx, Conn, Iter>(chunks: Iter, mut conn: Tx) -> sqlx::Result<()>
+    where
+        for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
+        Tx: Deref<Target = Conn> + DerefMut,
+        Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
+        <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
+    {
+        let chunks_per_query = 1000;
 
-#[tracing::instrument]
-pub async fn skip_remaining_chunks(
-    submission_id: SubmissionId,
-    conn: impl SqliteExecutor<'_>,
-) -> sqlx::Result<()> {
-    let now = chrono::prelude::Utc::now();
+        // let start = std::time::Instant::now();
+        let mut iter = chunks.into_iter().peekable();
+        while iter.peek().is_some() {
+            let query_chunks = iter.by_ref().take(chunks_per_query);
 
-    let query_res = sqlx::query!("
+            let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "INSERT INTO chunks (submission_id, chunk_index, input_content) ",
+            );
+            query_builder.push_values(query_chunks, |mut b, chunk| {
+                b.push_bind(chunk.submission_id)
+                    .push_bind(chunk.chunk_index)
+                    .push_bind(chunk.input_content.clone());
+            });
+            let query = query_builder.build();
+
+            query.execute(conn.deref_mut()).await?;
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    pub async fn skip_remaining_chunks(
+        submission_id: SubmissionId,
+        conn: impl SqliteExecutor<'_>,
+    ) -> sqlx::Result<()> {
+        let now = chrono::prelude::Utc::now();
+
+        let query_res = sqlx::query!("
     SAVEPOINT skip_remaining_chunks;
 
     INSERT INTO chunks_failed
@@ -447,52 +477,56 @@ pub async fn skip_remaining_chunks(
     submission_id,
     ).execute(conn).await?;
 
-    counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
-    gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(query_res.rows_affected() as f64);
-    Ok(())
-}
+        counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
+        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(query_res.rows_affected() as f64);
+        Ok(())
+    }
 
-#[tracing::instrument]
-pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
-        .fetch_one(db)
-        .await?;
-    let count = u63::new(count.count as u64);
-    Ok(count)
-}
+    #[tracing::instrument]
+    pub async fn count_chunks(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
+        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
+            .fetch_one(db)
+            .await?;
+        let count = u63::new(count.count as u64);
+        Ok(count)
+    }
 
-#[tracing::instrument]
-pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
-        .fetch_one(db)
-        .await?;
-    let count = u63::new(count.count as u64);
-    Ok(count)
-}
+    #[tracing::instrument]
+    pub async fn count_chunks_completed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
+        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
+            .fetch_one(db)
+            .await?;
+        let count = u63::new(count.count as u64);
+        Ok(count)
+    }
 
-#[tracing::instrument]
-pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
-    let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
-        .fetch_one(db)
-        .await?;
-    let count = u63::new(count.count as u64);
-    Ok(count)
-}
+    #[tracing::instrument]
+    pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<u63> {
+        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
+            .fetch_one(db)
+            .await?;
+        let count = u63::new(count.count as u64);
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use crate::common::submission::{Submission, SubmissionStatus};
     use crate::common::submission::db::insert_submission_raw;
+    use crate::common::submission::{Submission, SubmissionStatus};
     use sqlx::Connection;
 
-    use super::*;
     use super::db::*;
+    use super::*;
 
     #[sqlx::test]
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(
+            u63::new(1).into(),
+            u63::new(0).into(),
+            vec![1, 2, 3, 4, 5].into(),
+        );
 
         assert!(count_chunks(&db).await.unwrap() == u63::new(0));
         insert_chunk(chunk.clone(), &db)
@@ -503,7 +537,11 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
-        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(
+            u63::new(1).into(),
+            u63::new(0).into(),
+            vec![1, 2, 3, 4, 5].into(),
+        );
         insert_chunk(chunk.clone(), &db)
             .await
             .expect("Insert chunk failed");
@@ -521,7 +559,11 @@ pub mod test {
         let mut submission = Submission::new();
         submission.chunks_total = u63::new(1).into();
         submission.id = Submission::generate_id();
-        let chunk = Chunk::new(submission.id, u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(
+            submission.id,
+            u63::new(0).into(),
+            vec![1, 2, 3, 4, 5].into(),
+        );
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await
@@ -529,13 +571,18 @@ pub mod test {
 
         insert_submission_raw(submission, &mut *conn).await.unwrap();
 
-        conn.transaction(|tx| Box::pin(async move {
-            complete_chunk_raw(
-                (chunk.submission_id, chunk.chunk_index).into(),
-                Some(vec![6, 7, 8, 9]),
-                tx,
-            ).await
-        })).await.expect("complete chunk failed");
+        conn.transaction(|tx| {
+            Box::pin(async move {
+                complete_chunk_raw(
+                    (chunk.submission_id, chunk.chunk_index).into(),
+                    Some(vec![6, 7, 8, 9]),
+                    tx,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("complete chunk failed");
 
         assert!(count_chunks(&mut *conn).await.unwrap() == u63::new(0));
         assert!(count_chunks_completed(&mut *conn).await.unwrap() == u63::new(1));
@@ -580,7 +627,11 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let chunk = Chunk::new(u63::new(1).into(), u63::new(0).into(), vec![1, 2, 3, 4, 5].into());
+        let chunk = Chunk::new(
+            u63::new(1).into(),
+            u63::new(0).into(),
+            vec![1, 2, 3, 4, 5].into(),
+        );
 
         insert_chunk(chunk.clone(), &mut *conn)
             .await

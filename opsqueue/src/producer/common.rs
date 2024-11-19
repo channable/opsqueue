@@ -1,9 +1,6 @@
 use crate::common::NonZero;
 
-use crate::common::{
-    chunk,
-    submission::Metadata,
-};
+use crate::common::{chunk, submission::Metadata};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InsertSubmission {

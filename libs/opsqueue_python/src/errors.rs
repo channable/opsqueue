@@ -2,8 +2,7 @@ use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, E, IncorrectUsage, SubmissionNotFound,
-    UnexpectedOpsqueueConsumerServerResponse,
+    ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use opsqueue::common::NonZeroIsZero;
 use pyo3::exceptions::{PyException, PyTypeError};
@@ -19,11 +18,7 @@ create_exception!(
     IncorrectUsageError
 );
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
-create_exception!(
-    opsqueue_internal,
-    TryFromIntError,
-    IncorrectUsageError
-);
+create_exception!(opsqueue_internal, TryFromIntError, IncorrectUsageError);
 create_exception!(
     opsqueue_internal,
     ChunkCountIsZeroError,
@@ -169,16 +164,16 @@ impl From<CError<SubmissionNotFound>> for PyErr {
 impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
     fn from(value: CError<crate::producer::SubmissionNotCompletedYetError>) -> Self {
         let submission_id = value.0 .0;
-        SubmissionNotCompletedYetError::new_err((
-            value.0.to_string(),
-            submission_id,
-        ))
+        SubmissionNotCompletedYetError::new_err((value.0.to_string(), submission_id))
     }
 }
 
 impl From<CError<ChunkNotFound>> for PyErr {
     fn from(value: CError<ChunkNotFound>) -> Self {
-        let ChunkId{submission_id, chunk_index} = value.0 .0;
+        let ChunkId {
+            submission_id,
+            chunk_index,
+        } = value.0 .0;
         ChunkNotFoundError::new_err((
             value.0.to_string(),
             (

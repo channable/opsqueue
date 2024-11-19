@@ -34,10 +34,10 @@ impl Strategy {
 
 // #[tracing::instrument]
 #[cfg(feature = "server-logic")]
-pub fn oldest_chunks_stream<'c>(
-    db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkStream<'c> {
-    sqlx::query_as!(Chunk, r#"
+pub fn oldest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
+    sqlx::query_as!(
+        Chunk,
+        r#"
         SELECT
             chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
@@ -52,10 +52,10 @@ pub fn oldest_chunks_stream<'c>(
 
 #[tracing::instrument]
 #[cfg(feature = "server-logic")]
-pub fn newest_chunks_stream<'c>(
-    db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkStream<'c> {
-    sqlx::query_as!(Chunk, r#"
+pub fn newest_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
+    sqlx::query_as!(
+        Chunk,
+        r#"
         SELECT
             chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
@@ -92,9 +92,7 @@ pub fn newest_chunks_stream<'c>(
 /// `ChunkId`.
 #[tracing::instrument]
 #[cfg(feature = "server-logic")]
-pub fn random_chunks_stream<'c>(
-    db_conn: impl SqliteExecutor<'c> + 'c,
-) -> ChunkStream<'c> {
+pub fn random_chunks_stream<'c>(db_conn: impl SqliteExecutor<'c> + 'c) -> ChunkStream<'c> {
     let random_offset: u16 = rand::random();
     // NOTE 1: Until https://github.com/launchbadge/sqlx/issues/1151
     // is fixed, we'll have to use the runtime `query_as`
@@ -104,8 +102,7 @@ pub fn random_chunks_stream<'c>(
     // The current version of SQLite doesn't do this, instead simply running the first and then the second.
     //
     // If it ever would become a problem, we can instead run two consecutive queries.
-    let query =
-        r#"
+    let query = r#"
         SELECT
             submission_id
             , chunk_index
@@ -122,8 +119,10 @@ pub fn random_chunks_stream<'c>(
         FROM chunks
         WHERE chunks.random_order < ?
     "#;
-    sqlx::query_as(query).bind(random_offset).bind(random_offset)
-    .fetch(db_conn)
+    sqlx::query_as(query)
+        .bind(random_offset)
+        .bind(random_offset)
+        .fetch(db_conn)
 
     // Alternatively, we could do this 100% in SQL:
     /*
