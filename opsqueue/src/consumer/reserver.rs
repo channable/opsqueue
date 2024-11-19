@@ -1,4 +1,8 @@
-use std::{fmt::Debug, hash::Hash, time::{Duration, Instant}};
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    time::{Duration, Instant},
+};
 
 use axum_prometheus::metrics::{counter, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
@@ -45,9 +49,12 @@ where
     ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
-    #[tracing::instrument(level="debug", skip(self, val, sender))]
+    #[tracing::instrument(level = "debug", skip(self, val, sender))]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
-        let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone(), Instant::now()));
+        let entry = self
+            .0
+            .entry(key)
+            .or_insert_with(|| (val, sender.clone(), Instant::now()));
 
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
@@ -71,11 +78,8 @@ where
             None => {
                 tracing::warn!("Attempted to finish non-existent reservation: {key:?}");
                 None
-            },
-            Some((_val, _sender, reserved_at)) => {
-                Some(reserved_at)
             }
-
+            Some((_val, _sender, reserved_at)) => Some(reserved_at),
         }
     }
 
@@ -92,10 +96,7 @@ where
     /// that will call `run_pending_tasks` periodically.
     ///
     /// Do not call this in tests.
-    pub fn run_pending_tasks_periodically(
-        &self,
-        cancellation_token: CancellationToken,
-    ) {
+    pub fn run_pending_tasks_periodically(&self, cancellation_token: CancellationToken) {
         let bg_reserver_handle = self.clone();
         tokio::spawn(async move {
             loop {
@@ -103,7 +104,8 @@ where
                 // By running this immediately after 'run_pending_tasks',
                 // we can be reasonably sure that the count is accurate (doesn't include expired entries),
                 // c.f. documentation of moka::sync::Cache::entry_count.
-                gauge!(crate::prometheus::RESERVER_CHUNKS_RESERVED_GAUGE).set(bg_reserver_handle.0.entry_count() as u32);
+                gauge!(crate::prometheus::RESERVER_CHUNKS_RESERVED_GAUGE)
+                    .set(bg_reserver_handle.0.entry_count() as u32);
                 tokio::select! {
                     () = cancellation_token.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}

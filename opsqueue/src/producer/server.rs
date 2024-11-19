@@ -24,7 +24,10 @@ pub struct ServerState {
 
 impl ServerState {
     pub fn new(pool: DBPools, notify_on_insert: Arc<Notify>) -> Self {
-        ServerState { pool, notify_on_insert }
+        ServerState {
+            pool,
+            notify_on_insert,
+        }
     }
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
         let app = Router::new().nest("/producer", self.build_router());

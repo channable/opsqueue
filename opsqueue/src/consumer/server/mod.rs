@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::{Arc, Mutex}, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
     extract::{State, WebSocketUpgrade},
@@ -24,7 +28,13 @@ pub async fn serve_for_tests(
 ) {
     let notify_on_insert = Arc::new(Notify::new());
     let config: Arc<Config> = Arc::new(Default::default());
-    let state = ServerState::new(pool, notify_on_insert, cancellation_token.clone(), reservation_expiration, &config);
+    let state = ServerState::new(
+        pool,
+        notify_on_insert,
+        cancellation_token.clone(),
+        reservation_expiration,
+        &config,
+    );
     let router = ServerState::build_router(state);
     let app = Router::new().nest("/consumer", router);
     let listener = tokio::net::TcpListener::bind(&*server_addr)
@@ -71,16 +81,18 @@ impl ServerState {
     }
 
     pub fn run_background(mut self) -> Self {
-        self.reserver.run_pending_tasks_periodically(self.cancellation_token.clone());
-        let completer = std::mem::take(&mut self.completer).expect("Error: Completer not available. Was `run_background` called twice?");
+        self.reserver
+            .run_pending_tasks_periodically(self.cancellation_token.clone());
+        let completer = std::mem::take(&mut self.completer)
+            .expect("Error: Completer not available. Was `run_background` called twice?");
         completer.run(self.cancellation_token.clone());
         self
     }
 
     pub fn build_router(self: ServerState) -> Router<()> {
         Router::new()
-        .route("/", get(ws_accept_handler))
-        .with_state(Arc::new(self))
+            .route("/", get(ws_accept_handler))
+            .with_state(Arc::new(self))
     }
 }
 
@@ -91,10 +103,7 @@ async fn ws_accept_handler(
     ws.on_upgrade(|ws_stream| async move {
         gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).increment(1);
 
-        let res =
-            conn::ConsumerConn::new(&state, ws_stream)
-            .run()
-            .await;
+        let res = conn::ConsumerConn::new(&state, ws_stream).run().await;
 
         tracing::warn!("Closed websocket connection, reason: {:?}", &res);
         gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).decrement(1);
@@ -103,8 +112,16 @@ async fn ws_accept_handler(
 
 #[derive(Debug)]
 pub enum CompleterMessage {
-    Complete{id: ChunkId, output_content: crate::common::chunk::Content, reservations: Arc<Mutex<HashSet<ChunkId>>>},
-    Fail{id: ChunkId, failure: String, reservations: Arc<Mutex<HashSet<ChunkId>>>},
+    Complete {
+        id: ChunkId,
+        output_content: crate::common::chunk::Content,
+        reservations: Arc<Mutex<HashSet<ChunkId>>>,
+    },
+    Fail {
+        id: ChunkId,
+        failure: String,
+        reservations: Arc<Mutex<HashSet<ChunkId>>>,
+    },
 }
 
 #[derive(Debug)]
@@ -116,18 +133,26 @@ pub struct Completer {
 }
 
 impl Completer {
-    pub fn new(pool: &sqlx::SqlitePool, reserver: &Reserver<ChunkId, ChunkId>) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
+    pub fn new(
+        pool: &sqlx::SqlitePool,
+        reserver: &Reserver<ChunkId, ChunkId>,
+    ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         // TODO: Maybe give the completer just a single connection that does not need to be re-acquired,
         // or give it a singleton pool?
         let pool = pool.clone();
-        let me = Self {mailbox: rx, pool: pool.clone(), reserver: reserver.clone(), count: 0};
+        let me = Self {
+            mailbox: rx,
+            pool: pool.clone(),
+            reserver: reserver.clone(),
+            count: 0,
+        };
         (me, tx)
     }
     pub fn run(mut self, cancellation_token: CancellationToken) {
         tokio::spawn(async move {
             loop {
-                tokio::select!{
+                tokio::select! {
                     () = cancellation_token.cancelled() => break,
                     Some(msg) = self.mailbox.recv() => self.handle_message(msg).await,
                 }
@@ -140,7 +165,7 @@ impl Completer {
         });
     }
 
-    #[tracing::instrument(name="Completer::handle_message", level="info", skip(self))]
+    #[tracing::instrument(name = "Completer::handle_message", level = "info", skip(self))]
     async fn handle_message(&mut self, msg: CompleterMessage) {
         let start = tokio::time::Instant::now();
 
@@ -148,35 +173,51 @@ impl Completer {
             let mut conn = self.pool.acquire().await?;
 
             match msg {
-                CompleterMessage::Complete{id, output_content, reservations} => {
+                CompleterMessage::Complete {
+                    id,
+                    output_content,
+                    reservations,
+                } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let db_res = crate::common::chunk::db::complete_chunk(id, output_content, &mut conn).await;
+                    let db_res =
+                        crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
+                            .await;
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self.reserver.finish_reservation(&id) {
-                        histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed())
+                        histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
+                            .record(started_at.elapsed())
                     }
-                    histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
+                    histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION)
+                        .record(start.elapsed());
                     db_res?;
                     Ok(())
                 }
-                CompleterMessage::Fail{id, failure, reservations} => {
+                CompleterMessage::Fail {
+                    id,
+                    failure,
+                    reservations,
+                } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let db_res = crate::common::chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
+                    let db_res =
+                        crate::common::chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self.reserver.finish_reservation(&id) {
-                        histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed())
+                        histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM)
+                            .record(started_at.elapsed())
                     }
 
-                    histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
+                    histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
+                        .record(start.elapsed());
                     db_res?;
                     Ok(())
                 }
             }
-        }.await;
+        }
+        .await;
         match res {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(err) => tracing::warn!("Error in chunk completer: {err}"),
         }
     }

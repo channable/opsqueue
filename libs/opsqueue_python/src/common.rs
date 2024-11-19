@@ -31,7 +31,8 @@ pub struct SubmissionId {
 impl SubmissionId {
     #[new]
     fn new(id: u64) -> CPyResult<Self, TryFromIntError> {
-        let _is_inner_valid = opsqueue::common::submission::SubmissionId::try_from(id).map_err(CError)?;
+        let _is_inner_valid =
+            opsqueue::common::submission::SubmissionId::try_from(id).map_err(CError)?;
         Ok(SubmissionId { id })
     }
 
@@ -91,9 +92,7 @@ impl From<chunk::ChunkIndex> for ChunkIndex {
 
 impl From<u63> for ChunkIndex {
     fn from(value: u63) -> Self {
-        ChunkIndex {
-            id: value.into(),
-        }
+        ChunkIndex { id: value.into() }
     }
 }
 

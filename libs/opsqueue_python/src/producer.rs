@@ -10,7 +10,10 @@ use opsqueue::{
     E,
 };
 use opsqueue::{
-    common::{errors::E::{self, L, R}, NonZero, NonZeroIsZero},
+    common::{
+        errors::E::{self, L, R},
+        NonZero, NonZeroIsZero,
+    },
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
@@ -63,7 +66,8 @@ impl ProducerClient {
     pub fn __repr__(&self) -> String {
         format!(
             "<opsqueue_producer.ProducerClient(address={:?}, object_store_url={:?})>",
-            self.producer_client.endpoint_url, self.object_store_client.url()
+            self.producer_client.endpoint_url,
+            self.object_store_client.url()
         )
     }
 
@@ -94,10 +98,8 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> CPyResult<
-        Option<SubmissionStatus>,
-        E<FatalPythonException, InternalProducerClientError>,
-    > {
+    ) -> CPyResult<Option<SubmissionStatus>, E<FatalPythonException, InternalProducerClientError>>
+    {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
@@ -166,8 +168,8 @@ impl ProducerClient {
                         .map_err(|e| CError(R(R(L(e)))))
                 })
             })?;
-            let chunk_count = NonZero::try_from(chunk::ChunkIndex::from(chunk_count))
-                .map_err(|e| R(L(e)))?;
+            let chunk_count =
+                NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).map_err(|e| R(L(e)))?;
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
@@ -206,9 +208,7 @@ impl ProducerClient {
                     .await
                     .map_err(|CError(e)| CError(R(R(e))))?
                 {
-                    None => Err(CError(R(L(
-                        SubmissionNotCompletedYetError(id),
-                    ))))?,
+                    None => Err(CError(R(L(SubmissionNotCompletedYetError(id)))))?,
                     Some(py_iter) => Ok(py_iter),
                 }
             })
@@ -238,9 +238,7 @@ impl ProducerClient {
                     if let Some(py_stream) = self
                         .maybe_stream_completed_submission(submission_id)
                         .await
-                        .map_err(|CError(e)| {
-                            CError(R(R(R(e))))
-                        })?
+                        .map_err(|CError(e)| CError(R(R(R(e)))))?
                     {
                         return Ok(py_stream);
                     }
@@ -288,13 +286,21 @@ impl ProducerClient {
 #[pyclass]
 pub struct PyChunksIter {
     stream: BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>,
-    runtime: Arc<tokio::runtime::Runtime>
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl PyChunksIter {
     pub(crate) async fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
-        let stream = client.object_store_client.retrieve_chunks(prefix, chunks_total, ChunkType::Output).await.map_err(CError).boxed();
-        Self {stream, runtime: client.runtime.clone()}
+        let stream = client
+            .object_store_client
+            .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
+            .await
+            .map_err(CError)
+            .boxed();
+        Self {
+            stream,
+            runtime: client.runtime.clone(),
+        }
     }
 }
 
@@ -304,12 +310,12 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
+    fn __next__(
+        mut slf: PyRefMut<'_, Self>,
+    ) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
         let me = &mut *slf;
         let runtime = &mut me.runtime;
         let stream = &mut me.stream;
-        runtime.block_on(async {
-            stream.next().await.map(|r| r.map(VecAsPyBytes))
-        })
+        runtime.block_on(async { stream.next().await.map(|r| r.map(VecAsPyBytes)) })
     }
 }

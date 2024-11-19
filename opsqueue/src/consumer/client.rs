@@ -24,7 +24,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::{
     common::{
         chunk::{self, Chunk, ChunkId},
-        errors::{E, IncorrectUsage, LimitIsZero},
+        errors::{IncorrectUsage, LimitIsZero, E},
         submission::Submission,
     },
     consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
@@ -64,10 +64,8 @@ impl OuterClient {
         &self,
         max: usize,
         strategy: Strategy,
-    ) -> Result<
-        Vec<(Chunk, Submission)>,
-        E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-    > {
+    ) -> Result<Vec<(Chunk, Submission)>, E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>
+    {
         self.ensure_initialized().await;
         let res = self
             .0
@@ -156,10 +154,10 @@ impl OuterClient {
 // or extending the backon crate.
 fn retry_policy() -> impl BackoffBuilder {
     FibonacciBuilder::default()
-    .with_jitter()
-    .with_min_delay(Duration::from_millis(10))
-    .with_max_delay(Duration::from_secs(5))
-    .with_max_times(usize::MAX)
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(10))
+        .with_max_delay(Duration::from_secs(5))
+        .with_max_times(usize::MAX)
 }
 
 #[derive(Debug)]
@@ -305,27 +303,27 @@ impl Client {
         Ok(resp)
     }
 
-    async fn async_request(&self, request: ClientToServerMessage) -> Result<(), InternalConsumerClientError> {
-            let mut in_flight_requests = self.in_flight_requests.lock().await;
-            let nonce = in_flight_requests.0;
-            in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
-            let envelope = Envelope {
-                nonce,
-                contents: request,
-            };
-            let () = self.ws_sink.lock().await.send(envelope.into()).await?;
-            Ok(())
-
+    async fn async_request(
+        &self,
+        request: ClientToServerMessage,
+    ) -> Result<(), InternalConsumerClientError> {
+        let mut in_flight_requests = self.in_flight_requests.lock().await;
+        let nonce = in_flight_requests.0;
+        in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
+        let envelope = Envelope {
+            nonce,
+            contents: request,
+        };
+        let () = self.ws_sink.lock().await.send(envelope.into()).await?;
+        Ok(())
     }
 
     pub async fn reserve_chunks(
         &self,
         max: usize,
         strategy: Strategy,
-    ) -> Result<
-        Vec<(Chunk, Submission)>,
-        E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>,
-    > {
+    ) -> Result<Vec<(Chunk, Submission)>, E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>
+    {
         let SyncServerToClientResponse::ChunksReserved(resp) = self
             .sync_request(ClientToServerMessage::WantToReserveChunks { max, strategy })
             .await?;
@@ -338,8 +336,7 @@ impl Client {
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), InternalConsumerClientError> {
-        self
-            .async_request(ClientToServerMessage::CompleteChunk { id, output_content })
+        self.async_request(ClientToServerMessage::CompleteChunk { id, output_content })
             .await
     }
 
@@ -348,8 +345,7 @@ impl Client {
         id: ChunkId,
         failure: String,
     ) -> Result<(), InternalConsumerClientError> {
-        self
-            .async_request(ClientToServerMessage::FailChunk { id, failure })
+        self.async_request(ClientToServerMessage::FailChunk { id, failure })
             .await
     }
 }
@@ -387,7 +383,10 @@ mod tests {
 
     #[sqlx::test]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
-        let db_pools = DBPools{read_pool: pool.clone(), write_pool: pool.clone() };
+        let db_pools = DBPools {
+            read_pool: pool.clone(),
+            write_pool: pool.clone(),
+        };
         let uri = "0.0.0.0:10083";
         let ws_uri = "ws://0.0.0.0:10083";
         let cancellation_token = CancellationToken::new();

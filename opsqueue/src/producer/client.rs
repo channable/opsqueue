@@ -10,10 +10,10 @@ use super::common::InsertSubmission;
 
 fn retry_policy() -> impl BackoffBuilder {
     FibonacciBuilder::default()
-    .with_jitter()
-    .with_min_delay(Duration::from_millis(10))
-    .with_max_delay(Duration::from_secs(5))
-    .with_max_times(100)
+        .with_jitter()
+        .with_min_delay(Duration::from_millis(10))
+        .with_max_delay(Duration::from_secs(5))
+        .with_max_times(100)
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ impl Client {
                 .send()
                 .await?;
             let bytes = resp.bytes().await?;
-            let body  = serde_json::from_slice(&bytes)?;
+            let body = serde_json::from_slice(&bytes)?;
 
             Ok(body)
         })
@@ -82,15 +82,15 @@ impl Client {
         submission_id: SubmissionId,
     ) -> Result<Option<SubmissionStatus>, InternalProducerClientError> {
         (|| async {
-        let endpoint_url = &self.endpoint_url;
-        let resp = self
-            .http_client
-            .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
-            .send()
-            .await?;
-        let bytes = resp.bytes().await?;
-        let body = serde_json::from_slice(&bytes)?;
-        Ok(body)
+            let endpoint_url = &self.endpoint_url;
+            let resp = self
+                .http_client
+                .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
+                .send()
+                .await?;
+            let bytes = resp.bytes().await?;
+            let body = serde_json::from_slice(&bytes)?;
+            Ok(body)
         })
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
@@ -106,7 +106,7 @@ pub enum InternalProducerClientError {
     #[error("HTTP request failed")]
     HTTPClientError(#[from] reqwest::Error),
     #[error("Error decoding JSON response")]
-    ResponseDecodingError(#[from] serde_json::Error)
+    ResponseDecodingError(#[from] serde_json::Error),
 }
 
 impl InternalProducerClientError {
@@ -117,7 +117,9 @@ impl InternalProducerClientError {
             Self::ResponseDecodingError(_) => true,
             // NOTE: reqwest doesn't make this very easy as it has a single error typed used for _everything_
             // Maybe a different HTTP client library is nicer in this regard?
-            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout() || inner.is_decode(),
+            Self::HTTPClientError(inner) => {
+                inner.is_connect() || inner.is_timeout() || inner.is_decode()
+            }
         }
     }
 }
@@ -128,17 +130,20 @@ mod tests {
     use ux_serde::u63;
 
     use crate::{
-        common::submission::{self, SubmissionStatus}, db::DBPools, producer::common::ChunkContents
+        common::submission::{self, SubmissionStatus},
+        db::DBPools,
+        producer::common::ChunkContents,
     };
 
     use super::*;
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
-        let db_pools = DBPools{read_pool: pool.clone(), write_pool: pool.clone() };
+        let db_pools = DBPools {
+            read_pool: pool.clone(),
+            write_pool: pool.clone(),
+        };
 
-        tokio::spawn(
-            super::super::server::serve_for_tests(db_pools, url.into()),
-        );
+        tokio::spawn(super::super::server::serve_for_tests(db_pools, url.into()));
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
         tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime
     }
@@ -154,9 +159,14 @@ mod tests {
         assert_eq!(count, 0);
 
         let mut conn = pool.acquire().await.unwrap();
-        submission::db::insert_submission_from_chunks(None, vec![None, None, None], None, &mut conn)
-            .await
-            .expect("Insertion failed");
+        submission::db::insert_submission_from_chunks(
+            None,
+            vec![None, None, None],
+            None,
+            &mut conn,
+        )
+        .await
+        .expect("Insertion failed");
 
         let count = client.count_submissions().await.expect("Should be OK");
         assert_eq!(count, 1);

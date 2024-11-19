@@ -20,9 +20,7 @@ use crate::{
 
 use super::CompleterMessage;
 use super::ServerState;
-use crate::common::errors::{
-    E, IncorrectUsage, LimitIsZero,
-};
+use crate::common::errors::{IncorrectUsage, LimitIsZero, E};
 
 // TODO: We currently clone the arc-like pool and reserver,
 // but we could probably just give this struct a lifetime,
@@ -40,7 +38,6 @@ pub struct ConsumerState {
 
 impl Drop for ConsumerState {
     fn drop(&mut self) {
-
         let reservations = self.reservations.lock().unwrap();
         for reservation in &*reservations {
             // We're not tracking chunk durations that are unreserved during consumer shutdown,
@@ -76,18 +73,19 @@ impl ConsumerState {
         stream
             .try_filter_map(|chunk| async move {
                 let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
-                    let val = self
+                let val = self
                     .reserver
                     .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
                     .map(|_| chunk);
                 Ok(val)
             })
-            .and_then(|chunk| {
-                async move {
-                    let conn = &mut self.pool.acquire().await?;
-                    let submission = crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn).await.expect("get_submission while reserving failed");
-                    Ok((chunk, submission))
-                }
+            .and_then(|chunk| async move {
+                let conn = &mut self.pool.acquire().await?;
+                let submission =
+                    crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn)
+                        .await
+                        .expect("get_submission while reserving failed");
+                Ok((chunk, submission))
             })
             .take(limit)
             .try_collect()
@@ -114,25 +112,34 @@ impl ConsumerState {
             .await?;
 
         self.reservations.lock().expect("No poison").extend(
-            new_reservations
-                .iter()
-                .map(|(chunk, _submission)| ChunkId::from((chunk.submission_id, chunk.chunk_index))),
+            new_reservations.iter().map(|(chunk, _submission)| {
+                ChunkId::from((chunk.submission_id, chunk.chunk_index))
+            }),
         );
 
-        histogram!(crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,
-        &[("limit", limit.to_string()), ("strategy", format!("{strategy:?}"))]
-    ).record(start.elapsed());
+        histogram!(
+            crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,
+            &[
+                ("limit", limit.to_string()),
+                ("strategy", format!("{strategy:?}"))
+            ]
+        )
+        .record(start.elapsed());
         Ok(new_reservations)
     }
 
     #[tracing::instrument(skip(self, output_content))]
-    pub async fn complete_chunk(
-        &mut self,
-        id: ChunkId,
-        output_content: chunk::Content,
-    ) {
+    pub async fn complete_chunk(&mut self, id: ChunkId, output_content: chunk::Content) {
         // Only possible error indicates sender is closed, which means we're shutting down
-        let _ = self.server_state.completer_tx.send(CompleterMessage::Complete{id, output_content, reservations: self.reservations.clone()}).await;
+        let _ = self
+            .server_state
+            .completer_tx
+            .send(CompleterMessage::Complete {
+                id,
+                output_content,
+                reservations: self.reservations.clone(),
+            })
+            .await;
         // let start = tokio::time::Instant::now();
 
         // let pool = self.pool.clone();
@@ -159,7 +166,15 @@ impl ConsumerState {
     }
 
     pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) {
-        let _ = self.server_state.completer_tx.send(CompleterMessage::Fail{id, failure, reservations: self.reservations.clone()}).await;
+        let _ = self
+            .server_state
+            .completer_tx
+            .send(CompleterMessage::Fail {
+                id,
+                failure,
+                reservations: self.reservations.clone(),
+            })
+            .await;
 
         // let start = tokio::time::Instant::now();
 
