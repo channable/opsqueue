@@ -186,7 +186,6 @@ impl Submission {
 #[cfg(feature = "server-logic")]
 pub mod db {
 use crate::common::errors::{DatabaseError, E, SubmissionNotFound};
-use crate::db::SqliteConnectionExt;
 #[cfg(feature = "server-logic")]
 use sqlx::{query, query_as, Executor, Sqlite, SqliteConnection, SqliteExecutor, Connection};
 

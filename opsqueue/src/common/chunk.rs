@@ -159,7 +159,6 @@ use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
 use sqlx::{query_as, SqliteConnection};
 use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
 
-use crate::db::SqliteConnectionExt;
 use sqlx::Connection;
 
 
@@ -486,7 +485,7 @@ pub async fn count_chunks_failed(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Res
 pub mod test {
     use crate::common::submission::{Submission, SubmissionStatus};
     use crate::common::submission::db::insert_submission_raw;
-    use crate::db::SqliteConnectionExt;
+    use sqlx::Connection;
 
     use super::*;
     use super::db::*;
@@ -530,7 +529,7 @@ pub mod test {
 
         insert_submission_raw(submission, &mut *conn).await.unwrap();
 
-        conn.immediate_write_transaction(|tx| Box::pin(async move {
+        conn.transaction(|tx| Box::pin(async move {
             complete_chunk_raw(
                 (chunk.submission_id, chunk.chunk_index).into(),
                 Some(vec![6, 7, 8, 9]),

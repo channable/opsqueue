@@ -1,5 +1,4 @@
 use axum_prometheus::{metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit}, metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
-use sqlx::SqlitePool;
 
 use crate::db::DBPools;
 

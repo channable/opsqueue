@@ -149,8 +149,8 @@ impl Completer {
                     // we still want to unreserve the chunk
                     let db_res = crate::common::chunk::db::complete_chunk(id, output_content, &mut conn).await;
                     reservations.lock().expect("No poison").remove(&id);
-                    if let Some(started_at) = self.reserver.finish_reservation(&id) { 
-                        histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) 
+                    if let Some(started_at) = self.reserver.finish_reservation(&id) {
+                        histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed())
                     }
                     histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
                     db_res?;
@@ -161,8 +161,8 @@ impl Completer {
                     // we still want to unreserve the chunk
                     let db_res = crate::common::chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
                     reservations.lock().expect("No poison").remove(&id);
-                    if let Some(started_at) = self.reserver.finish_reservation(&id) { 
-                        histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) 
+                    if let Some(started_at) = self.reserver.finish_reservation(&id) {
+                        histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed())
                     }
 
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());

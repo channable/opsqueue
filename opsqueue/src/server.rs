@@ -6,7 +6,6 @@ use axum::{routing::get, Router};
 use backon::{BackoffBuilder, FibonacciBuilder};
 use http::StatusCode;
 
-use sqlx::sqlite::SqlitePool;
 
 use tokio::select;
 use tokio::sync::Notify;
