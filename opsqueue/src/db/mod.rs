@@ -35,7 +35,7 @@ pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
 pub async fn db_connect_pool(database_filename: &str) -> SqlitePool {
     SqlitePoolOptions::new()
         .min_connections(16)
-        .max_connections(1024)
+        .max_connections(256)
         .connect_with(db_options(database_filename))
         .await
         .expect("Could not connect to sqlite DB")

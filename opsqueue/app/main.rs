@@ -64,8 +64,8 @@ async fn main() {
 
         // Gives things a little time to shut down, but not much :-)
         tokio::time::sleep(Duration::from_millis(100)).await;
-    })
-    .await;
+        scope.terminate::<()>(()).await;
+    }).await;
 
     println!();
     println!("Opsqueue Stopped");

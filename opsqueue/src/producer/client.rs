@@ -112,10 +112,12 @@ pub enum InternalProducerClientError {
 impl InternalProducerClientError {
     pub fn is_ephemeral(&self) -> bool {
         match self {
+            // We consider this ephemeral as on ungraceful queue shutdown/restart
+            // we could have received an _incomplete_ response
+            Self::ResponseDecodingError(_) => true,
             // NOTE: reqwest doesn't make this very easy as it has a single error typed used for _everything_
             // Maybe a different HTTP client library is nicer in this regard?
-            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout(),
-            Self::ResponseDecodingError(_) => false,
+            Self::HTTPClientError(inner) => inner.is_connect() || inner.is_timeout() || inner.is_decode(),
         }
     }
 }

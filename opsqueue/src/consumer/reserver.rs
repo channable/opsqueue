@@ -68,7 +68,7 @@ where
     pub fn finish_reservation(&self, key: &K) -> Option<Instant> {
         match self.0.remove(key) {
             None => {
-                tracing::error!("Attempted to finish non-existent reservation: {key:?}");
+                tracing::warn!("Attempted to finish non-existent reservation: {key:?}");
                 None
             },
             Some((_val, _sender, reserved_at)) => {
