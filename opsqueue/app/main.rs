@@ -63,7 +63,7 @@ async fn main() {
         cancellation_token.cancel();
 
         // Gives things a little time to shut down, but not much :-)
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         scope.terminate::<()>(()).await;
     }).await;
 

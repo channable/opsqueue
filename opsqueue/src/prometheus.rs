@@ -1,6 +1,8 @@
 use axum_prometheus::{metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit}, metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle}, utils::SECONDS_DURATION_BUCKETS, GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS};
 use sqlx::SqlitePool;
 
+use crate::db::DBPools;
+
 pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total_count";
 pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed_count";
 pub const SUBMISSIONS_FAILED_COUNTER: &str = "submissions_failed_count";
@@ -80,8 +82,8 @@ pub fn setup_prometheus() -> (GenericMetricLayer<'static, PrometheusHandle, axum
 ///
 /// Instead of asking the DB for a count very frequently, we only fetch the count at startup
 /// and keep it up-to-date over the lifespan of the application
-pub async fn prefill_special_metrics(db_pool: &SqlitePool) -> anyhow::Result<()> {
-    let chunk_count: u64 = crate::common::chunk::db::count_chunks(db_pool).await?.into();
+pub async fn prefill_special_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
+    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&db_pool.read_pool).await?.into();
     gauge!(CHUNKS_BACKLOG_GAUGE).set(chunk_count as f64);
 
     Ok(())

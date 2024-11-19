@@ -45,6 +45,7 @@ where
     ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
+    #[tracing::instrument(level="debug", skip(self, val, sender))]
     pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
         let entry = self.0.entry(key).or_insert_with(|| (val, sender.clone(), Instant::now()));
 

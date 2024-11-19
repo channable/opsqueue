@@ -381,10 +381,13 @@ mod tests {
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
+    use crate::db::DBPools;
+
     use super::*;
 
     #[sqlx::test]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
+        let db_pools = DBPools{read_pool: pool.clone(), write_pool: pool.clone() };
         let uri = "0.0.0.0:10083";
         let ws_uri = "ws://0.0.0.0:10083";
         let cancellation_token = CancellationToken::new();
@@ -408,7 +411,7 @@ mod tests {
         .unwrap();
 
         let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
-            pool.clone(),
+            db_pools,
             uri.into(),
             cancellation_token,
             Duration::from_secs(60),

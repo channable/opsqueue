@@ -16,7 +16,7 @@ def run_a_consumer(id: int) -> None:
     client.run_each_op(my_operation, strategy=Strategy.Random)
 
 def main():
-    n_consumers = 256
+    n_consumers = 1024
     processes = [multiprocessing.Process(target=run_a_consumer, args=(id,)) for id in range(n_consumers)]
     for p in processes:
         p.start()
