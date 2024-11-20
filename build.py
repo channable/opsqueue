@@ -23,11 +23,15 @@ def cli() -> None:
     """
 
 
-@cli.group("build")
-def cli_build() -> None:
+@cli.group("build", invoke_without_command=True)
+@click.pass_context
+def cli_build(ctx: click.Context) -> None:
     """
     Commands for building things
     """
+    if ctx.invoked_subcommand is None:
+        for cmd in cli_build.commands.values():
+            ctx.invoke(cmd)
 
 
 @cli_build.command("opsqueue")
@@ -54,7 +58,7 @@ def cli_build_opsqueue_python() -> None:
     )
 
 
-@cli.command("run", add_help_option=False)
+@cli.command("run")
 @click.argument(
     "opsqueue-arguments",
     nargs=-1,
@@ -86,7 +90,8 @@ def cli_check(ctx: click.Context) -> None:
     ./build.py check style [--fix]
     """
     if ctx.invoked_subcommand is None:
-        run_check_style(False)
+        for cmd in cli_check.commands.values():
+            ctx.invoke(cmd)
 
 
 @cli_check.command("style")
@@ -99,10 +104,6 @@ def cli_check_style(fix: bool) -> None:
     """
     Run a set of linters.
     """
-    run_check_style(fix)
-
-
-def run_check_style(fix: bool) -> None:
     if fix is False:
         pre_commit_config = ".pre-commit-config-check.yaml"
     else:
@@ -132,8 +133,8 @@ def cli_test(ctx) -> None:
     When invoked with no subcommand, runs all test suites.
     """
     if ctx.invoked_subcommand is None:
-        run_unit_tests(())
-        run_integration_tests(())
+        for cmd in cli_test.commands.values():
+            ctx.invoke(cmd)
 
 
 @cli_test.command("unit")
@@ -147,10 +148,6 @@ def cli_test_unit(test_arguments: tuple[str]) -> None:
 
     Extra arguments (after `--`) are forwarded to `cargo test`.
     """
-    run_unit_tests(test_arguments)
-
-
-def run_unit_tests(test_arguments: tuple[str]) -> None:
     subprocess.run(("cargo", "test", "--all-features", "--") + test_arguments)
 
 
@@ -177,10 +174,6 @@ def cli_test_integration(test_arguments: tuple[str]) -> None:
 
     Example: `RUST_LOG="opsqueue=info" ./build.py test integration -- --log-cli-level=debug
     """
-    run_integration_tests(test_arguments)
-
-
-def run_integration_tests(test_arguments: tuple[str]) -> None:
     command = f"""
         set -e
         # Used by the integration tests
