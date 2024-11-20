@@ -12,4 +12,4 @@ source ".venv-$python_version_hash/bin/activate"
 
 # Ensure `pytest` is available in the venv;
 # If we were to use `pytest` from Nix, it would not see the locally built python package!
-pip install pytest pytest-random-order pytest-parallel --quiet --quiet --require-virtualenv
+uv pip install -r pyproject.toml --all-extras --quiet

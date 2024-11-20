@@ -13,6 +13,7 @@ let
       click
       build_util
       mypy
+      uv
     ]
   );
 

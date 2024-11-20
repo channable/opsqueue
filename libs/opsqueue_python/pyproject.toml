@@ -16,12 +16,26 @@ features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "opsqueue.opsqueue_internal"
 
-[tool.pytest.ini_options]
-# We ensure tests never rely on global state,
-# by running them in a random order, and in parallel:
-addopts = "--random-order --workers=auto"
-# NOTE: We rely on `pytest-parallel` rather than `pytest-xdist`
+# We specify test-dependencies here (and have them loaded through `.setup_local_venv.sh`)
+# because otherwise `pytest` won't be able to see the locally build python package!
+#
+# Extra notes:
+#
+# - We rely on `pytest-parallel` rather than `pytest-xdist`
 # since we currently rely on `multiprocessing`'s `fork` strategy,
 # which is incompatible
 # since pytest-xdist always spawns threads internally
 # c.f. https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
+# - We need to specify `py` as extra requirement because of this issue: https://github.com/kevlened/pytest-parallel/issues/118
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.3",
+    "pytest-random-order==1.1.1",
+    "pytest-parallel==0.1.1",
+    "py==1.11.0", # Needs to be manually specified because of this issue: https://github.com/kevlened/pytest-parallel/issues/118
+]
+
+[tool.pytest.ini_options]
+# We ensure tests never rely on global state,
+# by running them in a random order, and in parallel:
+addopts = "--random-order --workers=auto"
