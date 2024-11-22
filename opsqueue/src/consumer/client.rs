@@ -125,27 +125,19 @@ impl OuterClient {
         let inner = self.0.load();
         if inner.is_none() || inner.as_ref().is_some_and(|c| !c.is_healthy()) {
             log::info!("Initializing (or re-initializing) consumer client connection");
-            let client = loop {
-                match self.initialize().await {
-                    Ok(client) => break client,
-                    Err(_) => {
-                        // NOTE: This is extremely unlikely to occur; it means that the Opsqueue couldn't be reached
-                        // for a duration close to u32::MAX * 10sec.
-                        // TODO: Better would be to fix the retry_if crate to support indefinite retries!
-                        continue;
-                    }
-                }
-            };
+            let client = self.initialize().await;
+
             log::info!("Consumer client connection established");
             self.0.store(Some(Arc::new(client)));
         }
     }
 
-    async fn initialize(&self) -> anyhow::Result<Client> {
+    async fn initialize(&self) -> Client {
         (|| Client::new(&self.1))
         .retry(retry_policy())
         .notify(|err, duration| { log::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
         .await
+        .expect("Infinite retries should never return Err")
     }
 }
 
@@ -157,7 +149,7 @@ fn retry_policy() -> impl BackoffBuilder {
         .with_jitter()
         .with_min_delay(Duration::from_millis(10))
         .with_max_delay(Duration::from_secs(5))
-        .with_max_times(usize::MAX)
+        .without_max_times()
 }
 
 #[derive(Debug)]

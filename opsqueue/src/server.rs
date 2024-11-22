@@ -12,15 +12,12 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-// TOOD: Set max retries to `None`;
-// will require either writing our own Backoff (iterator)
-// or extending the backon crate.
 fn retry_policy() -> impl BackoffBuilder {
     FibonacciBuilder::default()
         .with_jitter()
         .with_min_delay(Duration::from_millis(10))
         .with_max_delay(Duration::from_secs(10))
-        .with_max_times(usize::MAX)
+        .without_max_times()
 }
 
 #[cfg(feature = "server-logic")]
