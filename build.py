@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import click
+from pathlib import Path
 from build_util import (
     nix,
 )
@@ -49,12 +50,14 @@ def cli_build_opsqueue_python() -> None:
     Build the opsqueue_consumer library through Nix
     in the release profile
     """
-    print(
-        nix.build(
-            "nix/nixpkgs-pinned.nix",
-            version=None,
-            attribute="pythonChannable.pkgs.opsqueue_python",
-        )
+    print(nix_build_python_library())
+
+
+def nix_build_python_library() -> Path:
+    return nix.build(
+        "nix/nixpkgs-pinned.nix",
+        version=None,
+        attribute="pythonChannable.pkgs.opsqueue_python",
     )
 
 
@@ -152,13 +155,21 @@ def cli_test_unit(test_arguments: tuple[str]) -> None:
 
 
 @cli_test.command("integration")
+@click.option("--via-nix", is_flag=True, default=False)
 @click.argument(
     "test-arguments",
     nargs=-1,
 )
-def cli_test_integration(test_arguments: tuple[str]) -> None:
+def cli_test_integration(via_nix: bool, test_arguments: tuple[str]) -> None:
     """
     Runs integration tests (using a specially prepared `pytest`)
+
+    Use `--via-nix` to run the tests against
+    a Nix-built opsqueue executable + Python FFI library.
+
+    By default, instead we'll build the executable with `cargo`
+    and run the FFI library with `maturin` inside a Python virtualenv.
+
 
     Extra arguments (after `--`) are forwarded to `pytest`.
 
@@ -174,17 +185,55 @@ def cli_test_integration(test_arguments: tuple[str]) -> None:
 
     Example: `RUST_LOG="opsqueue=info" ./build.py test integration -- --log-cli-level=debug
     """
-    command = f"""
+    if via_nix:
+        print("Running integration tests via Nix...")
+        python_lib_dir = (
+            nix_build_python_library() / "lib" / "python3.12" / "site-packages"
+        )
+        preface = f"""
         set -e
-        # Used by the integration tests
-        # Make sure it's up-to-date now to not slow down the first test that calls it
-        cargo build --bin opsqueue
-        cd libs/opsqueue_python
-        source "./.setup_local_venv.sh"
+        cd libs/opsqueue_python/tests
 
-        maturin develop
+        export PYTHONPATH="{python_lib_dir}"
+        export OPSQUEUE_VIA_NIX="true"
+        export RUST_LOG="opsqueue=debug"
+        """
+    else:
+        print("Running integration tests using local Cargo/Maturin/Venv (no Nix)...")
+        preface = """
+            set -e
+            # Used by the integration tests
+            # Make sure it's up-to-date now to not slow down the first test that calls it
+            cargo build --bin opsqueue
+            cd libs/opsqueue_python
+            source "./.setup_local_venv.sh"
 
-        pytest --color=yes {" ".join(test_arguments)}
+            maturin develop
+        """
+    command = f"pytest --color=yes {" ".join(test_arguments)}"
+    subprocess.check_call(preface + command, shell=True)
+
+
+@cli_test.command("nixtegration")
+@click.argument(
+    "test-arguments",
+    nargs=-1,
+)
+def cli_test_nixtergration(test_arguments: tuple[str]) -> None:
+    python_lib_dir = nix.build(
+        "nix/nixpkgs-pinned.nix",
+        version=None,
+        attribute="pythonChannable.pkgs.opsqueue_python",
+    )
+    python_lib_dir = python_lib_dir / "lib" / "python3.12" / "site-packages"
+    command = f"""
+    set -e
+    cd libs/opsqueue_python/tests
+
+    export PYTHONPATH="{python_lib_dir}"
+    export OPSQUEUE_VIA_NIX="true"
+    export RUST_LOG="opsqueue=debug"
+    pytest --color=yes -vvvvv -s --log-cli-level=debug
     """
     subprocess.check_call(command, shell=True)
 

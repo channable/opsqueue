@@ -6,6 +6,8 @@ import uuid
 import os
 import pytest
 from dataclasses import dataclass
+from pathlib import Path
+import functools
 
 from opsqueue.consumer import Strategy
 
@@ -19,6 +21,20 @@ from opsqueue.consumer import Strategy
 class OpsqueueProcess:
     port: int
     process: subprocess.Popen[bytes]
+
+
+@functools.cache
+def opsqueue_bin_location() -> Path:
+    if os.environ.get("OPSQUEUE_VIA_NIX"):
+        from build_util import nix
+
+        deriv_path = nix.build(
+            "../../../nix/nixpkgs-pinned.nix", version=None, attribute="opsqueue"
+        )
+        return deriv_path / "bin" / "opsqueue"
+    else:
+        subprocess.run(["cargo", "build", "--quiet", "--bin", "opsqueue"])
+        return Path(".", "target", "debug", "opsqueue")
 
 
 @pytest.fixture
@@ -39,12 +55,7 @@ def opsqueue_service(
     temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
     command = [
-        "cargo",
-        "run",
-        "--quiet",
-        "--bin",
-        "opsqueue",
-        "--",
+        str(opsqueue_bin_location()),
         "--port",
         str(port),
         "--database-filename",

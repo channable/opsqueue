@@ -51,11 +51,39 @@ global_job_config:
 
       - source "$HOME/devenv"
 
-      # Push the environment to the semaphore cache
-      - cache store nix-store-$(date -u -Idate) /nix
+      # NOTE: We intentionally only push to the Semaphore cache in one of the jobs below!
 
 blocks:
-  - name: "Build and check"
+  - name: "Build"
+    dependencies: []
+    skip:
+      when: "branch = 'master'"
+    task:
+      jobs:
+        - name: "Build Opsqueue binary (in release mode) & run unit tests"
+          commands:
+            - "./build.py build opsqueue | cachix push channable"
+            # Once a day, we update the devenv cache.
+            # Except when fresh, this takes < 1 second
+            # but it cannot live in the prologue
+            # as that might corrupt it
+            - cache store nix-store-$(date -u -Idate) /nix
+        - name: "Build Python library (in release mode)"
+          commands:
+            - "./build.py build opsqueue_python | cachix push channable"
+  - name: "Integration"
+    dependencies:
+      - "Build"
+    skip:
+      when: "branch = 'master'"
+    task:
+      jobs:
+        - name: "Run Integration tests"
+          commands:
+            # Relies on the output of the previous block's build steps to now live in Cachix
+            - "./build.py test integration --via-nix"
+  - name: "Style"
+    dependencies: []
     skip:
       when: "branch = 'master'"
     task:
@@ -63,9 +91,3 @@ blocks:
         - name: "Type- and format-check"
           commands:
             - "./build.py check style"
-        - name: "Build Opsqueue binary (in release mode) & run unit tests"
-          commands:
-            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix opsqueue | cachix push channable"
-        - name: "Build Python library (in release mode)"
-          commands:
-            - "nix build --no-link --print-build-logs --print-out-paths --file nix/nixpkgs-pinned.nix pythonChannable.pkgs.opsqueue_python | cachix push channable"

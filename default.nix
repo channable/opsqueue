@@ -14,6 +14,9 @@ let
       build_util
       mypy
       uv
+      pytest
+      pytest-random-order
+      pytest-parallel
     ]
   );
 
