@@ -11,12 +11,15 @@ use pyo3::{create_exception, IntoPy, PyObject};
 
 use crate::common::{ChunkIndex, SubmissionId};
 
+create_exception!(opsqueue_internal, SubmissionFailedError, PyException);
+
 create_exception!(opsqueue_internal, IncorrectUsageError, PyTypeError);
 create_exception!(
     opsqueue_internal,
     SubmissionNotFoundError,
     IncorrectUsageError
 );
+
 create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
 create_exception!(opsqueue_internal, TryFromIntError, IncorrectUsageError);
 create_exception!(
@@ -158,6 +161,15 @@ impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
         let submission_id = value.0 .0;
         SubmissionNotFoundError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
+    }
+}
+
+pub struct SubmissionFailed(pub crate::common::SubmissionFailed);
+
+impl From<CError<SubmissionFailed>> for PyErr {
+    fn from(value: CError<SubmissionFailed>) -> Self {
+        let submission: crate::common::SubmissionFailed = value.0 .0;
+        SubmissionFailedError::new_err(submission)
     }
 }
 

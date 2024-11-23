@@ -21,7 +21,7 @@ use ux_serde::u63;
 
 use crate::{
     common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes},
-    errors::{CError, CPyResult, FatalPythonException},
+    errors::{self, CError, CPyResult, FatalPythonException},
 };
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
@@ -212,6 +212,7 @@ impl ProducerClient {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn try_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
@@ -221,6 +222,7 @@ impl ProducerClient {
         E![
             FatalPythonException,
             SubmissionNotCompletedYetError,
+            errors::SubmissionFailed,
             InternalProducerClientError,
         ],
     > {
@@ -250,17 +252,28 @@ impl ProducerClient {
         PyChunksIter,
         E![
             FatalPythonException,
+            errors::SubmissionFailed,
             NonZeroIsZero<chunk::ChunkIndex>,
             ChunksStorageError,
             InternalProducerClientError,
         ],
     > {
-        let submission_id = self.insert_submission_chunks(py, chunk_contents, metadata)?;
+        let submission_id = self
+            .insert_submission_chunks(py, chunk_contents, metadata)
+            .map_err(|CError(e)| {
+                CError(match e {
+                    L(e) => L(e),
+                    R(e) => R(R(e)),
+                })
+            })?;
         let res = self
             .blocking_stream_completed_submission_chunks(py, submission_id)
-            .map_err(|CError(e)| match e {
-                L(e) => CError(L(e)),
-                R(e) => CError(R(R(R(e)))),
+            .map_err(|CError(e)| {
+                CError(match e {
+                    L(e) => L(e),
+                    R(L(e)) => R(L(e)),
+                    R(R(e)) => R(R(R(R(e)))),
+                })
             })?;
         Ok(res)
     }
@@ -276,7 +289,14 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         submission_id: SubmissionId,
-    ) -> CPyResult<PyChunksIter, E![FatalPythonException, InternalProducerClientError]> {
+    ) -> CPyResult<
+        PyChunksIter,
+        E![
+            FatalPythonException,
+            errors::SubmissionFailed,
+            InternalProducerClientError
+        ],
+    > {
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 let mut interval = Duration::from_millis(10);
@@ -323,8 +343,16 @@ impl ProducerClient {
     async fn maybe_stream_completed_submission(
         &self,
         id: SubmissionId,
-    ) -> CPyResult<Option<PyChunksIter>, InternalProducerClientError> {
-        match self.producer_client.get_submission(id.into()).await? {
+    ) -> CPyResult<
+        Option<PyChunksIter>,
+        E![crate::errors::SubmissionFailed, InternalProducerClientError],
+    > {
+        match self
+            .producer_client
+            .get_submission(id.into())
+            .await
+            .map_err(R)?
+        {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 log::debug!(
                     "Submission {} completed! Streaming result-chunks from object store",
@@ -336,6 +364,9 @@ impl ProducerClient {
 
                 Ok(Some(py_chunks_iter))
             }
+            Some(submission::SubmissionStatus::Failed(submission)) => Err(CError(L(
+                crate::errors::SubmissionFailed(submission.into()),
+            ))),
             _ => Ok(None),
         }
     }
