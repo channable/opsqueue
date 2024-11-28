@@ -6,44 +6,42 @@ repos:
     hooks:
       - id: ruff-check
         name: Ruff linting
-        entry: ruff check
+        entry: ruff check --fix
         language: system
         types: [python]
-        pass_filenames: false
       - id: ruff-format
         name: Ruff formatting
-        entry: ruff format --check
+        entry: ruff format
         language: system
         types: [python]
-        pass_filenames: false
       - id: biome
         name: Biome formatting
-        entry: biome format --files-ignore-unknown=true --no-errors-on-unmatched
+        entry: biome format --write
         language: system
+        types: [json]
       - id: rustfmt
         name: rustfmt
-        entry: cargo fmt --check
+        entry: cargo fmt --
         language: system
-        pass_filenames: false
+        types: [rust]
       - id: mypy
         name: mypy
         entry: mypy --strict ./libs/opsqueue_python
-        pass_filenames: false
         language: system
         types: [python]
+        pass_filenames: false
       - id: nixfmt
         name: nixfmt
-        entry: nixfmt --strict --check
+        entry: nixfmt --strict
         language: system
         types: [nix]
         exclude: extra
       - id: clippy
         name: Cargo clippy
-        entry: cargo clippy --no-deps -- -Dwarnings
+        entry: cargo clippy --no-deps --fix --allow-dirty -- -Dwarnings
         language: system
         pass_filenames: false
       - id: fix-whitespace
         name: fix-whitespace
-        entry: fix-whitespace --config=.fix-whitespace.yaml --check
+        entry: fix-whitespace --config=.fix-whitespace.yaml
         language: system
-        pass_filenames: false

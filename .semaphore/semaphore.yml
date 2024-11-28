@@ -90,4 +90,4 @@ blocks:
       jobs:
         - name: "Type- and format-check"
           commands:
-            - "./build.py check style"
+            - "./build.py check pre-commit --all"
