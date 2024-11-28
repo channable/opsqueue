@@ -45,3 +45,4 @@ repos:
         name: fix-whitespace
         entry: fix-whitespace --config=.fix-whitespace.yaml
         language: system
+        types: [text]
