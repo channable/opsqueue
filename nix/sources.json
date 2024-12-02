@@ -18,15 +18,15 @@
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs-mozilla": {
-        "branch": "fp/fix-deprecation-warning",
+        "branch": "master",
         "description": "Mozilla overlay for Nixpkgs.",
         "homepage": "",
-        "owner": "channable",
+        "owner": "mozilla",
         "repo": "nixpkgs-mozilla",
-        "rev": "f9a22cbec62d5b2de1684bf192be3f86847cbbec",
-        "sha256": "1cbsalqnswaj0wfvhszhgjypqlaja95z48q3vcvc8gm4q2paddj2",
+        "rev": "ad7af231a95acf65ccc4afa0c766f5c0674ad3f1",
+        "sha256": "0j7m3ay5zcnijg0vqnqyf618n66x5zgk9p4j2zas1c0gyqzh1bqr",
         "type": "tarball",
-        "url": "https://github.com/channable/nixpkgs-mozilla/archive/f9a22cbec62d5b2de1684bf192be3f86847cbbec.tar.gz",
+        "url": "https://github.com/mozilla/nixpkgs-mozilla/archive/ad7af231a95acf65ccc4afa0c766f5c0674ad3f1.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     }
 }
