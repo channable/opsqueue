@@ -15,7 +15,7 @@ dependencies = [
     # Default serialization format:
     "cbor2",
     # Tracing:
-    "opentelemetry-api==1.28.2", 
+    "opentelemetry-api==1.28.2",
     "opentelemetry-sdk==1.28.2",
     "opentelemetry-exporter-otlp",
 ]

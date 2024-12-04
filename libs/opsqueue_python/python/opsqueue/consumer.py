@@ -70,13 +70,19 @@ class ConsumerClient:
     ) -> None:
         def raw_chunk_callback(chunk: Chunk) -> bytes:
             ctx = _trace_context_from_chunk(chunk)
-            with opentelemetry.trace.get_tracer("opsqueue.consumer").start_as_current_span("run_chunk", context=ctx, kind=opentelemetry.trace.SpanKind.CONSUMER) as span:
+            with opentelemetry.trace.get_tracer(
+                "opsqueue.consumer"
+            ).start_as_current_span(
+                "run_chunk", context=ctx, kind=opentelemetry.trace.SpanKind.CONSUMER
+            ) as span:
                 span.set_attribute("submission_id", chunk.submission_id.id)
                 span.set_attribute("chunk_index", chunk.chunk_index.id)
                 for k, v in opentelemetry.baggage.get_all(ctx).items():
                     span.set_attribute(k, v)
 
-                chunk_contents = common.decode_chunk(chunk.input_content, serialization_format)
+                chunk_contents = common.decode_chunk(
+                    chunk.input_content, serialization_format
+                )
                 chunk_result_contents = chunk_callback(chunk_contents, chunk)
                 return common.encode_chunk(chunk_result_contents, serialization_format)
 
@@ -159,5 +165,8 @@ class ConsumerClient:
         """
         self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)
 
+
 def _trace_context_from_chunk(chunk: Chunk) -> opentelemetry.context.Context:
-    return tracing.carrier_to_opentelemetry_tracecontext(chunk.submission_otel_trace_carrier)
+    return tracing.carrier_to_opentelemetry_tracecontext(
+        chunk.submission_otel_trace_carrier
+    )

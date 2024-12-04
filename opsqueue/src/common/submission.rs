@@ -170,7 +170,7 @@ impl Submission {
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
             metadata,
-            otel_trace_carrier
+            otel_trace_carrier,
         };
         let chunks = chunks
             .into_iter()
@@ -325,16 +325,18 @@ pub mod db {
         id: SubmissionId,
         conn: impl Executor<'_, Database = Sqlite>,
     ) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
-        let submission = query_as!(Submission, 
+        let submission = query_as!(
+            Submission,
             r#"
             SELECT id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
-            , metadata 
+            , metadata
             , otel_trace_carrier
             FROM submissions WHERE id = ?
-            "#, id
+            "#,
+            id
         )
         .fetch_one(conn)
         .await?;

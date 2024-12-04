@@ -4,7 +4,11 @@ use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyItera
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::{chunk, submission}, object_store::{ChunkRetrievalError, ChunkType}, producer::common::ChunkContents, tracing::CarrierMap, E
+    common::{chunk, submission},
+    object_store::{ChunkRetrievalError, ChunkType},
+    producer::common::ChunkContents,
+    tracing::CarrierMap,
+    E,
 };
 use opsqueue::{
     common::{

@@ -2,7 +2,6 @@ import logging
 from opsqueue.consumer import ConsumerClient, Strategy
 
 from opentelemetry import trace
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -13,18 +12,20 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
+
 def set_up_global_tracer():
     """
     This is usually called once per app, at startup time.
     """
-    resource = Resource(attributes={
-        SERVICE_NAME: "tracing_with_opsqueue_example_consumer"
-    })
+    resource = Resource(
+        attributes={SERVICE_NAME: "tracing_with_opsqueue_example_consumer"}
+    )
     provider = TracerProvider(resource=resource)
     processor = BatchSpanProcessor(OTLPSpanExporter())
     provider.add_span_processor(processor)
 
     trace.set_tracer_provider(provider)
+
 
 def run_consumer():
     tracer = trace.get_tracer("tracing_consumer")
@@ -43,7 +44,6 @@ def run_consumer():
 
         return data + 1
 
-
     client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/tracing_example")
     client.run_each_op(incrementer, strategy=Strategy.Random)
 
@@ -51,6 +51,7 @@ def run_consumer():
 def main():
     set_up_global_tracer()
     run_consumer()
+
 
 if __name__ == "__main__":
     main()

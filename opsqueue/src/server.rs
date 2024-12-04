@@ -85,16 +85,13 @@ pub fn build_router(
     // and stop logging a pair of lines for every HTTP request.
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO))
-        .on_request(|request: &http::Request<_>, span: &tracing::Span|{
+        .on_request(|request: &http::Request<_>, span: &tracing::Span| {
             use tracing_opentelemetry::OpenTelemetrySpanExt;
             span.set_parent(crate::tracing::context_from_headers(request.headers()));
         })
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
-    let traced_routes = 
-    routes
-    .layer(tracing_middleware)
-    .layer(prometheus_config.0);
+    let traced_routes = routes.layer(tracing_middleware).layer(prometheus_config.0);
 
     // We do not want to trace, log nor gather metrics for the `ping` or `metrics` endpoints
     traced_routes

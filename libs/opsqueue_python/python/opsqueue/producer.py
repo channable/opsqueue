@@ -67,7 +67,8 @@ class ProducerClient:
         tracer = trace.get_tracer("opsqueue.producer")
         with tracer.start_as_current_span("run_submission"):
             results_iter = self.run_submission_chunks(
-                _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
+                _chunk_iterator(ops, chunk_size, serialization_format),
+                metadata=metadata,
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
@@ -164,7 +165,9 @@ class ProducerClient:
         otel_trace_carrier = tracing.current_opentelemetry_tracecontext_to_carrier()
 
         return self.inner.insert_submission_chunks(
-            iter(chunk_contents), metadata=metadata, otel_trace_carrier=otel_trace_carrier
+            iter(chunk_contents),
+            metadata=metadata,
+            otel_trace_carrier=otel_trace_carrier,
         )
 
     def blocking_stream_completed_submission_chunks(

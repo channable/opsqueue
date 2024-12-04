@@ -165,7 +165,9 @@ impl Chunk {
             retries: c.retries,
             submission_prefix: prefix,
             submission_metadata: s.metadata,
-            submission_otel_trace_carrier: opsqueue::tracing::json_to_carrier(&s.otel_trace_carrier),
+            submission_otel_trace_carrier: opsqueue::tracing::json_to_carrier(
+                &s.otel_trace_carrier,
+            ),
         })
     }
 }
