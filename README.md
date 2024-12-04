@@ -184,20 +184,44 @@ Opsqueue consists of three independently running parts: the Producer, the Queue 
 
 The producer and the consumer are pieces of code that you write (in e.g. Python), which use the Opsqueue client library to communicate with the queue.
 
+## The Producer
+
 The producer is responsible for building ('generating') an iterator of operations (a 'submission'). The client library can then be invoked to upload these to object storage (e.g. GCS) and submit the metadata of this submission to the queue.
 
 Then, the producer will wait until the submission is done (using short-polling until the status of the submission has changed), after which it will receive back an iterator of results.
+If the submission failed, instead the producer will receive a failure result instead. In Python this is raised as a `SubmissionFailed` exception.
+
+## The Consumer
 
 The consumer on the other hand will grab chunks of operations from the queue. Grabbing chunks is implemented in the client library. The code that you need to write,
 is what happens to each of the operations (how to 'execute' them) and return an operation-result.
 
 The consumer can use a _Strategy_ to indicate which kind of submission it would prefer to work on. This allows consumers to implement more sophisticated fairness methodologies. 
-Currently, a consumer can only indicate 'oldest first', 'newest first' or 'random'. In the near future, they will also be able to use strategies like 'prefer from a distinct user' (where the user ID is something that is set as part of the metadata of the submission when the producer sends it to the queue). 
+Currently, a consumer can only indicate 'oldest first', 'newest first' or 'random'. In the near future, they will also be able to use strategies like 'prefer from a distinct user' (where the user ID is something that is set as part of the metadata of the submission when the producer sends it to the queue).
+
+When picking up a chunk of operations from the queue, a consumer first _reserves_ the chunk and then downloads its contents from object storage. The queue guarantees that no other consumer will start working on a reserved chunk.
+When the consumer is done with the chunk, it uploads the results back to object storage and then marks the chunk _as completed_ for the queue.
+A consumer can also mark a chunk as _failed_, in which case the chunk's retry counter will increment inside the queue. After this, the chunk is back open for being reserved by another consumer. If the reservation counter is too high (default: 10), the chunk will _permanently fail_ and the full submission will fail (and all of the remaining chunks removed from the backlog).
+Were a consumer to _raise an exception_ or _outright crash_ or _have network problems_, then the chunk(s) it is working on will similarly be un-reserved by the queue. See the heartbeating section below for details.
+
+### Idempotency
+
+In the event of a consumer crash or (ephemeral) network problems, we do not want work to get lost. The opsqueue system takes the 'at least once' approach (rather than the 'at most once' approach). This means that your consumers **must be idempotent**. They have to handle the possibility of (part of a) chunk being re-executed multiple times.
+
+## API connections
 
 Under the hood, the producer and the queue talk with each other using a JSON-REST API over HTTP. Users of opsqueue don't need to think about this, as this is abstracted behind the client library.
 
 The communication between the consumer and the queue on the other hand is done in COBR over a persistent WebSocket connection. A heartbeating protocol is used to ensure that a closed or broken connection is detected early. The goal is that the system will recognize and recover from network problems or crashed consumers within seconds.
+Similarly, as a user no detailed understanding of this should be necessary as it is abstracted away inside the client library.
 
-## Heartbeating
+### Consumer <-> Opsqueue Heartbeating
 
-To keep 
+For heartbeating between the queue and the consumer, the following approach is used:
+- Every 5 seconds (configurable), if no other message was sent/received on this connection, the queue will send a websocket 'PING' message
+- Whenever a PING is received, the consumer client will respond with a 'PONG' (This is builtin behaviour of the websocket protocol)
+- Whenever the queue or the consumer client receives any message (including a PING or PONG), the heartbeat timer is reset
+- If it took more than 5 seconds (configurable) to receive the last heartbeat, the 'missed heartbeats' counter is incremented
+- If the 'missed heartbeats' counter is > 3 (configurable), the connection is considered unhealthy, and the connection is closed.
+  - The consumer: Upon a connection being closed, ongoing work is dropped. After that, the consumer will attempt to reconnect with the queue
+  - The queue: Upon a connection being closed, work reserved by a consumer is un-reserved and may be picked up by another consumer
