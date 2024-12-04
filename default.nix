@@ -42,6 +42,9 @@ let
       cargo-edit
       cargo-nextest
       maturin
+
+      # Tool to locally inspect opentelemetry traces
+      jaeger
     ];
   };
   environments = {

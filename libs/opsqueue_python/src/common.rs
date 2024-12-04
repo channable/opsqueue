@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
+use opsqueue::tracing::CarrierMap;
 use pyo3::prelude::*;
 
 use opsqueue::common::{chunk, submission};
@@ -135,6 +136,7 @@ pub struct Chunk {
     pub retries: i64,
     pub submission_prefix: Option<String>,
     pub submission_metadata: Option<Metadata>,
+    pub submission_otel_trace_carrier: CarrierMap,
 }
 
 impl Chunk {
@@ -163,6 +165,7 @@ impl Chunk {
             retries: c.retries,
             submission_prefix: prefix,
             submission_metadata: s.metadata,
+            submission_otel_trace_carrier: opsqueue::tracing::json_to_carrier(&s.otel_trace_carrier),
         })
     }
 }

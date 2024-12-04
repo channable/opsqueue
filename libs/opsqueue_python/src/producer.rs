@@ -4,10 +4,7 @@ use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyItera
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::{chunk, submission},
-    object_store::{ChunkRetrievalError, ChunkType},
-    producer::common::ChunkContents,
-    E,
+    common::{chunk, submission}, object_store::{ChunkRetrievalError, ChunkType}, producer::common::ChunkContents, tracing::CarrierMap, E
 };
 use opsqueue::{
     common::{
@@ -131,12 +128,13 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[pyo3(signature = (chunk_contents, metadata=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
+        otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
@@ -147,7 +145,7 @@ impl ProducerClient {
             };
             self.block_unless_interrupted(async move {
                 self.producer_client
-                    .insert_submission(&submission)
+                    .insert_submission(&submission, &otel_trace_carrier)
                     .await
                     .map_err(|e| R(e).into())
             })
@@ -155,13 +153,14 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[pyo3(signature = (chunk_contents, metadata=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
+        otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         SubmissionId,
         E![
@@ -201,7 +200,7 @@ impl ProducerClient {
                     metadata,
                 };
                 self.producer_client
-                    .insert_submission(&submission)
+                    .insert_submission(&submission, &otel_trace_carrier)
                     .await
                     .map(|submission_id| {
                         log::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
@@ -241,13 +240,14 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None))]
+    #[pyo3(signature = (chunk_contents, metadata=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
+        otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         PyChunksIter,
         E![
@@ -259,7 +259,7 @@ impl ProducerClient {
         ],
     > {
         let submission_id = self
-            .insert_submission_chunks(py, chunk_contents, metadata)
+            .insert_submission_chunks(py, chunk_contents, metadata, otel_trace_carrier)
             .map_err(|CError(e)| {
                 CError(match e {
                     L(e) => L(e),

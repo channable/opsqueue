@@ -1,6 +1,7 @@
 pub mod common;
 pub mod consumer;
 pub mod producer;
+pub mod tracing;
 
 #[cfg(feature = "client-logic")]
 pub mod object_store;

@@ -4,6 +4,8 @@ from typing import Any
 
 import itertools
 
+from opentelemetry import trace
+
 from opsqueue.common import (
     SerializationFormat,
     encode_chunk,
@@ -12,6 +14,7 @@ from opsqueue.common import (
 )
 from . import opsqueue_internal
 from .opsqueue_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
+from . import tracing
 
 __all__ = ["ProducerClient", "SubmissionId", "SubmissionStatus"]
 
@@ -61,10 +64,12 @@ class ProducerClient:
         - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
-        results_iter = self.run_submission_chunks(
-            _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
-        )
-        return _unchunk_iterator(results_iter, serialization_format)
+        tracer = trace.get_tracer("opsqueue.producer")
+        with tracer.start_as_current_span("run_submission"):
+            results_iter = self.run_submission_chunks(
+                _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
+            )
+            return _unchunk_iterator(results_iter, serialization_format)
 
     def insert_submission(
         self,
@@ -156,8 +161,10 @@ class ProducerClient:
         - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
+        otel_trace_carrier = tracing.current_opentelemetry_tracecontext_to_carrier()
+
         return self.inner.insert_submission_chunks(
-            iter(chunk_contents), metadata=metadata
+            iter(chunk_contents), metadata=metadata, otel_trace_carrier=otel_trace_carrier
         )
 
     def blocking_stream_completed_submission_chunks(
