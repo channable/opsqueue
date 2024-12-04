@@ -214,30 +214,6 @@ def cli_test_integration(via_nix: bool, test_arguments: tuple[str]) -> None:
     subprocess.check_call(preface + command, shell=True)
 
 
-@cli_test.command("nixtegration")
-@click.argument(
-    "test-arguments",
-    nargs=-1,
-)
-def cli_test_nixtergration(test_arguments: tuple[str]) -> None:
-    python_lib_dir = nix.build(
-        "nix/nixpkgs-pinned.nix",
-        version=None,
-        attribute="pythonChannable.pkgs.opsqueue_python",
-    )
-    python_lib_dir = python_lib_dir / "lib" / "python3.12" / "site-packages"
-    command = f"""
-    set -e
-    cd libs/opsqueue_python/tests
-
-    export PYTHONPATH="{python_lib_dir}"
-    export OPSQUEUE_VIA_NIX="true"
-    export RUST_LOG="opsqueue=debug"
-    pytest --color=yes -vvvvv -s --log-cli-level=debug
-    """
-    subprocess.check_call(command, shell=True)
-
-
 if __name__ == "__main__":
     # Build.py may be invoked from a different repository to run a command here,
     # but everything here expects to be running from the repository root, so
