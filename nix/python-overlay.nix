@@ -8,4 +8,5 @@ self: super: {
   pymdown-extensions = super.pymdown-extensions.overrideAttrs (_oldAttrs: {
     disabledTestPaths = [ "tests/test_extensions/test_pathconverter.py" ];
   });
+
 }
