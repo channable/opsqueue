@@ -16,7 +16,7 @@ repos:
         types: [python]
       - id: biome
         name: Biome formatting
-        entry: biome format --write
+        entry: biome format --write --files-ignore-unknown=true --no-errors-on-unmatched
         language: system
         types: [json]
       - id: rustfmt
@@ -24,11 +24,6 @@ repos:
         entry: cargo fmt --
         language: system
         types: [rust]
-      # - id: mypy
-      #   name: mypy
-      #   entry: mypy --strict ./libs/opsqueue_python
-      #   language: system
-      #   types: [python]
         pass_filenames: false
       - id: nixfmt
         name: nixfmt

@@ -13,8 +13,9 @@ import click
 from pathlib import Path
 from build_util import (
     check,
-    install,
     nix,
+    install,
+    process,
 )
 
 
@@ -85,20 +86,41 @@ def cli_run(opsqueue_arguments: tuple[str]) -> None:
 ### CHECK ###
 
 
-@cli.group("check", invoke_without_command=True)
-@click.pass_context
-def cli_check(ctx: click.Context) -> None:
+cli.add_command(check_group := check.check_group())
+
+check_group.add_command(check.pre_commit_command())
+
+
+@check_group.command(name="type")
+@click.option(
+    "--enable-daemon",
+    is_flag=True,
+    default=False,
+    help="Whether to enable dmypy for faster type checking",
+)
+def check_type(enable_daemon: bool) -> None:
     """
-    Run linters, optionally with automatic fixes.
-
-    When invoked without any subcommand, runs all checks.
+    Run type checks using `mypy` or `dmypy`. `dmypy` is faster, but doesn't support all features
+    of `mypy`, like generating reports in junit xml format. Locally, it's best to run mypy as a
+    daemon for faster type checking.
     """
-    if ctx.invoked_subcommand is None:
-        for cmd in cli_check.commands.values():
-            ctx.invoke(cmd)
+    if enable_daemon:
+        process.run_checked(["dmypy", "--version"])
+        process.run_checked(
+            [
+                "dmypy",
+                "run",
+                "--",
+                "--strict",
+                "--follow-imports=normal",
+                "--junit-xml=",
+                "./libs/opsqueue_python",
+            ]
+        )
+    else:
+        process.run_checked(["mypy", "--version"])
+        process.run_checked(["mypy", "--strict", "./libs/opsqueue_python"])
 
-
-cli_check.add_command(check.pre_commit_command())
 
 ### INSTALL ###
 
