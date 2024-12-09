@@ -6,6 +6,7 @@ let
     paths = with pkgs; [
       # Used to execute the pre-commit hook
       pre-commit
+      pre-commit-env
     ];
   };
 in

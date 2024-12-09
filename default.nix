@@ -4,10 +4,6 @@
 let
   pkgs = import ./nix/nixpkgs-pinned.nix { };
 
-  # Rust channel based on the selected runtime, this is a feature of the Mozilla overlay
-  rustChannel = pkgs.rustChannelOf { rustToolchain = ./rust-toolchain; };
-  rust-with-lsp = rustChannel.rust.override { extensions = [ "rust-src" ]; };
-
   pythonEnv = pkgs.pythonChannable.withPackages (
     p: with p; [
       click
@@ -29,11 +25,8 @@ let
     name = "opsqueue-env-default";
     paths = with pkgs; [
       # For linting and formatting
-      ruff
       pre-commit
-      biome
-      nixfmt-rfc-style
-      haskellPackages.fix-whitespace
+      pre-commit-env
 
       # For compiling the Rust parts
       rust-with-lsp

@@ -21,4 +21,19 @@ in
   # In our case cachix > ghc > shpinx > Python libraries.
   pythonOverlay = self.lib.composeExtensions super.pythonOverlay pythonOverlay;
   pythonChannable = super.python312.override { packageOverrides = self.pythonOverlay; };
+
+  # Rust channel based on the selected runtime, this is a feature of the Mozilla overlay
+  rustChannel = super.rustChannelOf { rustToolchain = ../rust-toolchain; };
+  rust-with-lsp = self.rustChannel.rust.override { extensions = [ "rust-src" ]; };
+
+  pre-commit-env = self.buildEnv {
+    name = "pre-commit-env";
+    paths = [
+      super.haskellPackages.fix-whitespace
+      super.nixfmt-rfc-style
+      super.ruff
+      super.biome
+      self.rust-with-lsp
+    ];
+  };
 }

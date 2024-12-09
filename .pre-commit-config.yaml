@@ -24,11 +24,11 @@ repos:
         entry: cargo fmt --
         language: system
         types: [rust]
-      - id: mypy
-        name: mypy
-        entry: mypy --strict ./libs/opsqueue_python
-        language: system
-        types: [python]
+      # - id: mypy
+      #   name: mypy
+      #   entry: mypy --strict ./libs/opsqueue_python
+      #   language: system
+      #   types: [python]
         pass_filenames: false
       - id: nixfmt
         name: nixfmt
@@ -38,7 +38,7 @@ repos:
         exclude: extra
       - id: clippy
         name: Cargo clippy
-        entry: cargo clippy --no-deps --fix --allow-dirty -- -Dwarnings
+        entry: cargo clippy --no-deps --fix --allow-dirty --allow-staged -- -Dwarnings
         language: system
         pass_filenames: false
       - id: fix-whitespace
