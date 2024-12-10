@@ -95,6 +95,7 @@ pub struct Submission {
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
     pub metadata: Option<Metadata>,
+    pub otel_trace_carrier: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -104,6 +105,7 @@ pub struct SubmissionCompleted {
     pub chunks_total: ChunkCount,
     pub metadata: Option<Metadata>,
     pub completed_at: DateTime<Utc>,
+    pub otel_trace_carrier: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -114,6 +116,7 @@ pub struct SubmissionFailed {
     pub metadata: Option<Metadata>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: ChunkIndex,
+    pub otel_trace_carrier: String,
 }
 
 // #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -138,12 +141,14 @@ impl Default for Submission {
 
 impl Submission {
     pub fn new() -> Self {
+        let otel_trace_carrier = crate::tracing::current_context_to_json();
         Submission {
             id: SubmissionId(u63::new(0)),
             prefix: None,
             chunks_total: ChunkCount::zero(),
             chunks_done: ChunkCount::zero(),
             metadata: None,
+            otel_trace_carrier,
         }
     }
 
@@ -158,12 +163,14 @@ impl Submission {
     ) -> Option<(Submission, Vec<Chunk>)> {
         let submission_id = Self::generate_id();
         let len = ChunkCount::new(u64::try_from(chunks.len()).ok()?).ok()?;
+        let otel_trace_carrier = crate::tracing::current_context_to_json();
         let submission = Submission {
             id: submission_id,
             prefix: None,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
             metadata,
+            otel_trace_carrier,
         };
         let chunks = chunks
             .into_iter()
@@ -235,14 +242,15 @@ pub mod db {
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
-        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ",
             submission.id,
             submission.prefix,
             submission.chunks_total,
             submission.chunks_done,
-            submission.metadata
+            submission.metadata,
+            submission.otel_trace_carrier
         )
         .execute(conn)
         .await?;
@@ -291,12 +299,14 @@ pub mod db {
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = Submission::generate_id();
         let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
+        let otel_trace_carrier = crate::tracing::current_context_to_json();
         let submission = Submission {
             id: submission_id,
             prefix,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
             metadata,
+            otel_trace_carrier,
         };
         let iter = chunks_contents
             .into_iter()
@@ -315,7 +325,19 @@ pub mod db {
         id: SubmissionId,
         conn: impl Executor<'_, Database = Sqlite>,
     ) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
-        let submission = query_as!(Submission, r#"SELECT id AS "id: SubmissionId", prefix, chunks_total AS "chunks_total: ChunkCount", chunks_done AS "chunks_done: ChunkCount", metadata FROM submissions WHERE id = ?"#, id)
+        let submission = query_as!(
+            Submission,
+            r#"
+            SELECT id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , metadata
+            , otel_trace_carrier
+            FROM submissions WHERE id = ?
+            "#,
+            id
+        )
         .fetch_one(conn)
         .await?;
         Ok(submission)
@@ -360,6 +382,7 @@ pub mod db {
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
             , metadata
+            , otel_trace_carrier
         FROM submissions WHERE id = ?
         "#,
             id
@@ -379,6 +402,7 @@ pub mod db {
             , chunks_total AS "chunks_total: ChunkCount"
             , metadata
             , completed_at AS "completed_at: DateTime<Utc>"
+            , otel_trace_carrier
         FROM submissions_completed WHERE id = ?
         "#,
             id
@@ -399,6 +423,7 @@ pub mod db {
             , metadata
             , failed_at AS "failed_at: DateTime<Utc>"
             , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
+            , otel_trace_carrier
         FROM submissions_failed WHERE id = ?
         "#,
             id

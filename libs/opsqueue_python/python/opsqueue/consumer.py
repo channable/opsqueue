@@ -1,15 +1,17 @@
 from __future__ import annotations
 from collections.abc import Sequence
+import typing
 from typing import Any, Callable
+
+import opentelemetry
+import opentelemetry.trace
+import opentelemetry.baggage
+import opentelemetry.util.types
 
 from . import opsqueue_internal
 from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
-from .common import (
-    SerializationFormat,
-    encode_chunk,
-    decode_chunk,
-    DEFAULT_SERIALIZATION_FORMAT,
-)
+from . import tracing
+from . import common
 
 DEFAULT_STRATEGY = Strategy.Newest
 
@@ -45,7 +47,7 @@ class ConsumerClient:
         op_callback: Callable[[Any], Any],
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
-        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        serialization_format: common.SerializationFormat = common.DEFAULT_SERIALIZATION_FORMAT,
     ) -> None:
         """
         Runs the given `op_callback` for each reservable operation in a loop.
@@ -68,12 +70,26 @@ class ConsumerClient:
         chunk_callback: Callable[[Sequence[Any], Chunk], Sequence[Any]],
         *,
         strategy: Strategy = DEFAULT_STRATEGY,
-        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        serialization_format: common.SerializationFormat = common.DEFAULT_SERIALIZATION_FORMAT,
     ) -> None:
         def raw_chunk_callback(chunk: Chunk) -> bytes:
-            chunk_contents = decode_chunk(chunk.input_content, serialization_format)
-            chunk_result_contents = chunk_callback(chunk_contents, chunk)
-            return encode_chunk(chunk_result_contents, serialization_format)
+            ctx = _trace_context_from_chunk(chunk)
+            with opentelemetry.trace.get_tracer(
+                "opsqueue.consumer"
+            ).start_as_current_span(
+                "run_chunk", context=ctx, kind=opentelemetry.trace.SpanKind.CONSUMER
+            ) as span:
+                span.set_attribute("submission_id", chunk.submission_id.id)
+                span.set_attribute("chunk_index", chunk.chunk_index.id)
+                for k, v in opentelemetry.baggage.get_all(ctx).items():
+                    safe_v = typing.cast(opentelemetry.util.types.AttributeValue, v)
+                    span.set_attribute(k, safe_v)
+
+                chunk_contents = common.decode_chunk(
+                    chunk.input_content, serialization_format
+                )
+                chunk_result_contents = chunk_callback(chunk_contents, chunk)
+                return common.encode_chunk(chunk_result_contents, serialization_format)
 
         self.run_each_chunk_raw(raw_chunk_callback, strategy=strategy)
 
@@ -153,3 +169,9 @@ class ConsumerClient:
         - InternalConsumerClientError if there is a low-level internal error
         """
         self.inner.fail_chunk(submission_id, submission_prefix, chunk_index, failure)
+
+
+def _trace_context_from_chunk(chunk: Chunk) -> opentelemetry.context.Context:
+    return tracing.carrier_to_opentelemetry_tracecontext(
+        chunk.submission_otel_trace_carrier
+    )

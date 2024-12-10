@@ -5,6 +5,7 @@ use backon::FibonacciBuilder;
 use backon::Retryable;
 
 use crate::common::submission::{SubmissionId, SubmissionStatus};
+use crate::tracing::CarrierMap;
 
 use super::common::InsertSubmission;
 
@@ -56,12 +57,14 @@ impl Client {
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
+        otel_trace_carrier: &CarrierMap,
     ) -> Result<SubmissionId, InternalProducerClientError> {
         (|| async {
             let endpoint_url = &self.endpoint_url;
             let resp = self
                 .http_client
                 .post(format!("http://{endpoint_url}/submissions"))
+                .headers(otel_trace_carrier.try_into().unwrap_or_default())
                 .json(submission)
                 .send()
                 .await?;
@@ -215,7 +218,7 @@ mod tests {
             metadata: None,
         };
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 
@@ -225,15 +228,15 @@ mod tests {
         assert_eq!(count, 1);
 
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 
@@ -256,7 +259,7 @@ mod tests {
             metadata: None,
         };
         let submission_id = client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 

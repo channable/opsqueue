@@ -5,6 +5,9 @@ use std::sync::Mutex;
 use axum_prometheus::metrics::histogram;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use opentelemetry::trace::TraceContextExt;
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::common::chunk;
 use crate::common::errors::DatabaseError;
@@ -116,6 +119,18 @@ impl ConsumerState {
                 ChunkId::from((chunk.submission_id, chunk.chunk_index))
             }),
         );
+
+        // Link the consumer's trace with the submission's existing trace context
+        if new_reservations.len() == 1 {
+            let submission = &new_reservations[0].1;
+            let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);
+            Span::current().set_parent(context);
+        } else {
+            for (_, submission) in &new_reservations {
+                let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);
+                Span::current().add_link(context.span().span_context().clone());
+            }
+        }
 
         histogram!(
             crate::prometheus::CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,

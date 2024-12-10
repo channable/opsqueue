@@ -17,6 +17,11 @@ let
       pytest
       pytest-random-order
       pytest-parallel
+
+      # Repeated here so MyPy sees them:
+      opentelemetry-api
+      opentelemetry-exporter-otlp
+      opentelemetry-sdk
     ]
   );
 
@@ -42,6 +47,9 @@ let
       cargo-edit
       cargo-nextest
       maturin
+
+      # Tool to locally inspect opentelemetry traces
+      jaeger
     ];
   };
   environments = {

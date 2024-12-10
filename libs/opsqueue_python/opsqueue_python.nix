@@ -3,6 +3,11 @@
   buildPythonPackage,
   rustPlatform,
   perl,
+  # Python packages:
+  cbor2,
+  opentelemetry-api,
+  opentelemetry-exporter-otlp,
+  opentelemetry-sdk,
 }:
 
 buildPythonPackage rec {
@@ -66,5 +71,12 @@ buildPythonPackage rec {
     perl
     cargoSetupHook
     maturinBuildHook
+  ];
+
+  propagatedBuildInputs = [
+    cbor2
+    opentelemetry-api
+    opentelemetry-exporter-otlp
+    opentelemetry-sdk
   ];
 }
