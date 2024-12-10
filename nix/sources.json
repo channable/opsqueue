@@ -2,7 +2,7 @@
     "devops": {
         "branch": "master",
         "repo": "git@github.com:channable/devops.git",
-        "rev": "1740a35ccab74ef2428f270587c86cd61dc22d39",
+        "rev": "6df7b1f836ec57b43e9f1b4e5103d61ff515d764",
         "type": "git"
     },
     "nixpkgs": {
