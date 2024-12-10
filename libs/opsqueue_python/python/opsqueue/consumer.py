@@ -1,8 +1,11 @@
 from __future__ import annotations
 from collections.abc import Sequence
+import typing
 from typing import Any, Callable
 
 import opentelemetry
+import opentelemetry.baggage
+import opentelemetry.util.types
 
 from . import opsqueue_internal
 from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
@@ -78,7 +81,8 @@ class ConsumerClient:
                 span.set_attribute("submission_id", chunk.submission_id.id)
                 span.set_attribute("chunk_index", chunk.chunk_index.id)
                 for k, v in opentelemetry.baggage.get_all(ctx).items():
-                    span.set_attribute(k, v)
+                    safe_v = typing.cast(opentelemetry.util.types.AttributeValue, v)
+                    span.set_attribute(k, safe_v)
 
                 chunk_contents = common.decode_chunk(
                     chunk.input_content, serialization_format

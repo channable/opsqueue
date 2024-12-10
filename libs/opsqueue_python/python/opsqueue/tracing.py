@@ -7,7 +7,7 @@ def current_opentelemetry_tracecontext_to_carrier() -> dict[str, str]:
     Converts the current trace+span in Python
     to its serialized 'TextMap" carrier format
     """
-    carrier = {}
+    carrier: dict[str, str] = {}
     otel_propagator().inject(carrier)
     return carrier
 

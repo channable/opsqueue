@@ -1,5 +1,11 @@
 import logging
+import typing
+import opentelemetry
+import opentelemetry.context
+from opentelemetry.context import Context
 
+import contextlib
+from typing import Optional
 from opentelemetry import trace
 import opentelemetry.context
 from opentelemetry.sdk.trace import TracerProvider
@@ -29,31 +35,8 @@ def set_up_global_tracer():
     trace.set_tracer_provider(provider)
 
 
-import opentelemetry
-import opentelemetry.context
-from opentelemetry.context import Context
-
-import contextlib
-from typing import Optional
 
 
-@contextlib.contextmanager
-def added_baggage(
-    baggage: Optional[dict[str, str]] = None,
-    context: Optional[Context] = None,
-):
-    attached_context_tokens: list[object] = list()
-
-    if baggage:
-        for key, value in baggage.items():
-            attached_token = opentelemetry.baggage.set_baggage(key, value, context)
-            attached_context_tokens.append(opentelemetry.context.attach(attached_token))
-
-    try:
-        yield
-    finally:
-        for attached_token in attached_context_tokens:
-            opentelemetry.context.detach(attached_token)
 
 
 def do_something():
@@ -77,6 +60,25 @@ def do_something():
 def main():
     set_up_global_tracer()
     do_something()
+
+@contextlib.contextmanager
+def added_baggage(
+    baggage: Optional[dict[str, str]] = None,
+    context: Optional[Context] = None,
+):
+    attached_context_tokens: list[Context] = list()
+
+    if baggage:
+        for key, value in baggage.items():
+            attached_token = opentelemetry.baggage.set_baggage(key, value, context)
+            attached_context_tokens.append(typing.cast(Context, opentelemetry.context.attach(attached_token)))
+
+    try:
+        yield
+    finally:
+        for attached_token in attached_context_tokens:
+            opentelemetry.context.detach(attached_token)
+
 
 
 if __name__ == "__main__":

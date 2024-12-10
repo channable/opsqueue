@@ -12,6 +12,8 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    # Type checking
+    "typeguard",
     # Default serialization format:
     "cbor2",
     # Tracing:
