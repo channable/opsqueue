@@ -218,7 +218,7 @@ mod tests {
             metadata: None,
         };
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 
@@ -228,15 +228,15 @@ mod tests {
         assert_eq!(count, 1);
 
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 
@@ -259,7 +259,7 @@ mod tests {
             metadata: None,
         };
         let submission_id = client
-            .insert_submission(&submission)
+            .insert_submission(&submission, &Default::default())
             .await
             .expect("Should be OK");
 
