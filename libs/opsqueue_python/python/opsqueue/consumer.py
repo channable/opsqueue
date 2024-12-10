@@ -4,6 +4,7 @@ import typing
 from typing import Any, Callable
 
 import opentelemetry
+import opentelemetry.trace
 import opentelemetry.baggage
 import opentelemetry.util.types
 

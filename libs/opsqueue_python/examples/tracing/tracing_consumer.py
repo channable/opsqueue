@@ -13,7 +13,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
 
-def set_up_global_tracer():
+def set_up_global_tracer() -> None:
     """
     This is usually called once per app, at startup time.
     """
@@ -27,7 +27,7 @@ def set_up_global_tracer():
     trace.set_tracer_provider(provider)
 
 
-def run_consumer():
+def run_consumer() -> None:
     tracer = trace.get_tracer("tracing_consumer")
 
     @tracer.start_as_current_span("incrementer")
@@ -48,7 +48,7 @@ def run_consumer():
     client.run_each_op(incrementer, strategy=Strategy.Random)
 
 
-def main():
+def main() -> None:
     set_up_global_tracer()
     run_consumer()
 

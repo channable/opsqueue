@@ -1,3 +1,4 @@
+import opentelemetry
 import opentelemetry.propagate
 from opentelemetry.context import Context
 
@@ -23,9 +24,9 @@ def carrier_to_opentelemetry_tracecontext(carrier: dict[str, str]) -> Context:
     return otel_propagator().extract(carrier)
 
 
-def otel_propagator():
+def otel_propagator() -> opentelemetry.propagators.textmap.TextMapPropagator:
     """
     We use the default propagate which is configurable using an env var.
     Opsqueue supports the W3C trace context and W3C baggage
     """
-    return opentelemetry.propagate
+    return opentelemetry.propagate.get_global_textmap()

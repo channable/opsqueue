@@ -5,9 +5,8 @@ import opentelemetry.context
 from opentelemetry.context import Context
 
 import contextlib
-from typing import Optional
+from typing import Optional, Generator
 from opentelemetry import trace
-import opentelemetry.context
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -21,7 +20,7 @@ from opsqueue.producer import ProducerClient
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
 
-def set_up_global_tracer():
+def set_up_global_tracer() -> None:
     """
     This is usually called once per app, at startup time.
     """
@@ -35,11 +34,7 @@ def set_up_global_tracer():
     trace.set_tracer_provider(provider)
 
 
-
-
-
-
-def do_something():
+def do_something() -> None:
     with trace.get_tracer(__name__).start_as_current_span("do_something"):
         with added_baggage(baggage={"app_mode": "preview"}):
             # print(opentelemetry.baggage.get_all())
@@ -57,28 +52,30 @@ def do_something():
             print(sum(output_iter))
 
 
-def main():
+def main() -> None:
     set_up_global_tracer()
     do_something()
+
 
 @contextlib.contextmanager
 def added_baggage(
     baggage: Optional[dict[str, str]] = None,
     context: Optional[Context] = None,
-):
+) -> Generator[None, None, None]:
     attached_context_tokens: list[Context] = list()
 
     if baggage:
         for key, value in baggage.items():
             attached_token = opentelemetry.baggage.set_baggage(key, value, context)
-            attached_context_tokens.append(typing.cast(Context, opentelemetry.context.attach(attached_token)))
+            attached_context_tokens.append(
+                typing.cast(Context, opentelemetry.context.attach(attached_token))
+            )
 
     try:
         yield
     finally:
         for attached_token in attached_context_tokens:
             opentelemetry.context.detach(attached_token)
-
 
 
 if __name__ == "__main__":
