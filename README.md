@@ -83,17 +83,16 @@ cargo build --profile release
 ./target/release/opsqueue
 ```
 
-### Linting
+## Lints and checks
 
-To run code-style checks, static analyses and formatting:
+All lints are run with `pre-commit`*. Running `precommit` can be done with `./build.py check
+pre-commit [--all]`. Installing the git pre-commit hook can be done with `.build.py install
+pre-commit-hook`.
 
-```bash
-# Run all checks and fix those that can be fixed automatically:
-./build.py check style --fix
+Type checks are run `./build.py check type`.
 
-# Check but don't fix (used in CI):
-./build.py check style
-```
+\* We strive to keep the git pre-commit hook fast. If a check takes too much time (especially those
+that cannot be run on a subset of files), we'll move them back to `build.py`.
 
 ## Database migrations
 
@@ -196,7 +195,7 @@ If the submission failed, instead the producer will receive a failure result ins
 The consumer on the other hand will grab chunks of operations from the queue. Grabbing chunks is implemented in the client library. The code that you need to write,
 is what happens to each of the operations (how to 'execute' them) and return an operation-result.
 
-The consumer can use a _Strategy_ to indicate which kind of submission it would prefer to work on. This allows consumers to implement more sophisticated fairness methodologies. 
+The consumer can use a _Strategy_ to indicate which kind of submission it would prefer to work on. This allows consumers to implement more sophisticated fairness methodologies.
 Currently, a consumer can only indicate 'oldest first', 'newest first' or 'random'. In the near future, they will also be able to use strategies like 'prefer from a distinct user' (where the user ID is something that is set as part of the metadata of the submission when the producer sends it to the queue).
 
 When picking up a chunk of operations from the queue, a consumer first _reserves_ the chunk and then downloads its contents from object storage. The queue guarantees that no other consumer will start working on a reserved chunk.

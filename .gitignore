@@ -24,4 +24,5 @@ target/
 .direnv
 
 .mypy_cache
+.dmypy.json
 .ruff_cache

@@ -1,483 +1,483 @@
 /** Disk-Space Utilization Report For opsqueue.db
 
-Page size in bytes................................ 4096      
-Pages in the whole file (measured)................ 3208      
-Pages in the whole file (calculated).............. 3208      
-Pages that store data............................. 3208       100.0% 
-Pages on the freelist (per header)................ 0            0.0% 
-Pages on the freelist (calculated)................ 0            0.0% 
-Pages of auto-vacuum overhead..................... 0            0.0% 
-Number of tables in the database.................. 8         
-Number of indices................................. 5         
-Number of defined indices......................... 1         
-Number of implied indices......................... 4         
-Size of the file in bytes......................... 13139968  
-Bytes of user payload stored...................... 4701750     35.8% 
+Page size in bytes................................ 4096
+Pages in the whole file (measured)................ 3208
+Pages in the whole file (calculated).............. 3208
+Pages that store data............................. 3208       100.0%
+Pages on the freelist (per header)................ 0            0.0%
+Pages on the freelist (calculated)................ 0            0.0%
+Pages of auto-vacuum overhead..................... 0            0.0%
+Number of tables in the database.................. 8
+Number of indices................................. 5
+Number of defined indices......................... 1
+Number of implied indices......................... 4
+Size of the file in bytes......................... 13139968
+Bytes of user payload stored...................... 4701750     35.8%
 
 *** Page counts for all tables with their indices *****************************
 
-CHUNKS............................................ 3197        99.66% 
-_SQLX_MIGRATIONS.................................. 2            0.062% 
-SUBMISSIONS....................................... 2            0.062% 
-SUBMISSIONS_COMPLETED............................. 2            0.062% 
-SUBMISSIONS_FAILED................................ 2            0.062% 
-CHUNKS_COMPLETED.................................. 1            0.031% 
-CHUNKS_FAILED..................................... 1            0.031% 
-SQLITE_SCHEMA..................................... 1            0.031% 
+CHUNKS............................................ 3197        99.66%
+_SQLX_MIGRATIONS.................................. 2            0.062%
+SUBMISSIONS....................................... 2            0.062%
+SUBMISSIONS_COMPLETED............................. 2            0.062%
+SUBMISSIONS_FAILED................................ 2            0.062%
+CHUNKS_COMPLETED.................................. 1            0.031%
+CHUNKS_FAILED..................................... 1            0.031%
+SQLITE_SCHEMA..................................... 1            0.031%
 
 *** Page counts for all tables and indices separately *************************
 
-RANDOM_CHUNKS_ORDER............................... 1633        50.9% 
-CHUNKS............................................ 1564        48.8% 
-_SQLX_MIGRATIONS.................................. 1            0.031% 
-CHUNKS_COMPLETED.................................. 1            0.031% 
-CHUNKS_FAILED..................................... 1            0.031% 
-SQLITE_AUTOINDEX__SQLX_MIGRATIONS_1............... 1            0.031% 
-SQLITE_AUTOINDEX_SUBMISSIONS_1.................... 1            0.031% 
-SQLITE_AUTOINDEX_SUBMISSIONS_COMPLETED_1.......... 1            0.031% 
-SQLITE_AUTOINDEX_SUBMISSIONS_FAILED_1............. 1            0.031% 
-SQLITE_SCHEMA..................................... 1            0.031% 
-SUBMISSIONS....................................... 1            0.031% 
-SUBMISSIONS_COMPLETED............................. 1            0.031% 
-SUBMISSIONS_FAILED................................ 1            0.031% 
+RANDOM_CHUNKS_ORDER............................... 1633        50.9%
+CHUNKS............................................ 1564        48.8%
+_SQLX_MIGRATIONS.................................. 1            0.031%
+CHUNKS_COMPLETED.................................. 1            0.031%
+CHUNKS_FAILED..................................... 1            0.031%
+SQLITE_AUTOINDEX__SQLX_MIGRATIONS_1............... 1            0.031%
+SQLITE_AUTOINDEX_SUBMISSIONS_1.................... 1            0.031%
+SQLITE_AUTOINDEX_SUBMISSIONS_COMPLETED_1.......... 1            0.031%
+SQLITE_AUTOINDEX_SUBMISSIONS_FAILED_1............. 1            0.031%
+SQLITE_SCHEMA..................................... 1            0.031%
+SUBMISSIONS....................................... 1            0.031%
+SUBMISSIONS_COMPLETED............................. 1            0.031%
+SUBMISSIONS_FAILED................................ 1            0.031%
 
 *** All tables and indices ****************************************************
 
-Percentage of total database...................... 100.0%    
-Number of entries................................. 600024    
-Bytes of storage consumed......................... 13139968  
-Bytes of payload.................................. 9855467     75.0% 
-Bytes of metadata................................. 1838642     14.0% 
-Average payload per entry......................... 16.43     
-Average unused bytes per entry.................... 2.41      
-Average metadata per entry........................ 3.06      
-Average fanout.................................... 139.00    
-Maximum payload per entry......................... 507       
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 23        
-Primary pages used................................ 3185      
-Overflow pages used............................... 0         
-Total pages used.................................. 3208      
-Unused bytes on index pages....................... 19544       20.7% 
-Unused bytes on primary pages..................... 1426315     10.9% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 1445859     11.0% 
+Percentage of total database...................... 100.0%
+Number of entries................................. 600024
+Bytes of storage consumed......................... 13139968
+Bytes of payload.................................. 9855467     75.0%
+Bytes of metadata................................. 1838642     14.0%
+Average payload per entry......................... 16.43
+Average unused bytes per entry.................... 2.41
+Average metadata per entry........................ 3.06
+Average fanout.................................... 139.00
+Maximum payload per entry......................... 507
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 23
+Primary pages used................................ 3185
+Overflow pages used............................... 0
+Total pages used.................................. 3208
+Unused bytes on index pages....................... 19544       20.7%
+Unused bytes on primary pages..................... 1426315     10.9%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 1445859     11.0%
 
 *** All tables ****************************************************************
 
-Percentage of total database......................  49.0%    
-Number of entries................................. 300018    
-Bytes of storage consumed......................... 6434816   
-Bytes of payload.................................. 4704706     73.1% 
-Bytes of metadata................................. 919000      14.3% 
-Average payload per entry......................... 15.68     
-Average unused bytes per entry.................... 2.70      
-Average metadata per entry........................ 3.06      
-Average fanout.................................... 142.00    
-Maximum payload per entry......................... 507       
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 11        
-Primary pages used................................ 1560      
-Overflow pages used............................... 0         
-Total pages used.................................. 1571      
-Unused bytes on index pages....................... 9720        21.6% 
-Unused bytes on primary pages..................... 801390      12.5% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 811110      12.6% 
+Percentage of total database......................  49.0%
+Number of entries................................. 300018
+Bytes of storage consumed......................... 6434816
+Bytes of payload.................................. 4704706     73.1%
+Bytes of metadata................................. 919000      14.3%
+Average payload per entry......................... 15.68
+Average unused bytes per entry.................... 2.70
+Average metadata per entry........................ 3.06
+Average fanout.................................... 142.00
+Maximum payload per entry......................... 507
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 11
+Primary pages used................................ 1560
+Overflow pages used............................... 0
+Total pages used.................................. 1571
+Unused bytes on index pages....................... 9720        21.6%
+Unused bytes on primary pages..................... 801390      12.5%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 811110      12.6%
 
 *** All indices ***************************************************************
 
-Percentage of total database......................  51.0%    
-Number of entries................................. 300006    
-Bytes of storage consumed......................... 6705152   
-Bytes of payload.................................. 5150761     76.8% 
-Bytes of metadata................................. 919642      13.7% 
-Average payload per entry......................... 17.17     
-Average unused bytes per entry.................... 2.12      
-Average metadata per entry........................ 3.07      
-Average fanout.................................... 136.00    
-Maximum payload per entry......................... 18        
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 12        
-Primary pages used................................ 1625      
-Overflow pages used............................... 0         
-Total pages used.................................. 1637      
-Unused bytes on index pages....................... 9824        20.0% 
-Unused bytes on primary pages..................... 624925       9.4% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 634749       9.5% 
+Percentage of total database......................  51.0%
+Number of entries................................. 300006
+Bytes of storage consumed......................... 6705152
+Bytes of payload.................................. 5150761     76.8%
+Bytes of metadata................................. 919642      13.7%
+Average payload per entry......................... 17.17
+Average unused bytes per entry.................... 2.12
+Average metadata per entry........................ 3.07
+Average fanout.................................... 136.00
+Maximum payload per entry......................... 18
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 12
+Primary pages used................................ 1625
+Overflow pages used............................... 0
+Total pages used.................................. 1637
+Unused bytes on index pages....................... 9824        20.0%
+Unused bytes on primary pages..................... 624925       9.4%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 634749       9.5%
 
 *** Table _SQLX_MIGRATIONS and all its indices ********************************
 
-Percentage of total database......................   0.062%  
-Number of entries................................. 6         
-Bytes of storage consumed......................... 8192      
-Bytes of payload.................................. 314          3.8% 
-Bytes of metadata................................. 37           0.45% 
-Average payload per entry......................... 52.33     
-Average unused bytes per entry.................... 1306.83   
-Average metadata per entry........................ 6.17      
-Maximum payload per entry......................... 102       
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 2         
-Overflow pages used............................... 0         
-Total pages used.................................. 2         
-Unused bytes on primary pages..................... 7841        95.7% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 7841        95.7% 
+Percentage of total database......................   0.062%
+Number of entries................................. 6
+Bytes of storage consumed......................... 8192
+Bytes of payload.................................. 314          3.8%
+Bytes of metadata................................. 37           0.45%
+Average payload per entry......................... 52.33
+Average unused bytes per entry.................... 1306.83
+Average metadata per entry........................ 6.17
+Maximum payload per entry......................... 102
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 2
+Overflow pages used............................... 0
+Total pages used.................................. 2
+Unused bytes on primary pages..................... 7841        95.7%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 7841        95.7%
 
 *** Table _SQLX_MIGRATIONS w/o any indices ************************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 3         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 285          7.0% 
-Bytes of metadata................................. 20           0.49% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 95.00     
-Average unused bytes per entry.................... 1263.67   
-Average metadata per entry........................ 6.67      
-Maximum payload per entry......................... 102       
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 3791        92.6% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 3791        92.6% 
+Percentage of total database......................   0.031%
+Number of entries................................. 3
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 285          7.0%
+Bytes of metadata................................. 20           0.49%
+B-tree depth...................................... 1
+Average payload per entry......................... 95.00
+Average unused bytes per entry.................... 1263.67
+Average metadata per entry........................ 6.67
+Maximum payload per entry......................... 102
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 3791        92.6%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 3791        92.6%
 
 *** Index SQLITE_AUTOINDEX__SQLX_MIGRATIONS_1 of table _SQLX_MIGRATIONS *******
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 3         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 29           0.71% 
-Bytes of metadata................................. 17           0.42% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 9.67      
-Average unused bytes per entry.................... 1350.00   
-Average metadata per entry........................ 5.67      
-Maximum payload per entry......................... 10        
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4050        98.9% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4050        98.9% 
+Percentage of total database......................   0.031%
+Number of entries................................. 3
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 29           0.71%
+Bytes of metadata................................. 17           0.42%
+B-tree depth...................................... 1
+Average payload per entry......................... 9.67
+Average unused bytes per entry.................... 1350.00
+Average metadata per entry........................ 5.67
+Maximum payload per entry......................... 10
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4050        98.9%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4050        98.9%
 
 *** Table CHUNKS and all its indices ******************************************
 
-Percentage of total database......................  99.66%   
-Number of entries................................. 600000    
-Bytes of storage consumed......................... 13094912  
-Bytes of payload.................................. 9852003     75.2% 
-Bytes of metadata................................. 1838356     14.0% 
-Average payload per entry......................... 16.42     
-Average unused bytes per entry.................... 2.34      
-Average metadata per entry........................ 3.06      
-Average fanout.................................... 138.00    
-Maximum payload per entry......................... 18        
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 23        
-Primary pages used................................ 3174      
-Overflow pages used............................... 0         
-Total pages used.................................. 3197      
-Unused bytes on index pages....................... 19544       20.7% 
-Unused bytes on primary pages..................... 1385009     10.7% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 1404553     10.7% 
+Percentage of total database......................  99.66%
+Number of entries................................. 600000
+Bytes of storage consumed......................... 13094912
+Bytes of payload.................................. 9852003     75.2%
+Bytes of metadata................................. 1838356     14.0%
+Average payload per entry......................... 16.42
+Average unused bytes per entry.................... 2.34
+Average metadata per entry........................ 3.06
+Average fanout.................................... 138.00
+Maximum payload per entry......................... 18
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 23
+Primary pages used................................ 3174
+Overflow pages used............................... 0
+Total pages used.................................. 3197
+Unused bytes on index pages....................... 19544       20.7%
+Unused bytes on primary pages..................... 1385009     10.7%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 1404553     10.7%
 
 *** Table CHUNKS w/o any indices **********************************************
 
-Percentage of total database......................  48.8%    
-Number of entries................................. 300000    
-Bytes of storage consumed......................... 6406144   
-Bytes of payload.................................. 4701306     73.4% 
-Bytes of metadata................................. 918764      14.3% 
-B-tree depth...................................... 3         
-Average payload per entry......................... 15.67     
-Average unused bytes per entry.................... 2.62      
-Average metadata per entry........................ 3.06      
-Average fanout.................................... 142.00    
-Non-sequential pages.............................. 1003        64.2% 
-Maximum payload per entry......................... 16        
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 11        
-Primary pages used................................ 1553      
-Overflow pages used............................... 0         
-Total pages used.................................. 1564      
-Unused bytes on index pages....................... 9720        21.6% 
-Unused bytes on primary pages..................... 776354      12.2% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 786074      12.3% 
+Percentage of total database......................  48.8%
+Number of entries................................. 300000
+Bytes of storage consumed......................... 6406144
+Bytes of payload.................................. 4701306     73.4%
+Bytes of metadata................................. 918764      14.3%
+B-tree depth...................................... 3
+Average payload per entry......................... 15.67
+Average unused bytes per entry.................... 2.62
+Average metadata per entry........................ 3.06
+Average fanout.................................... 142.00
+Non-sequential pages.............................. 1003        64.2%
+Maximum payload per entry......................... 16
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 11
+Primary pages used................................ 1553
+Overflow pages used............................... 0
+Total pages used.................................. 1564
+Unused bytes on index pages....................... 9720        21.6%
+Unused bytes on primary pages..................... 776354      12.2%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 786074      12.3%
 
 *** Index RANDOM_CHUNKS_ORDER of table CHUNKS *********************************
 
-Percentage of total database......................  50.9%    
-Number of entries................................. 300000    
-Bytes of storage consumed......................... 6688768   
-Bytes of payload.................................. 5150697     77.0% 
-Bytes of metadata................................. 919592      13.7% 
-B-tree depth...................................... 3         
-Average payload per entry......................... 17.17     
-Average unused bytes per entry.................... 2.06      
-Average metadata per entry........................ 3.07      
-Average fanout.................................... 136.00    
-Non-sequential pages.............................. 1003        61.5% 
-Maximum payload per entry......................... 18        
-Entries that use overflow......................... 0            0.0% 
-Index pages used.................................. 12        
-Primary pages used................................ 1621      
-Overflow pages used............................... 0         
-Total pages used.................................. 1633      
-Unused bytes on index pages....................... 9824        20.0% 
-Unused bytes on primary pages..................... 608655       9.2% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 618479       9.2% 
+Percentage of total database......................  50.9%
+Number of entries................................. 300000
+Bytes of storage consumed......................... 6688768
+Bytes of payload.................................. 5150697     77.0%
+Bytes of metadata................................. 919592      13.7%
+B-tree depth...................................... 3
+Average payload per entry......................... 17.17
+Average unused bytes per entry.................... 2.06
+Average metadata per entry........................ 3.07
+Average fanout.................................... 136.00
+Non-sequential pages.............................. 1003        61.5%
+Maximum payload per entry......................... 18
+Entries that use overflow......................... 0            0.0%
+Index pages used.................................. 12
+Primary pages used................................ 1621
+Overflow pages used............................... 0
+Total pages used.................................. 1633
+Unused bytes on index pages....................... 9824        20.0%
+Unused bytes on primary pages..................... 608655       9.2%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 618479       9.2%
 
 *** Table CHUNKS_COMPLETED ****************************************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
 *** Table CHUNKS_FAILED *******************************************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
 *** Table SQLITE_SCHEMA *******************************************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 12        
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 2956        72.2% 
-Bytes of metadata................................. 164          4.0% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 246.33    
-Average unused bytes per entry.................... 81.33     
-Average metadata per entry........................ 13.67     
-Maximum payload per entry......................... 507       
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 976         23.8% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 976         23.8% 
+Percentage of total database......................   0.031%
+Number of entries................................. 12
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 2956        72.2%
+Bytes of metadata................................. 164          4.0%
+B-tree depth...................................... 1
+Average payload per entry......................... 246.33
+Average unused bytes per entry.................... 81.33
+Average metadata per entry........................ 13.67
+Maximum payload per entry......................... 507
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 976         23.8%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 976         23.8%
 
 *** Table SUBMISSIONS and all its indices *************************************
 
-Percentage of total database......................   0.062%  
-Number of entries................................. 6         
-Bytes of storage consumed......................... 8192      
-Bytes of payload.................................. 194          2.4% 
-Bytes of metadata................................. 37           0.45% 
-Average payload per entry......................... 32.33     
-Average unused bytes per entry.................... 1326.83   
-Average metadata per entry........................ 6.17      
-Maximum payload per entry......................... 53        
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 2         
-Overflow pages used............................... 0         
-Total pages used.................................. 2         
-Unused bytes on primary pages..................... 7961        97.2% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 7961        97.2% 
+Percentage of total database......................   0.062%
+Number of entries................................. 6
+Bytes of storage consumed......................... 8192
+Bytes of payload.................................. 194          2.4%
+Bytes of metadata................................. 37           0.45%
+Average payload per entry......................... 32.33
+Average unused bytes per entry.................... 1326.83
+Average metadata per entry........................ 6.17
+Maximum payload per entry......................... 53
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 2
+Overflow pages used............................... 0
+Total pages used.................................. 2
+Unused bytes on primary pages..................... 7961        97.2%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 7961        97.2%
 
 *** Table SUBMISSIONS w/o any indices *****************************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 3         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 159          3.9% 
-Bytes of metadata................................. 20           0.49% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 53.00     
-Average unused bytes per entry.................... 1305.67   
-Average metadata per entry........................ 6.67      
-Maximum payload per entry......................... 53        
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 3917        95.6% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 3917        95.6% 
+Percentage of total database......................   0.031%
+Number of entries................................. 3
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 159          3.9%
+Bytes of metadata................................. 20           0.49%
+B-tree depth...................................... 1
+Average payload per entry......................... 53.00
+Average unused bytes per entry.................... 1305.67
+Average metadata per entry........................ 6.67
+Maximum payload per entry......................... 53
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 3917        95.6%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 3917        95.6%
 
 *** Index SQLITE_AUTOINDEX_SUBMISSIONS_1 of table SUBMISSIONS *****************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 3         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 35           0.85% 
-Bytes of metadata................................. 17           0.42% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 11.67     
-Average unused bytes per entry.................... 1348.00   
-Average metadata per entry........................ 5.67      
-Maximum payload per entry......................... 12        
-Entries that use overflow......................... 0            0.0% 
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4044        98.7% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4044        98.7% 
+Percentage of total database......................   0.031%
+Number of entries................................. 3
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 35           0.85%
+Bytes of metadata................................. 17           0.42%
+B-tree depth...................................... 1
+Average payload per entry......................... 11.67
+Average unused bytes per entry.................... 1348.00
+Average metadata per entry........................ 5.67
+Maximum payload per entry......................... 12
+Entries that use overflow......................... 0            0.0%
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4044        98.7%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4044        98.7%
 
 *** Table SUBMISSIONS_COMPLETED and all its indices ***************************
 
-Percentage of total database......................   0.062%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 8192      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 16           0.20% 
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 2         
-Overflow pages used............................... 0         
-Total pages used.................................. 2         
-Unused bytes on primary pages..................... 8176        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 8176        99.80% 
+Percentage of total database......................   0.062%
+Number of entries................................. 0
+Bytes of storage consumed......................... 8192
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 16           0.20%
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 2
+Overflow pages used............................... 0
+Total pages used.................................. 2
+Unused bytes on primary pages..................... 8176        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 8176        99.80%
 
 *** Table SUBMISSIONS_COMPLETED w/o any indices *******************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
-*** Index SQLITE_AUTOINDEX_SUBMISSIONS_COMPLETED_1 of table SUBMISSIONS_COMPLETED 
+*** Index SQLITE_AUTOINDEX_SUBMISSIONS_COMPLETED_1 of table SUBMISSIONS_COMPLETED
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
 *** Table SUBMISSIONS_FAILED and all its indices ******************************
 
-Percentage of total database......................   0.062%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 8192      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 16           0.20% 
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 2         
-Overflow pages used............................... 0         
-Total pages used.................................. 2         
-Unused bytes on primary pages..................... 8176        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 8176        99.80% 
+Percentage of total database......................   0.062%
+Number of entries................................. 0
+Bytes of storage consumed......................... 8192
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 16           0.20%
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 2
+Overflow pages used............................... 0
+Total pages used.................................. 2
+Unused bytes on primary pages..................... 8176        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 8176        99.80%
 
 *** Table SUBMISSIONS_FAILED w/o any indices **********************************
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
 *** Index SQLITE_AUTOINDEX_SUBMISSIONS_FAILED_1 of table SUBMISSIONS_FAILED ***
 
-Percentage of total database......................   0.031%  
-Number of entries................................. 0         
-Bytes of storage consumed......................... 4096      
-Bytes of payload.................................. 0            0.0% 
-Bytes of metadata................................. 8            0.20% 
-B-tree depth...................................... 1         
-Average payload per entry......................... 0.0       
-Average unused bytes per entry.................... 0.0       
-Average metadata per entry........................ 0.0       
-Maximum payload per entry......................... 0         
-Entries that use overflow......................... 0         
-Primary pages used................................ 1         
-Overflow pages used............................... 0         
-Total pages used.................................. 1         
-Unused bytes on primary pages..................... 4088        99.80% 
-Unused bytes on overflow pages.................... 0         
-Unused bytes on all pages......................... 4088        99.80% 
+Percentage of total database......................   0.031%
+Number of entries................................. 0
+Bytes of storage consumed......................... 4096
+Bytes of payload.................................. 0            0.0%
+Bytes of metadata................................. 8            0.20%
+B-tree depth...................................... 1
+Average payload per entry......................... 0.0
+Average unused bytes per entry.................... 0.0
+Average metadata per entry........................ 0.0
+Maximum payload per entry......................... 0
+Entries that use overflow......................... 0
+Primary pages used................................ 1
+Overflow pages used............................... 0
+Total pages used.................................. 1
+Unused bytes on primary pages..................... 4088        99.80%
+Unused bytes on overflow pages.................... 0
+Unused bytes on all pages......................... 4088        99.80%
 
 *** Definitions ***************************************************************
 
 Page size in bytes
 
-    The number of bytes in a single page of the database file.  
+    The number of bytes in a single page of the database file.
     Usually 1024.
 
 Number of pages in the whole file
@@ -550,7 +550,7 @@ Bytes of payload
 
     The amount of payload stored under this category.  Payload is the data
     part of table entries and the key part of index entries.  The percentage
-    at the right is the bytes of payload divided by the bytes of storage 
+    at the right is the bytes of payload divided by the bytes of storage
     consumed.
 
 Bytes of metadata
@@ -631,8 +631,8 @@ Unused bytes on overflow pages
 
 Unused bytes on all pages
 
-    The total number of bytes of unused space on all primary and overflow 
-    pages.  The percentage at the right is the number of unused bytes 
+    The total number of bytes of unused space on all primary and overflow
+    pages.  The percentage at the right is the number of unused bytes
     divided by the total number of bytes.
 
 *******************************************************************************
@@ -645,7 +645,7 @@ CREATE TABLE space_used(
    name clob,        -- Name of a table or index in the database file
    tblname clob,     -- Name of associated table
    is_index boolean, -- TRUE if it is an index, false for a table
-   is_without_rowid boolean, -- TRUE if WITHOUT ROWID table  
+   is_without_rowid boolean, -- TRUE if WITHOUT ROWID table
    nentry int,       -- Number of entries in the BTree
    leaf_entries int, -- Number of leaf entries
    depth int,        -- Depth of the b-tree

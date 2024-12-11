@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 
 import click
 from pathlib import Path
 from build_util import (
+    check,
     nix,
+    install,
+    process,
 )
 
 
@@ -81,50 +83,50 @@ def cli_run(opsqueue_arguments: tuple[str]) -> None:
     subprocess.run(("cargo", "run", "--bin", "opsqueue", "--") + opsqueue_arguments)
 
 
-@cli.group("check", invoke_without_command=True)
-@click.pass_context
-def cli_check(ctx: click.Context) -> None:
-    """
-    Run linters, optionally with automatic fixes.
-
-    When invoked without any subcommand, runs all checks.
-
-    ./build.py check
-    ./build.py check style [--fix]
-    """
-    if ctx.invoked_subcommand is None:
-        for cmd in cli_check.commands.values():
-            ctx.invoke(cmd)
+### CHECK ###
 
 
-@cli_check.command("style")
+cli.add_command(check_group := check.check_group())
+
+check_group.add_command(check.pre_commit_command())
+
+
+@check_group.command(name="type")
 @click.option(
-    "--fix/--no-fix",
+    "--enable-daemon",
+    is_flag=True,
     default=False,
-    help="Whether to automatically apply fixes for the lints where possible",
+    help="Whether to enable dmypy for faster type checking",
 )
-def cli_check_style(fix: bool) -> None:
+def check_type(enable_daemon: bool) -> None:
     """
-    Run a set of linters.
+    Run type checks using `mypy` or `dmypy`. `dmypy` is faster, but doesn't support all features
+    of `mypy`, like generating reports in junit xml format. Locally, it's best to run mypy as a
+    daemon for faster type checking.
     """
-    if fix is False:
-        pre_commit_config = ".pre-commit-config-check.yaml"
+    if enable_daemon:
+        process.run_checked(["dmypy", "--version"])
+        process.run_checked(
+            [
+                "dmypy",
+                "run",
+                "--",
+                "--strict",
+                "--follow-imports=normal",
+                "--junit-xml=",
+                "./libs/opsqueue_python",
+            ]
+        )
     else:
-        pre_commit_config = ".pre-commit-config-fix.yaml"
+        process.run_checked(["mypy", "--version"])
+        process.run_checked(["mypy", "--strict", "./libs/opsqueue_python"])
 
-    try:
-        subprocess.run(
-            ["pre-commit", "run", "-c", pre_commit_config, "--all-files"],
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        click.secho(
-            "Style check failed, please see pre-commit output."
-            + (" Consider running with --fix" if fix is False else ""),
-            fg="red",
-            bold=True,
-        )
-        sys.exit(e.returncode)
+
+### INSTALL ###
+
+cli.add_command(install_group := install.install_group())
+
+### TEST ###
 
 
 @cli.group("test", invoke_without_command=True)
