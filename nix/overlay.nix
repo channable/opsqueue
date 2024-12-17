@@ -29,7 +29,7 @@ in
   pre-commit-env = self.buildEnv {
     name = "pre-commit-env";
     paths = [
-      super.haskellPackages.fix-whitespace
+      super.python3Packages.pre-commit-hooks
       super.nixfmt-rfc-style
       super.ruff
       super.biome
