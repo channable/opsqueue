@@ -169,8 +169,9 @@ impl ConsumerClient {
                                 log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
                             },
                             Err(failure) => {
-                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure:?}", submission_id, chunk_index, &submission_prefix);
-                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, format!("{failure:?}")).map_err(|e|
+                                let failure_str = crate::common::format_pyerr(&failure);
+                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
+                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, failure_str).map_err(|e|
                                     match e {
                                         CError(L(py_err)) => CError(L(py_err)),
                                         CError(R(e)) => CError(R(R(R(L(e))))),

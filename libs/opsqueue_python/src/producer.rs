@@ -368,9 +368,14 @@ impl ProducerClient {
 
                 Ok(Some(py_chunks_iter))
             }
-            Some(submission::SubmissionStatus::Failed(submission)) => Err(CError(L(
-                crate::errors::SubmissionFailed(submission.into()),
-            ))),
+            Some(submission::SubmissionStatus::Failed(submission, chunk)) => {
+                let chunk_failed = crate::common::ChunkFailed::from_internal(chunk, &submission);
+                let submission_failed = submission.into();
+                Err(CError(L(crate::errors::SubmissionFailed(
+                    submission_failed,
+                    chunk_failed,
+                ))))
+            }
             _ => Ok(None),
         }
     }
