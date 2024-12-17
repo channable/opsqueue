@@ -36,8 +36,13 @@ repos:
         entry: cargo clippy --no-deps --fix --allow-dirty --allow-staged -- -Dwarnings
         language: system
         pass_filenames: false
-      - id: fix-whitespace
-        name: fix-whitespace
-        entry: fix-whitespace --config=.fix-whitespace.yaml
+      - id: end-of-file-fixer
+        name: Ensure each file ends with a single newline
+        entry: end-of-file-fixer
+        language: system
+        types: [text]
+      - id: trailing-whitespace-fixer
+        name: Trim trailing whitespace
+        entry: trailing-whitespace-fixer
         language: system
         types: [text]
