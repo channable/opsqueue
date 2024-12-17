@@ -11,7 +11,7 @@ Opsqueue does this by being:
 
 ## Why opsqueue?
 
-Specific advantages for opsqueue:
+The specific advantages for opsqueue are:
 
 * Small codebase that we fully understand
 * Full control to do exactly what you want
