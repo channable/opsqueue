@@ -239,13 +239,26 @@ impl ConsumerConn {
 #[derive(thiserror::Error, Debug)]
 #[error("Error while handling a consumer connection")]
 pub enum ConsumerConnError {
-    HeartbeatFailure,
+    // Internal (opsqueue server is doing something wrong):
     DbError(#[from] DatabaseError),
-    UnreadableClientToServerMessage(ciborium::de::Error<std::io::Error>),
     UnparsableServerToClientMessage(ciborium::ser::Error<std::io::Error>),
+    Other(#[from] anyhow::Error),
+    // External (caused by client misbehaving or wrong version or network failure):
+    HeartbeatFailure,
+    UnreadableClientToServerMessage(ciborium::de::Error<std::io::Error>),
     UnexpectedWSMessageType(anyhow::Error),
     LowLevelWebsocketError(axum::Error),
-    Other(#[from] anyhow::Error),
+}
+
+impl ConsumerConnError {
+    pub fn is_internal_error(&self) -> bool {
+        matches!(
+            self,
+            ConsumerConnError::DbError(_)
+                | ConsumerConnError::UnparsableServerToClientMessage(_)
+                | ConsumerConnError::Other(_)
+        )
+    }
 }
 
 impl From<sqlx::Error> for ConsumerConnError {

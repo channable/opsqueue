@@ -104,8 +104,20 @@ async fn ws_accept_handler(
         gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).increment(1);
 
         let res = conn::ConsumerConn::new(&state, ws_stream).run().await;
+        match res {
+            Ok(()) => {}
+            Err(e) if e.is_internal_error() => {
+                tracing::error!(
+                    "Closed websocket connection because of internal error, details: {e:?}"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Closed websocket connection because of client error, details: {e:?}"
+                );
+            }
+        }
 
-        tracing::warn!("Closed websocket connection, reason: {:?}", &res);
         gauge!(crate::prometheus::CONSUMERS_CONNECTED_GAUGE).decrement(1);
     })
 }
@@ -226,7 +238,7 @@ impl Completer {
         .await;
         match res {
             Ok(()) => {}
-            Err(err) => tracing::warn!("Error in chunk completer: {err}"),
+            Err(err) => tracing::error!("Error in chunk completer: {err}"),
         }
     }
 }

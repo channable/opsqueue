@@ -1,11 +1,12 @@
 use std::{
+    any::Any,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
 use axum::{routing::get, Router};
 use backon::{BackoffBuilder, FibonacciBuilder};
-use http::StatusCode;
+use http::{header, Response, StatusCode};
 
 use crate::db::DBPools;
 use tokio::select;
@@ -94,12 +95,45 @@ pub fn build_router(
     let traced_routes = routes.layer(tracing_middleware).layer(prometheus_config.0);
 
     // We do not want to trace, log nor gather metrics for the `ping` or `metrics` endpoints
-    traced_routes
+    let routes = traced_routes
         .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
         .route(
             "/metrics",
             get(|| async move { prometheus_config.1.render() }),
         )
+        .route("/intentionally-panic-for-tests", get(|| async { panic!("Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration") }))
+        ;
+
+    routes.layer(tower_http::catch_panic::CatchPanicLayer::custom(
+        handle_panic,
+    ))
+}
+
+fn handle_panic(err: Box<dyn Any + Send + 'static>) -> Response<String> {
+    let details = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "Unknown panic message".to_string()
+    };
+
+    // sentry::capture_message(&details, sentry::Level::Fatal);
+    tracing::error!("Panic: {}", details);
+
+    let body = serde_json::json!({
+        "error": {
+            "kind": "panic",
+            "details": details,
+        }
+    });
+    let body = serde_json::to_string(&body).unwrap();
+
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .unwrap()
 }
 
 /// Used as a very simple health check by consul.

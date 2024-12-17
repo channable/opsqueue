@@ -7,14 +7,21 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
-#[tokio::main]
-async fn main() {
-    let config = Arc::new(Config::parse());
-
-    let _ = setup_tracing();
+fn main() {
     tracing::info!("Starting Opsqueue");
 
+    // Sentry has to be initialized before starting the Tokio runtime
+    let _sentry_guard = init_sentry();
+    async_main()
+}
+
+#[tokio::main]
+pub async fn async_main() {
+    let _tracing_guard = setup_tracing();
+
     tracing::info!("Finished setting up tracing subscriber");
+
+    let config = Arc::new(Config::parse());
 
     let server_addr = Box::from(format!("0.0.0.0:{}", config.port));
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
@@ -71,6 +78,20 @@ async fn main() {
     println!("Opsqueue Stopped");
 }
 
+/// Starts up the Sentry client to forward errors/panics to it.
+///
+/// SENTRY_DSN, SENTRY_ENVIRONMENT and SENTRY_RELEASE
+/// are expected to be set as environment variables
+/// (and if unset, Sentry support is turned off)
+fn init_sentry() -> sentry::ClientInitGuard {
+    let options = sentry::ClientOptions {
+        traces_sample_rate: 1.0, // We want to send traces to whatever is configured for OpenTelemetry, *not* sentry
+        debug: true,
+        ..Default::default()
+    };
+    sentry::init(options)
+}
+
 struct OtelGuard {}
 
 impl Drop for OtelGuard {
@@ -104,6 +125,9 @@ fn setup_tracing() -> OtelGuard {
         )
         // .with(MetricsLayer::new(meter_provider.clone()))
         .with(tracing_opentelemetry::OpenTelemetryLayer::new(otel_tracer()))
+        // While we don´t forward traces to Sentry, we do want info and above spans to show up as breadcrumbs
+        // and error spans to show up as errors
+        .with(sentry_tracing::layer())
         .init();
 
     OtelGuard {}

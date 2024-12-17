@@ -66,6 +66,8 @@ struct ServerError(anyhow::Error);
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
+        tracing::error!("Producer Server Error {:?}", self.0);
+
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(format!("{:?}", self.0)),
