@@ -179,6 +179,35 @@ impl Chunk {
     }
 }
 
+/// Wrapper for the internal Opsqueue Chunk datatype
+/// Note that it also includes some fields originating from the Submission
+#[pyclass(frozen, get_all)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkFailed {
+    pub submission_id: SubmissionId,
+    pub chunk_index: ChunkIndex,
+    pub failure: String,
+    pub failed_at: DateTime<Utc>,
+}
+
+impl ChunkFailed {
+    pub fn from_internal(c: chunk::ChunkFailed, _s: &submission::SubmissionFailed) -> Self {
+        ChunkFailed {
+            submission_id: c.submission_id.into(),
+            chunk_index: c.chunk_index.into(),
+            failure: c.failure,
+            failed_at: c.failed_at,
+        }
+    }
+}
+
+#[pymethods]
+impl ChunkFailed {
+    fn __repr__(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
 #[pymethods]
 impl Strategy {
     fn __repr__(&self) -> String {
@@ -212,9 +241,16 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
-    InProgress { submission: Submission },
-    Completed { submission: SubmissionCompleted },
-    Failed { submission: SubmissionFailed },
+    InProgress {
+        submission: Submission,
+    },
+    Completed {
+        submission: SubmissionCompleted,
+    },
+    Failed {
+        submission: SubmissionFailed,
+        chunk: ChunkFailed,
+    },
 }
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
@@ -227,9 +263,11 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
             Completed(s) => SubmissionStatus::Completed {
                 submission: s.into(),
             },
-            Failed(s) => SubmissionStatus::Failed {
-                submission: s.into(),
-            },
+            Failed(s, c) => {
+                let chunk = ChunkFailed::from_internal(c, &s);
+                let submission = s.into();
+                SubmissionStatus::Failed { submission, chunk }
+            }
         }
     }
 }
@@ -356,4 +394,25 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
         .build()
         .expect("Failed to create Tokio runtime in opsqueue client");
     Arc::new(runtime)
+}
+
+/// Formats a Python exception
+/// in similar fashion as the traceback.format_exc()
+/// would do it.
+///
+/// Internally acquires the GIL!
+///
+/// c.f. https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods
+pub fn format_pyerr(err: &PyErr) -> String {
+    Python::with_gil(|py| {
+        let msg: Option<String> = (|| {
+            let traceback = err.traceback_bound(py)?;
+            let traceback_str = traceback
+                .format()
+                .expect("Tracebacks are always formattable");
+            let str = format!("{}{}", traceback_str, err);
+            Some(str)
+        })();
+        msg.unwrap_or_else(|| format!("{}", err))
+    })
 }

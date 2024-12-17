@@ -1,3 +1,5 @@
+/// NOTE: We defne the potentially raisable errors/exceptions in Python
+/// so we have nice IDE support for docs-on-hover and for 'go to definition'.
 use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
@@ -5,62 +7,35 @@ use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use opsqueue::common::NonZeroIsZero;
-use pyo3::exceptions::{PyException, PyTypeError};
-use pyo3::PyErr;
-use pyo3::{create_exception, IntoPy, PyObject};
+use pyo3::exceptions::PyException;
+use pyo3::{import_exception, PyErr};
+use pyo3::{IntoPy, PyObject};
 
 use crate::common::{ChunkIndex, SubmissionId};
 
-create_exception!(opsqueue_internal, SubmissionFailedError, PyException);
+// Expected errors:
+import_exception!(opsqueue.exceptions, SubmissionFailedError);
 
-create_exception!(opsqueue_internal, IncorrectUsageError, PyTypeError);
-create_exception!(
-    opsqueue_internal,
-    SubmissionNotFoundError,
-    IncorrectUsageError
-);
+// Incorrect usage errors:
+import_exception!(opsqueue.exceptions, IncorrectUsageError);
+import_exception!(opsqueue.exceptions, TryFromIntError);
+import_exception!(opsqueue.exceptions, ChunkNotFoundError);
+import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
+import_exception!(opsqueue.exceptions, ChunkCountIsZeroError);
+import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
+import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
-create_exception!(opsqueue_internal, ChunkNotFoundError, IncorrectUsageError);
-create_exception!(opsqueue_internal, TryFromIntError, IncorrectUsageError);
-create_exception!(
-    opsqueue_internal,
-    ChunkCountIsZeroError,
-    IncorrectUsageError
+// Internal errors:
+import_exception!(opsqueue.exceptions, OpsqueueInternalError);
+import_exception!(
+    opsqueue.exceptions,
+    UnexpectedOpsqueueConsumerServerResponseError
 );
-create_exception!(
-    opsqueue_internal,
-    NewObjectStoreClientError,
-    IncorrectUsageError
-);
-create_exception!(
-    opsqueue_internal,
-    SubmissionNotCompletedYetError,
-    IncorrectUsageError
-);
-
-create_exception!(opsqueue_internal, OpsqueueInternalError, PyException);
-create_exception!(
-    opsqueue_internal,
-    UnexpectedOpsqueueConsumerServerResponseError,
-    OpsqueueInternalError
-);
-create_exception!(
-    opsqueue_internal,
-    ChunkRetrievalError,
-    OpsqueueInternalError
-);
-create_exception!(opsqueue_internal, ChunkStorageError, OpsqueueInternalError);
-create_exception!(opsqueue_internal, ChunksStorageError, OpsqueueInternalError);
-create_exception!(
-    opsqueue_internal,
-    InternalConsumerClientError,
-    OpsqueueInternalError
-);
-create_exception!(
-    opsqueue_internal,
-    InternalProducerClientError,
-    OpsqueueInternalError
-);
+import_exception!(opsqueue.exceptions, ChunkRetrievalError);
+import_exception!(opsqueue.exceptions, ChunksStorageError);
+import_exception!(opsqueue.exceptions, ChunkStorageError);
+import_exception!(opsqueue.exceptions, InternalConsumerClientError);
+import_exception!(opsqueue.exceptions, InternalProducerClientError);
 
 /// A newtype so we can write From/Into implementations turning various error types
 /// into PyErr, including those defined in other crates.
@@ -164,12 +139,16 @@ impl From<CError<SubmissionNotFound>> for PyErr {
     }
 }
 
-pub struct SubmissionFailed(pub crate::common::SubmissionFailed);
+pub struct SubmissionFailed(
+    pub crate::common::SubmissionFailed,
+    pub crate::common::ChunkFailed,
+);
 
 impl From<CError<SubmissionFailed>> for PyErr {
     fn from(value: CError<SubmissionFailed>) -> Self {
         let submission: crate::common::SubmissionFailed = value.0 .0;
-        SubmissionFailedError::new_err(submission)
+        let chunk: crate::common::ChunkFailed = value.0 .1;
+        SubmissionFailedError::new_err((submission, chunk))
     }
 }
 

@@ -13,10 +13,23 @@ from opsqueue.common import (
     DEFAULT_SERIALIZATION_FORMAT,
 )
 from . import opsqueue_internal
-from .opsqueue_internal import SubmissionId, SubmissionStatus  # type: ignore[import-not-found]
 from . import tracing
+from opsqueue.exceptions import SubmissionFailedError
+from .opsqueue_internal import (  # type: ignore[import-not-found]
+    SubmissionId,
+    SubmissionStatus,
+    SubmissionFailed,
+    ChunkFailed,
+)
 
-__all__ = ["ProducerClient", "SubmissionId", "SubmissionStatus"]
+__all__ = [
+    "ProducerClient",
+    "SubmissionId",
+    "SubmissionStatus",
+    "SubmissionFailedError",
+    "SubmissionFailed",
+    "ChunkFailed",
+]
 
 
 class ProducerClient:

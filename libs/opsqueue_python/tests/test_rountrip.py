@@ -3,10 +3,17 @@
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
 from collections.abc import Iterator, Sequence
-from opsqueue.producer import ProducerClient
+from opsqueue.producer import (
+    ProducerClient,
+    SubmissionFailed,
+    ChunkFailed,
+    SubmissionFailedError,
+)
 from opsqueue.consumer import ConsumerClient, Strategy, Chunk
 from conftest import background_process, multiple_background_processes, OpsqueueProcess
 import logging
+
+import pytest
 
 
 def increment(data: int) -> int:
@@ -32,12 +39,53 @@ def test_roundtrip(
 
     with background_process(run_consumer) as _consumer:
         input_iter = range(0, 100)
+
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter, chunk_size=20
         )
         res = sum(output_iter)
 
         assert res == sum(range(1, 101))
+
+
+def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}",
+        "file:///tmp/opsqueue/test_submission_failure_exception",
+    )
+
+    def run_consumer() -> None:
+        def broken_increment(input: int) -> float:
+            return input / 0
+
+        log_level = logging.root.level
+        logging.basicConfig(
+            format="Consumer - %(levelname)s: %(message)s",
+            level=log_level,
+            force=True,
+        )
+
+        consumer_client = ConsumerClient(
+            f"localhost:{opsqueue.port}",
+            "file:///tmp/opsqueue/test_submission_failure_exception",
+        )
+        consumer_client.run_each_op(broken_increment)
+
+    # run_consumer()
+
+    with background_process(run_consumer) as _consumer:
+        input_iter = range(0, 100)
+
+        with pytest.raises(SubmissionFailedError) as exc_info:
+            producer_client.run_submission(input_iter, chunk_size=20)
+
+        # We expect the intended attributes to be there:
+        assert isinstance(exc_info.value.failure, str)
+        assert isinstance(exc_info.value.submission, SubmissionFailed)
+        assert isinstance(exc_info.value.chunk, ChunkFailed)
+
+        # And the result should contain info about the original exception:
+        assert "ZeroDivisionError" in exc_info.value.failure
 
 
 def test_chunk_roundtrip(

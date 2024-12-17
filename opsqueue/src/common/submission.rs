@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ux_serde::u63;
 
-use super::chunk::{self, Chunk};
+use super::chunk::{self, Chunk, ChunkFailed};
 use super::chunk::{ChunkCount, ChunkIndex};
 
 pub type Metadata = Vec<u8>;
@@ -130,7 +130,7 @@ pub struct SubmissionFailed {
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
-    Failed(SubmissionFailed),
+    Failed(SubmissionFailed, ChunkFailed),
 }
 
 impl Default for Submission {
@@ -373,6 +373,7 @@ pub mod db {
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
         // from InProgress to Completed/Failed in-between the queries.
+
         let submission = query_as!(
             Submission,
             r#"
@@ -431,7 +432,13 @@ pub mod db {
         .fetch_optional(&mut *conn)
         .await?;
         if let Some(failed_submission) = failed_submission {
-            return Ok(Some(SubmissionStatus::Failed(failed_submission)));
+            let failed_chunk_id = (failed_submission.id, failed_submission.failed_chunk_id).into();
+            let failed_chunk =
+                super::chunk::db::get_chunk_failed(failed_chunk_id, &mut *conn).await?;
+            return Ok(Some(SubmissionStatus::Failed(
+                failed_submission,
+                failed_chunk,
+            )));
         }
 
         Ok(None)

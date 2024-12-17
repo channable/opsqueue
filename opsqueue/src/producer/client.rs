@@ -269,7 +269,7 @@ mod tests {
             .expect("Should be OK")
             .expect("Should be Some");
         match status {
-            SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_) => {
+            SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_, _) => {
                 panic!(
                     "Expected a SubmissionStatus that is still Inprogress, got: {:?}",
                     status

@@ -131,11 +131,23 @@ pub struct Chunk {
     pub retries: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
 pub struct ChunkCompleted {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
     pub output_content: Content,
     pub completed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
+pub struct ChunkFailed {
+    pub submission_id: SubmissionId,
+    pub chunk_index: ChunkIndex,
+    pub input_content: Content,
+    pub failure: String,
+    pub failed_at: DateTime<Utc>,
 }
 
 impl Chunk {
@@ -403,7 +415,7 @@ pub mod db {
 
     #[tracing::instrument]
     pub async fn get_chunk_completed(
-        full_chunk_id: (i64, i64),
+        full_chunk_id: ChunkId,
         conn: impl Executor<'_, Database = Sqlite>,
     ) -> sqlx::Result<ChunkCompleted> {
         query_as!(
@@ -416,8 +428,31 @@ pub mod db {
             , completed_at AS "completed_at: DateTime<Utc>"
         FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?
         "#,
-            full_chunk_id.0,
-            full_chunk_id.1
+            full_chunk_id.submission_id,
+            full_chunk_id.chunk_index
+        )
+        .fetch_one(conn)
+        .await
+    }
+
+    #[tracing::instrument]
+    pub async fn get_chunk_failed(
+        full_chunk_id: ChunkId,
+        conn: impl Executor<'_, Database = Sqlite>,
+    ) -> sqlx::Result<ChunkFailed> {
+        query_as!(
+            ChunkFailed,
+            r#"
+        SELECT
+            submission_id AS "submission_id: SubmissionId"
+            , chunk_index AS "chunk_index: ChunkIndex"
+            , input_content
+            , failure AS "failure: String"
+            , failed_at AS "failed_at: DateTime<Utc>"
+        FROM chunks_failed WHERE submission_id = ? AND chunk_index = ?
+        "#,
+            full_chunk_id.submission_id,
+            full_chunk_id.chunk_index
         )
         .fetch_one(conn)
         .await
