@@ -29,7 +29,7 @@ class SubmissionFailedError(Exception):
         self.chunk = chunk
         self.failure = self.chunk.failure
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"""
         Submission {self.submission.id} failed because chunk {self.chunk.chunk_index} kept failing.
         Failure reason:
@@ -37,7 +37,7 @@ class SubmissionFailedError(Exception):
         {self.failure}
         """
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return str(self)
 
 

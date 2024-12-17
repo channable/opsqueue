@@ -48,14 +48,14 @@ def test_roundtrip(
         assert res == sum(range(1, 101))
 
 
-def test_submission_failure_exception(opsqueue: OpsqueueProcess):
+def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
     producer_client = ProducerClient(
         f"localhost:{opsqueue.port}",
         "file:///tmp/opsqueue/test_submission_failure_exception",
     )
 
     def run_consumer() -> None:
-        def broken_increment(input: int) -> int:
+        def broken_increment(input: int) -> float:
             return input / 0
 
         log_level = logging.root.level
@@ -80,9 +80,9 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess):
             producer_client.run_submission(input_iter, chunk_size=20)
 
         # We expect the intended attributes to be there:
-        assert exc_info.value.failure is str
-        assert exc_info.value.submission is SubmissionFailed
-        assert exc_info.value.chunk is ChunkFailed
+        assert isinstance(exc_info.value.failure, str)
+        assert isinstance(exc_info.value.submission, SubmissionFailed)
+        assert isinstance(exc_info.value.chunk, ChunkFailed)
 
         # And the result should contain info about the original exception:
         assert "ZeroDivisionError" in exc_info.value.failure

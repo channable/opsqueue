@@ -15,12 +15,12 @@ from opsqueue.common import (
 from . import opsqueue_internal
 from . import tracing
 from opsqueue.exceptions import SubmissionFailedError
-from .opsqueue_internal import (
+from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionId,
     SubmissionStatus,
     SubmissionFailed,
     ChunkFailed,
-)  # type: ignore[import-not-found]
+)
 
 __all__ = [
     "ProducerClient",
