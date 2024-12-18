@@ -22,9 +22,7 @@ in
   pythonOverlay = self.lib.composeExtensions super.pythonOverlay pythonOverlay;
   pythonChannable = super.python312.override { packageOverrides = self.pythonOverlay; };
 
-  # Rust channel based on the selected runtime, this is a feature of the Mozilla overlay
-  # rustChannel = super.rustChannelOf { rustToolchain = ../rust-toolchain; };
-  # rust-with-lsp = self.rustChannel.rust.override { extensions = [ "rust-src" ]; };
+  # We choose a minimal Rust channel to keep the Nix closure size smaller
   rust-with-lsp = self.rust-bin.stable.latest.minimal.override {
     extensions = [
       "clippy"
