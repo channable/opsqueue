@@ -28,5 +28,17 @@
         "type": "tarball",
         "url": "https://github.com/mozilla/nixpkgs-mozilla/archive/ad7af231a95acf65ccc4afa0c766f5c0674ad3f1.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
+    "rust-overlay": {
+        "branch": "master",
+        "description": "Rust overlay",
+        "homepage": "",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b2e385f8e5c1d7c0d9ce738d650955c2e94555ae",
+        "sha256": "1xan5f734703m2isv73gmfm1rxx8g4ipmipy4f1v5hx9pmk4383l",
+        "type": "tarball",
+        "url": "https://github.com/oxalica/rust-overlay/archive/b2e385f8e5c1d7c0d9ce738d650955c2e94555ae.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     }
 }
