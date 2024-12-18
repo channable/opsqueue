@@ -101,6 +101,8 @@ pub async fn ensure_db_exists(database_filename: &str) {
 pub async fn ensure_db_migrated(db: &SqlitePool) {
     tracing::info!("Migrating backing DB");
     sqlx::migrate!("./migrations")
+        // When rolling back, we want to be able to keep running even when the DB's schema is newer:
+        .set_ignore_missing(true)
         .run(db)
         .await
         .expect("DB migrations failed");
