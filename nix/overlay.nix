@@ -23,8 +23,14 @@ in
   pythonChannable = super.python312.override { packageOverrides = self.pythonOverlay; };
 
   # Rust channel based on the selected runtime, this is a feature of the Mozilla overlay
-  rustChannel = super.rustChannelOf { rustToolchain = ../rust-toolchain; };
-  rust-with-lsp = self.rustChannel.rust.override { extensions = [ "rust-src" ]; };
+  # rustChannel = super.rustChannelOf { rustToolchain = ../rust-toolchain; };
+  # rust-with-lsp = self.rustChannel.rust.override { extensions = [ "rust-src" ]; };
+  rust-with-lsp = self.rust-bin.stable.latest.minimal.override {
+    extensions = [
+      "clippy"
+      "rustfmt"
+    ];
+  };
 
   pre-commit-env = self.buildEnv {
     name = "pre-commit-env";
