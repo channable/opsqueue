@@ -101,12 +101,18 @@ pub fn build_router(
             "/metrics",
             get(|| async move { prometheus_config.1.render() }),
         )
-        .route("/intentionally-panic-for-tests", get(|| async { panic!("Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration") }))
-        ;
+        .route(
+            "/intentionally-panic-for-tests",
+            get(intentionally_panic_for_tests),
+        );
 
     routes.layer(tower_http::catch_panic::CatchPanicLayer::custom(
         handle_panic,
     ))
+}
+
+async fn intentionally_panic_for_tests() {
+    panic!("Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration")
 }
 
 fn handle_panic(err: Box<dyn Any + Send + 'static>) -> Response<String> {
