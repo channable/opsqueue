@@ -85,8 +85,8 @@ pub async fn async_main() {
 /// (and if unset, Sentry support is turned off)
 fn init_sentry() -> sentry::ClientInitGuard {
     let options = sentry::ClientOptions {
-        traces_sample_rate: 1.0, // We want to send traces to whatever is configured for OpenTelemetry, *not* sentry
-        debug: true,
+        // We want to send traces to whatever is configured for OpenTelemetry, *not* sentry:
+        traces_sample_rate: 0.0,
         ..Default::default()
     };
     sentry::init(options)
