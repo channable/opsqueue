@@ -111,6 +111,7 @@ impl From<strategy::Strategy> for Strategy {
             strategy::Strategy::Oldest => Strategy::Oldest,
             strategy::Strategy::Newest => Strategy::Newest,
             strategy::Strategy::Random => Strategy::Random,
+            strategy::Strategy::PreferDistinct { .. } => todo!(),
         }
     }
 }

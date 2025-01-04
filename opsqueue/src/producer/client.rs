@@ -140,9 +140,10 @@ pub enum InternalProducerClientError {
 impl InternalProducerClientError {
     pub fn is_ephemeral(&self) -> bool {
         match self {
-            // We consider this ephemeral as on ungraceful queue shutdown/restart
-            // we could have received an _incomplete_ response
-            Self::ResponseDecodingError(_) => true,
+            // NOTE: In the case of an ungraceful restart, this case might theoretically trigger.
+            // So even cleaner would be a tiny retry loop for this special case.
+            // However, we certainly **do not** want to wait multiple minutes before returning.
+            Self::ResponseDecodingError(_) => false,
             // NOTE: reqwest doesn't make this very easy as it has a single error typed used for _everything_
             // Maybe a different HTTP client library is nicer in this regard?
             Self::HTTPClientError(inner) => {
@@ -191,6 +192,7 @@ mod tests {
             None,
             vec![None, None, None],
             None,
+            Default::default(),
             &mut conn,
         )
         .await
@@ -216,6 +218,7 @@ mod tests {
                 contents: vec![None, None, None],
             },
             metadata: None,
+            strategic_metadata: Default::default(),
         };
         client
             .insert_submission(&submission, &Default::default())
@@ -257,6 +260,7 @@ mod tests {
                 contents: vec![None, None, None],
             },
             metadata: None,
+            strategic_metadata: Default::default(),
         };
         let submission_id = client
             .insert_submission(&submission, &Default::default())

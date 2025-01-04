@@ -140,12 +140,16 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
+        // TODO
+        let strategic_metadata = Default::default();
+
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
                 chunk_contents: ChunkContents::Direct {
                     contents: chunk_contents,
                 },
                 metadata,
+                strategic_metadata,
             };
             self.block_unless_interrupted(async move {
                 self.producer_client
@@ -195,6 +199,9 @@ impl ProducerClient {
                 NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).map_err(|e| R(L(e)))?;
             log::debug!("Finished uploading to object store. {prefix} contains {} chunks", u64::from(*chunk_count.inner()));
 
+            // TODO
+            let strategic_metadata = Default::default();
+
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
                     chunk_contents: ChunkContents::SeeObjectStorage {
@@ -202,6 +209,7 @@ impl ProducerClient {
                         count: chunk_count,
                     },
                     metadata,
+                    strategic_metadata,
                 };
                 self.producer_client
                     .insert_submission(&submission, &otel_trace_carrier)

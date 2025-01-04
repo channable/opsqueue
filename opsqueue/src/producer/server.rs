@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::common::chunk;
-use crate::common::submission::{self, Metadata, SubmissionId};
+use crate::common::submission::{self, Metadata, MetadataMap, SubmissionId};
 use crate::db::DBPools;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -9,6 +9,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::Notify;
+
+use super::common::{ChunkContents, InsertSubmission};
 
 pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
     ServerState::new(database_pool, Arc::new(Notify::new()))
@@ -111,6 +113,7 @@ async fn insert_submission(
     let (prefix, chunk_contents) = match request.chunk_contents {
         ChunkContents::Direct { contents } => (None, contents),
         ChunkContents::SeeObjectStorage { prefix, count } => {
+            let count = u64::from(count.into_inner());
             (Some(prefix), (0..count).map(|_index| None).collect())
         }
     };
@@ -118,6 +121,7 @@ async fn insert_submission(
         prefix,
         chunk_contents,
         request.metadata,
+        request.strategic_metadata,
         &mut conn,
     )
     .await?;
@@ -126,26 +130,6 @@ async fn insert_submission(
     state.notify_on_insert.notify_waiters();
 
     Ok(Json(submission_id))
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct InsertSubmission {
-    pub chunk_contents: ChunkContents,
-    pub metadata: Option<Metadata>,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub enum ChunkContents {
-    /// Use the `prefix` + the indexes 0..count
-    /// to recover the contents of a chunk in the consumer.
-    ///
-    /// This is what you should use in production.
-    SeeObjectStorage { prefix: String, count: i64 },
-    /// Directly pass the contents of each chunk in Opsqueue itself.
-    ///
-    /// NOTE: This is useful for small tests/examples,
-    /// but significantly less scalable than using `SeeObjectStorage`.
-    Direct { contents: Vec<chunk::Content> },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
