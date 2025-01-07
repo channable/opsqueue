@@ -12,7 +12,7 @@ CREATE TABLE submissions_metadata
     -- (and we want to keep the metadata available also for completed/failed submissions)
 
     -- Quickly select all metadata of a particular submission
-    PRIMARY KEY (submission_id, metadata_key)
+    PRIMARY KEY (submission_id, metadata_key, metadata_value)
 ) WITHOUT ROWID, STRICT;
 
 -- Quickly select all submissions matching certain metadata
@@ -41,7 +41,7 @@ CREATE TABLE chunks_metadata
     -- auto-delete when chunk completes or fails:
     FOREIGN KEY (submission_id, chunk_index) REFERENCES chunks ON DELETE CASCADE, 
 
-    PRIMARY KEY (submission_id, chunk_index, metadata_key)
+    PRIMARY KEY (submission_id, chunk_index, metadata_key, metadata_value)
 ) WITHOUT ROWID, STRICT;
 
 ALTER TABLE chunks_metadata ADD COLUMN random_order INTEGER NOT NULL GENERATED ALWAYS AS (
@@ -52,6 +52,14 @@ CREATE INDEX random_chunks_metadata_order ON chunks_metadata (
       metadata_key
     , metadata_value
     , random_order
+    , submission_id
+    , chunk_index
+);
+
+CREATE INDEX random_chunks_metadata_order2 ON chunks_metadata (
+      metadata_key
+    , random_order
+    , metadata_value
     , submission_id
     , chunk_index
 );

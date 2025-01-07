@@ -233,7 +233,7 @@ pub mod db {
         chunk: Chunk,
         metadata_key: &[u8],
         metadata_value: &[u8],
-        conn: impl SqliteExecutor<'_>
+        conn: impl SqliteExecutor<'_>,
     ) -> sqlx::Result<()> {
         query!(
             "
@@ -487,9 +487,9 @@ pub mod db {
     }
 
     /// Retrieves the earlier stored strategic metadata.
-    /// 
+    ///
     /// Primarily for testing and introspection.
-    /// 
+    ///
     /// Be aware that the strategic metadata for individual chunks
     /// is cleaned up once the chunk is marked as completed or failed.
     /// (At that time it is still available on the submission level).
@@ -499,13 +499,14 @@ pub mod db {
     ) -> Result<MetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
-        r#"
+            r#"
         SELECT metadata_key, metadata_value FROM chunks_metadata
         WHERE submission_id = ? AND chunk_index = ?
         "#,
-        full_chunk_id.submission_id,
-        full_chunk_id.chunk_index,
-        ).fetch(conn)
+            full_chunk_id.submission_id,
+            full_chunk_id.chunk_index,
+        )
+        .fetch(conn)
         .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
         .try_collect()
         .await?;
@@ -542,9 +543,10 @@ pub mod db {
     }
 
     pub async fn insert_many_chunks_metadata<Tx, Conn>(
-        chunks: &[Chunk], 
+        chunks: &[Chunk],
         metadata: &MetadataMap,
-        mut conn: Tx) -> sqlx::Result<()>
+        mut conn: Tx,
+    ) -> sqlx::Result<()>
     where
         for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
         Tx: Deref<Target = Conn> + DerefMut,
@@ -557,7 +559,7 @@ pub mod db {
             let query_rows = iter.by_ref().take(ROWS_PER_QUERY);
 
             let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
-            "
+                "
             INSERT INTO chunks_metadata 
             ( submission_id
             , chunk_index
@@ -693,7 +695,9 @@ pub mod test {
             .await
             .expect("Insert chunk failed");
 
-        insert_submission_raw(&submission, &mut *conn).await.unwrap();
+        insert_submission_raw(&submission, &mut *conn)
+            .await
+            .unwrap();
 
         conn.transaction(|tx| {
             Box::pin(async move {

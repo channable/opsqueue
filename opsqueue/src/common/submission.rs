@@ -91,7 +91,6 @@ impl SubmissionId {
 
 pub type MetadataMap = FxHashMap<String, Vec<u8>>;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
     pub id: SubmissionId,
@@ -294,8 +293,7 @@ pub mod db {
         chunks: Vec<Chunk>,
         strategic_metadata: MetadataMap,
         conn: &'a mut SqliteConnection,
-    ) -> Result<(), DatabaseError>
-    {
+    ) -> Result<(), DatabaseError> {
         use axum_prometheus::metrics::{counter, gauge};
         let chunks_total = submission.chunks_total.into();
         tracing::debug!("Inserting submission {}", submission.id);
@@ -304,9 +302,15 @@ pub mod db {
             .transaction(move |tx| {
                 Box::pin(async move {
                     insert_submission_raw(&submission, &mut **tx).await?;
-                    insert_submission_metadata_raw(&submission, &strategic_metadata, &mut **tx).await?;
+                    insert_submission_metadata_raw(&submission, &strategic_metadata, &mut **tx)
+                        .await?;
                     super::chunk::db::insert_many_chunks(&chunks, &mut **tx).await?;
-                    super::chunk::db::insert_many_chunks_metadata(&chunks, &strategic_metadata, &mut **tx).await?;
+                    super::chunk::db::insert_many_chunks_metadata(
+                        &chunks,
+                        &strategic_metadata,
+                        &mut **tx,
+                    )
+                    .await?;
                     Ok(())
                 })
             })
@@ -344,7 +348,8 @@ pub mod db {
             .map(move |(chunk_index, uri)| {
                 // NOTE: Since `len` fits in a u64, these indexes by definition must too!
                 Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
-            }).collect();
+            })
+            .collect();
         insert_submission(submission, iter, strategic_metadata, conn).await?;
         Ok(submission_id)
     }
@@ -377,7 +382,7 @@ pub mod db {
     }
 
     /// Retrieves the earlier stored strategic metadata.
-    /// 
+    ///
     /// Primarily for testing and introspection.
     pub async fn get_submission_strategic_metadata(
         id: SubmissionId,
@@ -385,12 +390,13 @@ pub mod db {
     ) -> Result<MetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
-        r#"
+            r#"
         SELECT metadata_key, metadata_value FROM submissions_metadata
         WHERE submission_id = ?
         "#,
-        id,
-        ).fetch(conn)
+            id,
+        )
+        .fetch(conn)
         .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
         .try_collect()
         .await?;
@@ -769,7 +775,9 @@ pub mod test {
         let strategic_metadata: MetadataMap = [
             ("company_id".to_string(), "123".to_string().into_bytes()),
             ("flavour".to_string(), "vanilla".to_string().into_bytes()),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         let mut conn = db.acquire().await.unwrap();
         let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
 
@@ -780,17 +788,24 @@ pub mod test {
             strategic_metadata.clone(),
             &mut conn,
         )
-            .await
-            .expect("insertion failed");
+        .await
+        .expect("insertion failed");
 
-        let fetched_metadata = get_submission_strategic_metadata(submission_id, &mut *conn).await.unwrap();
+        let fetched_metadata = get_submission_strategic_metadata(submission_id, &mut *conn)
+            .await
+            .unwrap();
         assert!(fetched_metadata == strategic_metadata);
 
-        let res = sqlx::query!("SELECT * FROM chunks_metadata;").fetch_all(&mut *conn).await.unwrap();
+        let res = sqlx::query!("SELECT * FROM chunks_metadata;")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
         dbg!(res);
 
         let chunk_id = (submission_id, ChunkIndex::zero()).into();
-        let chunk_fetched_metadata = chunk::db::get_chunk_strategic_metadata(chunk_id, &mut *conn).await.unwrap();
+        let chunk_fetched_metadata = chunk::db::get_chunk_strategic_metadata(chunk_id, &mut *conn)
+            .await
+            .unwrap();
 
         dbg!(&strategic_metadata);
         dbg!(&fetched_metadata);
@@ -850,20 +865,42 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-            .await
-            .unwrap();
-        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-            .await
-            .unwrap();
-        let old_three =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-                .await
-                .unwrap();
-        let old_four_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-                .await
-                .unwrap();
+        let old_one = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_two = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_three = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_four_unfailed = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
         fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
             .await
@@ -882,18 +919,33 @@ pub mod test {
 
         let cutoff_timestamp = Utc::now();
 
-        let too_new_one =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-                .await
-                .unwrap();
-        let _too_new_two_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-                .await
-                .unwrap();
-        let too_new_three =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, Default::default(), &mut conn)
-                .await
-                .unwrap();
+        let too_new_one = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let _too_new_two_unfailed = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let too_new_three = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
         fail_submission(
             too_new_one,
