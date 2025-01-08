@@ -10,6 +10,8 @@ use sqlx::{SqliteConnection, SqliteExecutor};
 #[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
 
+use super::metastate::MetaState;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     Oldest,
@@ -27,7 +29,7 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 
 #[cfg(feature = "server-logic")]
 impl Strategy {
-    pub fn execute<'c>(&'c self, db_conn: &'c mut SqliteConnection) -> ChunkStream<'c> {
+    pub fn execute<'c>(&'c self, db_conn: &'c mut SqliteConnection, _metastate: &MetaState) -> ChunkStream<'c> {
         // use futures::{StreamExt, TryStreamExt};
         // use sqlx::FromRow;
         // self.query().build_query_as().fetch(db_conn)
@@ -72,13 +74,13 @@ pub fn prefer_distinct_chunks_stream<'c>(
     match underlying {
         Strategy::Oldest => sqlx::query_as(
             r#"
-            SELECT 
+            SELECT
               chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
             , chunks.input_content AS "input_content: _"
             , chunks.retries
             FROM chunks, chunks_metadata
-            WHERE 
+            WHERE
             chunks.submission_id = chunks_metadata.submission_id
             AND
             chunks.chunk_index = chunks_metadata.chunk_index
@@ -96,13 +98,13 @@ pub fn prefer_distinct_chunks_stream<'c>(
 
         Strategy::Newest => sqlx::query_as(
             r#"
-            SELECT 
+            SELECT
               chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
             , chunks.input_content AS "input_content: _"
             , chunks.retries
             FROM chunks, chunks_metadata
-            WHERE 
+            WHERE
             chunks.submission_id = chunks_metadata.submission_id
             AND
             chunks.chunk_index = chunks_metadata.chunk_index
@@ -123,13 +125,13 @@ pub fn prefer_distinct_chunks_stream<'c>(
 
             sqlx::query_as(
                 r#"
-            SELECT 
+            SELECT
               chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
             , chunks.input_content AS "input_content: _"
             , chunks.retries
             FROM chunks, chunks_metadata
-            WHERE 
+            WHERE
             chunks.submission_id = chunks_metadata.submission_id
             AND
             chunks.chunk_index = chunks_metadata.chunk_index
@@ -142,13 +144,13 @@ pub fn prefer_distinct_chunks_stream<'c>(
 
             UNION ALL
 
-            SELECT 
+            SELECT
               chunks.submission_id AS "submission_id: _"
             , chunks.chunk_index AS "chunk_index: _"
             , chunks.input_content AS "input_content: _"
             , chunks.retries
             FROM chunks, chunks_metadata
-            WHERE 
+            WHERE
             chunks.submission_id = chunks_metadata.submission_id
             AND
             chunks.chunk_index = chunks_metadata.chunk_index
@@ -370,88 +372,85 @@ pub fn random_chunks_query() -> sqlx::QueryBuilder<'static, Sqlite> {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use super::*;
-    use itertools::Itertools;
-    use sqlx::Row;
 
-//     async fn explain(qb: sqlx::QueryBuilder<'_, Sqlite>, conn: &mut SqliteConnection) -> String {
-//         sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", qb.sql()))
-//             .fetch_all(&mut *conn)
-//             .await
-//             .unwrap()
-//             .into_iter()
-//             .map(|row| {
-//                 let id = row.get::<i64, &str>("id");
-//                 let parent = row.get::<i64, &str>("parent");
-//                 let detail = row.get::<String, &str>("detail");
-//                 format!("{}, {}, {}", id, parent, detail)
-//             })
-//             .join("\n")
-//     }
+    //     async fn explain(qb: sqlx::QueryBuilder<'_, Sqlite>, conn: &mut SqliteConnection) -> String {
+    //         sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", qb.sql()))
+    //             .fetch_all(&mut *conn)
+    //             .await
+    //             .unwrap()
+    //             .into_iter()
+    //             .map(|row| {
+    //                 let id = row.get::<i64, &str>("id");
+    //                 let parent = row.get::<i64, &str>("parent");
+    //                 let detail = row.get::<String, &str>("detail");
+    //                 format!("{}, {}, {}", id, parent, detail)
+    //             })
+    //             .join("\n")
+    //     }
 
-//     async fn explain2(sql: &str, conn: &mut SqliteConnection) -> String {
-//         sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", sql))
-//             .fetch_all(&mut *conn)
-//             .await
-//             .unwrap()
-//             .into_iter()
-//             .map(|row| {
-//                 let id = row.get::<i64, &str>("id");
-//                 let parent = row.get::<i64, &str>("parent");
-//                 let detail = row.get::<String, &str>("detail");
-//                 format!("{}, {}, {}", id, parent, detail)
-//             })
-//             .join("\n")
-//     }
+    //     async fn explain2(sql: &str, conn: &mut SqliteConnection) -> String {
+    //         sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", sql))
+    //             .fetch_all(&mut *conn)
+    //             .await
+    //             .unwrap()
+    //             .into_iter()
+    //             .map(|row| {
+    //                 let id = row.get::<i64, &str>("id");
+    //                 let parent = row.get::<i64, &str>("parent");
+    //                 let detail = row.get::<String, &str>("detail");
+    //                 format!("{}, {}, {}", id, parent, detail)
+    //             })
+    //             .join("\n")
+    //     }
 
-//     #[sqlx::test]
-//     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
-//         let mut conn = db.acquire().await.unwrap();
+    //     #[sqlx::test]
+    //     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
+    //         let mut conn = db.acquire().await.unwrap();
 
-//         let explained = explain(oldest_chunks_query(), &mut *conn).await;
-//         assert_eq!(explained, "3, 0, SCAN chunks");
-//     }
+    //         let explained = explain(oldest_chunks_query(), &mut *conn).await;
+    //         assert_eq!(explained, "3, 0, SCAN chunks");
+    //     }
 
-//     #[sqlx::test]
-//     pub async fn test_query_plan_oldest2(db: sqlx::SqlitePool) {
-//         let mut conn = db.acquire().await.unwrap();
+    //     #[sqlx::test]
+    //     pub async fn test_query_plan_oldest2(db: sqlx::SqlitePool) {
+    //         let mut conn = db.acquire().await.unwrap();
 
-//         use sqlx::Execute;
-//         let sql = oldest_chunks_query_as().sql();
-//         let mut query = oldest_chunks_query_as();
-//         {
-//             use futures::StreamExt;
-//             let mut res = query.fetch(&mut *conn);
-//             while let Some(row) = res.next().await {
-//                 dbg!(row);
-//             }
-//         }
-//         assert!(false);
+    //         use sqlx::Execute;
+    //         let sql = oldest_chunks_query_as().sql();
+    //         let mut query = oldest_chunks_query_as();
+    //         {
+    //             use futures::StreamExt;
+    //             let mut res = query.fetch(&mut *conn);
+    //             while let Some(row) = res.next().await {
+    //                 dbg!(row);
+    //             }
+    //         }
+    //         assert!(false);
 
-//         let explained = explain2(oldest_chunks_query_as().sql(), &mut *conn).await;
-//         assert_eq!(explained, "3, 0, SCAN chunks");
-//     }
+    //         let explained = explain2(oldest_chunks_query_as().sql(), &mut *conn).await;
+    //         assert_eq!(explained, "3, 0, SCAN chunks");
+    //     }
 
-//     #[sqlx::test]
-//     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
-//         let mut conn = db.acquire().await.unwrap();
+    //     #[sqlx::test]
+    //     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
+    //         let mut conn = db.acquire().await.unwrap();
 
-//         let explained = explain(newest_chunks_query(), &mut *conn).await;
-//         assert_eq!(explained, "3, 0, SCAN chunks");
-//     }
+    //         let explained = explain(newest_chunks_query(), &mut *conn).await;
+    //         assert_eq!(explained, "3, 0, SCAN chunks");
+    //     }
 
-//     #[sqlx::test]
-//     pub async fn test_query_plan_random(db: sqlx::SqlitePool) {
-//         let mut conn = db.acquire().await.unwrap();
+    //     #[sqlx::test]
+    //     pub async fn test_query_plan_random(db: sqlx::SqlitePool) {
+    //         let mut conn = db.acquire().await.unwrap();
 
-//         let explained = explain(random_chunks_query(), &mut *conn).await;
-//         assert_eq!(
-//             explained,
-//             r#"1, 0, COMPOUND QUERY
-// 2, 1, LEFT-MOST SUBQUERY
-// 5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-// 19, 1, UNION ALL
-// 22, 19, SEARCH chunks USING INDEX random_chunks_order (random_order<?)"#
-//         );
-//     }
+    //         let explained = explain(random_chunks_query(), &mut *conn).await;
+    //         assert_eq!(
+    //             explained,
+    //             r#"1, 0, COMPOUND QUERY
+    // 2, 1, LEFT-MOST SUBQUERY
+    // 5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+    // 19, 1, UNION ALL
+    // 22, 19, SEARCH chunks USING INDEX random_chunks_order (random_order<?)"#
+    //         );
+    //     }
 }

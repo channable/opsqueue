@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use crate::common::chunk;
-use crate::common::submission::{self, Metadata, MetadataMap, SubmissionId};
+use crate::common::submission::{self, SubmissionId};
 use crate::db::DBPools;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

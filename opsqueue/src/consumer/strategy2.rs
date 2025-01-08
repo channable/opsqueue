@@ -1,8 +1,14 @@
-use futures::stream::BoxStream;
+use futures::{future::Either, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
 use crate::common::chunk::Chunk;
+
+type MetadataKey = String;
+type MetadataValue = Either<String, i64>;
+pub struct StrategyMetaState {
+    strategic_metadata_counts: moka::sync::Cache<(MetadataKey, MetadataValue), u64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaseStrategy {
@@ -95,8 +101,8 @@ impl Strategy {
                 meta_key,
                 underlying,
             } => {
-                let taken_values = [1, 2, 3,10, 20, 30, 100, 200, 1000, 12345]; // TODO: Fill with real value from reserver info
-                let qb = qb.push(format_args!("WITH inner_{meta_key} AS NOT MATERIALIZED ("));
+                let taken_values = [1, 2, 3, 10, 20, 30, 100, 200, 1000, 12345]; // TODO: Fill with real value from reserver info
+                let qb = qb.push(format_args!("WITH inner_{meta_key} AS ("));
                 let qb = underlying.build_query_snippet(qb);
                 qb.push(format_args!(
                     r#"),
@@ -142,7 +148,7 @@ pub mod test {
         sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", qb.sql()))
             .fetch_all(&mut *conn)
             .await
-            .unwrap()
+            .unwrap_or_else(|_| panic!("Invalid query: \n{}\n", qb.sql()))
             .into_iter()
             .map(|row| {
                 let id = row.get::<i64, &str>("id");
@@ -181,7 +187,10 @@ pub mod test {
         let qb = Strategy::Base(BaseStrategy::Random).build_query(&mut qb);
         let explained = explain(qb, &mut conn).await;
 
-        assert!(!explained.contains("B-TREE"));
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no materialization, but it did: {explained}"
+        );
         insta::assert_snapshot!(explained, @r"
         1, 0, MERGE (UNION ALL)
         3, 1, LEFT
@@ -190,21 +199,6 @@ pub mod test {
         30, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
         ");
     }
-
-    // #[sqlx::test]
-    // pub async fn test_query_plan_prefer_distinct(db: sqlx::SqlitePool) {
-    //     use Strategy::*;
-    //     use BaseStrategy::*;
-    //     let mut conn = db.acquire().await.unwrap();
-    //     for base in [Base(Oldest), Base(Newest), Base(Random)] {
-    //         let mut qb = QueryBuilder::new("");
-    //         let strategy = PreferDistinct{meta_key: "company_id".to_string(), underlying: Box::new(base)};
-    //         let qb = strategy.build_query(&mut qb);
-    //         println!("{}", qb.sql());
-    //         let explained = explain(qb, &mut conn).await;
-    //         assert_eq!(explained, "AAA");
-    //     }
-    // }
 
     #[sqlx::test]
     pub async fn test_query_plan_prefer_distinct_oldest(db: sqlx::SqlitePool) {
@@ -220,7 +214,10 @@ pub mod test {
         let qb = strategy.build_query(&mut qb);
         let explained = explain(qb, &mut conn).await;
 
-        assert!(!explained.contains("B-TREE"));
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no materialization, but it did: {explained}"
+        );
         insta::assert_snapshot!(explained, @r"
         1, 0, MERGE (UNION ALL)
         3, 1, LEFT
@@ -248,7 +245,10 @@ pub mod test {
         let qb = strategy.build_query(&mut qb);
         let explained = explain(qb, &mut conn).await;
 
-        assert!(!explained.contains("B-TREE"));
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no materialization, but it did: {explained}"
+        );
         insta::assert_snapshot!(explained, @r"
         1, 0, MERGE (UNION ALL)
         3, 1, LEFT
@@ -276,7 +276,10 @@ pub mod test {
         let qb = strategy.build_query(&mut qb);
         let explained = explain(qb, &mut conn).await;
 
-        assert!(!explained.contains("B-TREE"));
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no materialization, but it did: {explained}"
+        );
         insta::assert_snapshot!(explained, @r"
         1, 0, MERGE (UNION ALL)
         3, 1, LEFT
@@ -300,7 +303,6 @@ pub mod test {
         294, 280, CORRELATED SCALAR SUBQUERY 6
         298, 294, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
         ");
-        
     }
 
     #[sqlx::test]
@@ -320,7 +322,10 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb);
         let explained = explain(qb, &mut conn).await;
-        assert!(!explained.contains("B-TREE"));
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no materialization, but it did: {explained}"
+        );
         insta::assert_snapshot!(explained, @r"
         1, 0, MERGE (UNION ALL)
         3, 1, LEFT

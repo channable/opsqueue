@@ -39,7 +39,7 @@ CREATE TABLE chunks_metadata
     metadata_value BLOB NOT NULL,
 
     -- auto-delete when chunk completes or fails:
-    FOREIGN KEY (submission_id, chunk_index) REFERENCES chunks ON DELETE CASCADE, 
+    FOREIGN KEY (submission_id, chunk_index) REFERENCES chunks ON DELETE CASCADE,
 
     PRIMARY KEY (submission_id, chunk_index, metadata_key, metadata_value)
 ) WITHOUT ROWID, STRICT;

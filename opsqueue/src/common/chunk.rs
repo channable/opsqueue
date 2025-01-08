@@ -237,7 +237,7 @@ pub mod db {
     ) -> sqlx::Result<()> {
         query!(
             "
-            INSERT INTO chunks_metadata 
+            INSERT INTO chunks_metadata
             ( submission_id
             , chunk_index
             , metadata_key
@@ -522,7 +522,7 @@ pub mod db {
         const ROWS_PER_QUERY: usize = 1000;
 
         // let start = std::time::Instant::now();
-        let mut iter = chunks.into_iter().peekable();
+        let mut iter = chunks.iter().peekable();
         while iter.peek().is_some() {
             let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
 
@@ -554,13 +554,13 @@ pub mod db {
         use itertools::Itertools;
         const ROWS_PER_QUERY: usize = 1000;
 
-        let mut iter = chunks.into_iter().cartesian_product(metadata).peekable();
+        let mut iter = chunks.iter().cartesian_product(metadata).peekable();
         while iter.peek().is_some() {
             let query_rows = iter.by_ref().take(ROWS_PER_QUERY);
 
             let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
                 "
-            INSERT INTO chunks_metadata 
+            INSERT INTO chunks_metadata
             ( submission_id
             , chunk_index
             , metadata_key

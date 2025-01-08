@@ -302,8 +302,7 @@ pub mod db {
             .transaction(move |tx| {
                 Box::pin(async move {
                     insert_submission_raw(&submission, &mut **tx).await?;
-                    insert_submission_metadata_raw(&submission, &strategic_metadata, &mut **tx)
-                        .await?;
+                    insert_submission_metadata_raw(&submission, &strategic_metadata, tx).await?;
                     super::chunk::db::insert_many_chunks(&chunks, &mut **tx).await?;
                     super::chunk::db::insert_many_chunks_metadata(
                         &chunks,
@@ -675,7 +674,7 @@ pub mod db {
             Box::pin(async move {
                 // Clean up old submissions_metadata
                 query!(
-                    "DELETE FROM submissions_metadata 
+                    "DELETE FROM submissions_metadata
                     WHERE submission_id = (
                         SELECT id FROM submissions_completed WHERE completed_at < julianday(?)
                     );",
@@ -684,7 +683,7 @@ pub mod db {
                 .execute(&mut **tx)
                 .await?;
                 query!(
-                    "DELETE FROM submissions_metadata 
+                    "DELETE FROM submissions_metadata
                     WHERE submission_id = (
                         SELECT id FROM submissions_failed WHERE failed_at < julianday(?)
                     );",

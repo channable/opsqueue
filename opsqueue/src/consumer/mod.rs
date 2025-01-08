@@ -3,6 +3,7 @@ pub mod common;
 pub mod reserver;
 pub mod strategy;
 pub mod strategy2;
+pub mod metastate;
 
 #[cfg(feature = "server-logic")]
 pub mod server;

@@ -88,6 +88,11 @@ impl ConsumerState {
                     crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn)
                         .await
                         .expect("get_submission while reserving failed");
+                let metadata = 
+                    crate::common::submission::db::get_submission_strategic_metadata(chunk.submission_id, &mut **conn)
+                        .await
+                        .expect("get_submission_strategic_metadata while reserving failed");
+                self.reserver.insert_metadata(&metadata);
                 Ok((chunk, submission))
             })
             .take(limit)
@@ -109,7 +114,7 @@ impl ConsumerState {
             return Err(E::R(IncorrectUsage(LimitIsZero())));
         }
         let mut conn = self.pool.acquire().await?;
-        let stream = strategy.execute(&mut conn);
+        let stream = strategy.execute(&mut conn, self.reserver.metastate());
         let new_reservations = self
             .reserve_chunks(stream, limit, stale_chunks_notifier)
             .await?;

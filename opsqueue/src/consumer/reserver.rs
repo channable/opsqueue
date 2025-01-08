@@ -13,10 +13,15 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::time::DelayQueue;
 
+use crate::common::submission::MetadataMap;
+
+use super::metastate::MetaState;
+
 #[derive(Clone)]
 pub struct Reserver<K, V> {
     reservations: Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>,
     pending_removals: Arc<Mutex<DelayQueue<K>>>,
+    metastate: Arc<MetaState>,
 }
 
 impl<K, V> core::fmt::Debug for Reserver<K, V>
@@ -52,10 +57,16 @@ where
             // so let's use a faster hash than SipHash
             .build_with_hasher(rustc_hash::FxBuildHasher);
         let pending_removals = Default::default();
+        let metastate = Default::default();
         Reserver {
             reservations,
             pending_removals,
+            metastate,
         }
+    }
+
+    pub fn metastate(&self) -> &MetaState {
+        &self.metastate
     }
 
     /// Attempts to reserve a particular key-val.
@@ -79,6 +90,18 @@ where
             tracing::trace!("Reservation of {key:?} failed!");
             counter!(crate::prometheus::RESERVER_RESERVATIONS_FAILED_COUNTER).increment(1);
             None
+        }
+    }
+
+    pub fn insert_metadata<'a>(&self, metadata: &MetadataMap) {
+        for (name, value) in metadata {
+            self.metastate.increment(name, value);
+        }
+    }
+
+    pub fn remove_metadata<'a>(&self, metadata: &MetadataMap) {
+        for (name, value) in metadata {
+            self.metastate.decrement(name, value);
         }
     }
 
