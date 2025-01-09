@@ -66,6 +66,9 @@ To build a production version (of both the binary and the client libraries) with
 ./build.py test integration
 ```
 
+For some Rust unit tests, we use the [insta](https://insta.rs/docs/quickstart/) golden test library.
+If golden tests are failing, you can use the `cargo insta` subcommand to review failed golden test snapshots; ([installation instructions](https://insta.rs/docs/cli/)).
+
 ### Running
 
 To run the main `opsqueue` executable:

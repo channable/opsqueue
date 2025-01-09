@@ -6,13 +6,14 @@ use axum_prometheus::metrics::histogram;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use opentelemetry::trace::TraceContextExt;
+use sqlx::QueryBuilder;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::common::chunk;
 use crate::common::errors::DatabaseError;
+use crate::consumer::strategy;
 use crate::consumer::strategy::ChunkStream;
-use crate::consumer::strategy::Strategy;
 use crate::{
     common::{
         chunk::{Chunk, ChunkId},
@@ -88,10 +89,12 @@ impl ConsumerState {
                     crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn)
                         .await
                         .expect("get_submission while reserving failed");
-                let metadata = 
-                    crate::common::submission::db::get_submission_strategic_metadata(chunk.submission_id, &mut **conn)
-                        .await
-                        .expect("get_submission_strategic_metadata while reserving failed");
+                let metadata = crate::common::submission::db::get_submission_strategic_metadata(
+                    chunk.submission_id,
+                    &mut **conn,
+                )
+                .await
+                .expect("get_submission_strategic_metadata while reserving failed");
                 self.reserver.insert_metadata(&metadata);
                 Ok((chunk, submission))
             })
@@ -104,17 +107,22 @@ impl ConsumerState {
     #[allow(clippy::type_complexity)]
     pub async fn fetch_and_reserve_chunks(
         &mut self,
-        strategy: Strategy,
+        strategy: strategy::Strategy,
         limit: usize,
         stale_chunks_notifier: &tokio::sync::mpsc::UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, E<DatabaseError, IncorrectUsage<LimitIsZero>>> {
         let start = tokio::time::Instant::now();
-
         if limit == 0 {
             return Err(E::R(IncorrectUsage(LimitIsZero())));
         }
+
         let mut conn = self.pool.acquire().await?;
-        let stream = strategy.execute(&mut conn, self.reserver.metastate());
+        let mut query_builder = QueryBuilder::new("");
+        let metastate = self.reserver.metastate();
+        let stream = strategy
+            .build_query(&mut query_builder, metastate)
+            .build_query_as()
+            .fetch(&mut *conn);
         let new_reservations = self
             .reserve_chunks(stream, limit, stale_chunks_notifier)
             .await?;
@@ -160,29 +168,6 @@ impl ConsumerState {
                 reservations: self.reservations.clone(),
             })
             .await;
-        // let start = tokio::time::Instant::now();
-
-        // let pool = self.pool.clone();
-        // let reservations = self.reservations.clone();
-        // let reserver = self.reserver.clone();
-        // tokio::spawn(async move {
-        //     let res: Result<(), anyhow::Error> = async move {
-        //         let mut conn = pool.acquire().await?;
-        //         chunk::db::complete_chunk(id, output_content, &mut conn).await?;
-        //         reservations.lock().expect("No poison").remove(&id);
-        //         // NOTE: Even in the unlikely event the query fails,
-        //         // we want the chunk to be un-reserved
-        //         if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM).record(started_at.elapsed()) }
-        //         Ok(())
-        //     }.await;
-
-        //     if res.is_err() {
-        //         tracing::error!("Failed to complete chunk: {:?}", res);
-        //     }
-        // });
-
-        // histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION).record(start.elapsed());
-        // Ok(())
     }
 
     pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) {
@@ -195,29 +180,5 @@ impl ConsumerState {
                 reservations: self.reservations.clone(),
             })
             .await;
-
-        // let start = tokio::time::Instant::now();
-
-        // let pool = self.pool.clone();
-        // let reservations = self.reservations.clone();
-        // let reserver = self.reserver.clone();
-        // tokio::spawn(async move {
-        //     let res: Result<(), anyhow::Error> = async move {
-        //         let mut conn = pool.acquire().await?;
-        //         chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await?;
-        //         reservations.lock().expect("No poison").remove(&id);
-        //         // NOTE: Even in the unlikely event the query fails,
-        //         // we want the chunk to be un-reserved
-        //         if let Some(started_at) = reserver.finish_reservation(&id) { histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM).record(started_at.elapsed()) }
-        //         Ok(())
-        //     }.await;
-
-        //     if res.is_err() {
-        //         tracing::error!("Failed to fail chunk: {:?}", res);
-        //     }
-        // });
-
-        // histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION).record(start.elapsed());
-        // Ok(())
     }
 }

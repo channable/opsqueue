@@ -99,19 +99,54 @@ impl From<u63> for ChunkIndex {
 
 #[pyclass(frozen, eq)]
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreferDistinct {
+    meta_key: String,
+    underlying: Box<Strategy>,
+}
+#[pymethods]
+impl PreferDistinct {
+    #[new]
+    fn new(meta_key: String, underlying: Strategy) -> Self {
+        Self {
+            meta_key,
+            underlying: Box::new(underlying),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
+#[pyclass(frozen, eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Strategy {
-    Oldest,
-    Newest,
-    Random,
+    #[pyo3(constructor=())]
+    Oldest(),
+    #[pyo3(constructor=())]
+    Newest(),
+    #[pyo3(constructor=())]
+    Random(),
+    #[pyo3(constructor=(_0))]
+    PreferDistinct(PreferDistinct),
 }
 
 impl From<strategy::Strategy> for Strategy {
     fn from(value: strategy::Strategy) -> Self {
         match value {
-            strategy::Strategy::Oldest => Strategy::Oldest,
-            strategy::Strategy::Newest => Strategy::Newest,
-            strategy::Strategy::Random => Strategy::Random,
-            strategy::Strategy::PreferDistinct { .. } => todo!(),
+            strategy::Strategy::Oldest => Strategy::Oldest(),
+            strategy::Strategy::Newest => Strategy::Newest(),
+            strategy::Strategy::Random => Strategy::Random(),
+            strategy::Strategy::PreferDistinct {
+                meta_key,
+                underlying,
+            } => {
+                let underlying = Strategy::from(*underlying);
+                Strategy::PreferDistinct(PreferDistinct {
+                    meta_key,
+                    underlying: Box::new(underlying),
+                })
+            }
         }
     }
 }
@@ -119,9 +154,19 @@ impl From<strategy::Strategy> for Strategy {
 impl From<Strategy> for strategy::Strategy {
     fn from(val: Strategy) -> Self {
         match val {
-            Strategy::Oldest => strategy::Strategy::Oldest,
-            Strategy::Newest => strategy::Strategy::Newest,
-            Strategy::Random => strategy::Strategy::Random,
+            Strategy::Oldest() => strategy::Strategy::Oldest,
+            Strategy::Newest() => strategy::Strategy::Newest,
+            Strategy::Random() => strategy::Strategy::Random,
+            Strategy::PreferDistinct(PreferDistinct {
+                meta_key,
+                underlying,
+            }) => {
+                let underlying = strategy::Strategy::from(*underlying);
+                strategy::Strategy::PreferDistinct {
+                    meta_key,
+                    underlying: Box::new(underlying),
+                }
+            }
         }
     }
 }

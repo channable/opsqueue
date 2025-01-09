@@ -55,9 +55,6 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
     )
 
     def run_consumer() -> None:
-        def broken_increment(input: int) -> float:
-            return input / 0
-
         log_level = logging.root.level
         logging.basicConfig(
             format="Consumer - %(levelname)s: %(message)s",
@@ -65,15 +62,21 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
             force=True,
         )
 
+        def broken_increment(input: int) -> float:
+            return input / 0
+
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}",
             "file:///tmp/opsqueue/test_submission_failure_exception",
         )
         consumer_client.run_each_op(broken_increment)
 
-    # run_consumer()
+    # If this test hangs, it may be that the consumer crashed early.
+    # Check by calling `run_consumer()` directly.
 
-    with background_process(run_consumer) as _consumer:
+    with background_process(run_consumer) as consumer:
+        logging.error(f"Opsqueue: {opsqueue}")
+        logging.error(f"Consumer: {consumer}")
         input_iter = range(0, 100)
 
         with pytest.raises(SubmissionFailedError) as exc_info:

@@ -64,6 +64,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
     ) -> Iterator[Any]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
@@ -82,6 +83,7 @@ class ProducerClient:
             results_iter = self.run_submission_chunks(
                 _chunk_iterator(ops, chunk_size, serialization_format),
                 metadata=metadata,
+                strategic_metadata=strategic_metadata,
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
@@ -148,7 +150,11 @@ class ProducerClient:
         )
 
     def run_submission_chunks(
-        self, chunk_contents: Iterable[bytes], *, metadata: None | bytes = None
+        self,
+        chunk_contents: Iterable[bytes],
+        *,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
     ) -> Iterator[bytes]:
         """
         Inserts an already-chunked submission into the queue, and blocks until it is completed.
@@ -161,11 +167,17 @@ class ProducerClient:
         - `InternalProducerClientError` if there is a low-level internal error.
         - TODO special exception for when the submission fails.
         """
-        submission_id = self.insert_submission_chunks(chunk_contents, metadata=metadata)
+        submission_id = self.insert_submission_chunks(
+            chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata
+        )
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
     def insert_submission_chunks(
-        self, chunk_contents: Iterable[bytes], *, metadata: None | bytes = None
+        self,
+        chunk_contents: Iterable[bytes],
+        *,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
@@ -180,6 +192,7 @@ class ProducerClient:
         return self.inner.insert_submission_chunks(
             iter(chunk_contents),
             metadata=metadata,
+            strategic_metadata=strategic_metadata,
             otel_trace_carrier=otel_trace_carrier,
         )
 

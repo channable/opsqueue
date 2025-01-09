@@ -93,13 +93,13 @@ where
         }
     }
 
-    pub fn insert_metadata<'a>(&self, metadata: &MetadataMap) {
+    pub fn insert_metadata(&self, metadata: &MetadataMap) {
         for (name, value) in metadata {
             self.metastate.increment(name, value);
         }
     }
 
-    pub fn remove_metadata<'a>(&self, metadata: &MetadataMap) {
+    pub fn remove_metadata(&self, metadata: &MetadataMap) {
         for (name, value) in metadata {
             self.metastate.decrement(name, value);
         }

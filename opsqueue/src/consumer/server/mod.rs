@@ -196,11 +196,14 @@ impl Completer {
                         crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
                             .await;
 
-                        let metadata = 
-                            crate::common::submission::db::get_submission_strategic_metadata(id.submission_id, &mut *conn)
-                                .await
-                                .expect("get_submission_strategic_metadata while reserving failed");
-                        self.reserver.remove_metadata(&metadata);
+                    let metadata =
+                        crate::common::submission::db::get_submission_strategic_metadata(
+                            id.submission_id,
+                            &mut *conn,
+                        )
+                        .await
+                        .expect("get_submission_strategic_metadata while reserving failed");
+                    self.reserver.remove_metadata(&metadata);
 
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self.reserver.finish_reservation(&id, true).await {
@@ -224,10 +227,13 @@ impl Completer {
                     let maybe_started_at = match &db_res {
                         Err(_) => self.reserver.finish_reservation(&id, false).await,
                         Ok(failed_permanently) => {
-                            let metadata = 
-                                crate::common::submission::db::get_submission_strategic_metadata(id.submission_id, &mut *conn)
-                                    .await
-                                    .expect("get_submission_strategic_metadata while reserving failed");
+                            let metadata =
+                                crate::common::submission::db::get_submission_strategic_metadata(
+                                    id.submission_id,
+                                    &mut *conn,
+                                )
+                                .await
+                                .expect("get_submission_strategic_metadata while reserving failed");
                             self.reserver.remove_metadata(&metadata);
 
                             self.reserver

@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use rustc_hash::FxHashMap;
 use ux_serde::u63;
 
+use crate::consumer::metastate::MetaStateVal;
+
 use super::chunk::{self, Chunk, ChunkFailed};
 use super::chunk::{ChunkCount, ChunkIndex};
 
@@ -89,7 +91,7 @@ impl SubmissionId {
     }
 }
 
-pub type MetadataMap = FxHashMap<String, Vec<u8>>;
+pub type MetadataMap = FxHashMap<String, MetaStateVal>;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
@@ -771,12 +773,10 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_submission_strategic_metadata(db: sqlx::SqlitePool) {
-        let strategic_metadata: MetadataMap = [
-            ("company_id".to_string(), "123".to_string().into_bytes()),
-            ("flavour".to_string(), "vanilla".to_string().into_bytes()),
-        ]
-        .into_iter()
-        .collect();
+        let strategic_metadata: MetadataMap =
+            [("company_id".to_string(), 123), ("flavour".to_string(), 42)]
+                .into_iter()
+                .collect();
         let mut conn = db.acquire().await.unwrap();
         let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
 

@@ -1,10 +1,16 @@
 -- Keep track of metadata at submission level:
 CREATE TABLE submissions_metadata
 (
-     submission_id INTEGER NOT NULL,
-     metadata_key TEXT NOT NULL,
+    submission_id INTEGER NOT NULL,
+    metadata_key TEXT NOT NULL,
 
-     metadata_value BLOB NOT NULL,
+    -- We only support 64-bit integers as values,
+    -- for efficiency and reduced storage.
+    --
+    -- Since we do not depend on this value for ordering (Ord) but only for filtering (Eq),
+    -- it's okay to transform a u64 into a i64 before saving,
+    -- so we can truly accept the full 64 bit range here.
+    metadata_value INTEGER NOT NULL,
 
     -- NOTE: We don't set a foreign key here
     -- because the submission_id might point to
@@ -36,7 +42,7 @@ CREATE TABLE chunks_metadata
     chunk_index INTEGER NOT NULL,
     metadata_key TEXT NOT NULL,
 
-    metadata_value BLOB NOT NULL,
+    metadata_value INTEGER NOT NULL,
 
     -- auto-delete when chunk completes or fails:
     FOREIGN KEY (submission_id, chunk_index) REFERENCES chunks ON DELETE CASCADE,
