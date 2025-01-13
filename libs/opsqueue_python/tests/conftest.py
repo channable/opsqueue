@@ -94,7 +94,7 @@ def is_port_in_use(port: int) -> bool:
 def background_process(
     function: Callable[..., None],
     args: Iterable[Any] = (),
-) -> Generator[None, None, None]:
+) -> Generator[multiprocessing.Process, None, None]:
     proc = multiprocessing.Process(target=function, args=args)
     try:
         proc.daemon = True

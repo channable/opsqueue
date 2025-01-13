@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{common::chunk::ChunkId, config::Config, db::DBPools};
 
-use super::reserver::Reserver;
+use super::dispatcher::Dispatcher;
 
 pub mod conn;
 pub mod state;
@@ -51,11 +51,11 @@ pub async fn serve_for_tests(
 #[derive(Debug)]
 pub struct ServerState {
     pool: DBPools,
+    dispatcher: Dispatcher,
     completer: Option<Completer>,
     completer_tx: tokio::sync::mpsc::Sender<CompleterMessage>,
     notify_on_insert: Arc<Notify>,
     cancellation_token: CancellationToken,
-    reserver: Reserver<ChunkId, ChunkId>,
     config: Arc<Config>,
 }
 
@@ -67,21 +67,21 @@ impl ServerState {
         reservation_expiration: Duration,
         config: &Arc<Config>,
     ) -> Self {
-        let reserver = Reserver::new(reservation_expiration);
-        let (completer, completer_tx) = Completer::new(&pool.write_pool, &reserver);
+        let dispatcher = Dispatcher::new(reservation_expiration);
+        let (completer, completer_tx) = Completer::new(&pool.write_pool, &dispatcher);
         Self {
             pool,
             completer: Some(completer),
             completer_tx,
             notify_on_insert,
             cancellation_token,
-            reserver,
+            dispatcher,
             config: config.clone(),
         }
     }
 
     pub fn run_background(mut self) -> Self {
-        self.reserver
+        self.dispatcher
             .run_pending_tasks_periodically(self.cancellation_token.clone());
         let completer = std::mem::take(&mut self.completer)
             .expect("Error: Completer not available. Was `run_background` called twice?");
@@ -140,14 +140,14 @@ pub enum CompleterMessage {
 pub struct Completer {
     mailbox: tokio::sync::mpsc::Receiver<CompleterMessage>,
     pool: sqlx::SqlitePool,
-    reserver: Reserver<ChunkId, ChunkId>,
+    dispatcher: Dispatcher,
     count: usize,
 }
 
 impl Completer {
     pub fn new(
         pool: &sqlx::SqlitePool,
-        reserver: &Reserver<ChunkId, ChunkId>,
+        dispatcher: &Dispatcher,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         // TODO: Maybe give the completer just a single connection that does not need to be re-acquired,
@@ -156,7 +156,7 @@ impl Completer {
         let me = Self {
             mailbox: rx,
             pool: pool.clone(),
-            reserver: reserver.clone(),
+            dispatcher: dispatcher.clone(),
             count: 0,
         };
         (me, tx)
@@ -196,17 +196,12 @@ impl Completer {
                         crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
                             .await;
 
-                    let metadata =
-                        crate::common::submission::db::get_submission_strategic_metadata(
-                            id.submission_id,
-                            &mut *conn,
-                        )
-                        .await
-                        .expect("get_submission_strategic_metadata while reserving failed");
-                    self.reserver.remove_metadata(&metadata);
-
                     reservations.lock().expect("No poison").remove(&id);
-                    if let Some(started_at) = self.reserver.finish_reservation(&id, true).await {
+                    if let Some(started_at) = self
+                        .dispatcher
+                        .finish_reservation(&mut *conn, id, true)
+                        .await
+                    {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
                             .record(started_at.elapsed())
                     }
@@ -222,26 +217,17 @@ impl Completer {
                 } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let db_res =
+                    let failed_permanently =
                         crate::common::chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
-                    let maybe_started_at = match &db_res {
-                        Err(_) => self.reserver.finish_reservation(&id, false).await,
-                        Ok(failed_permanently) => {
-                            let metadata =
-                                crate::common::submission::db::get_submission_strategic_metadata(
-                                    id.submission_id,
-                                    &mut *conn,
-                                )
-                                .await
-                                .expect("get_submission_strategic_metadata while reserving failed");
-                            self.reserver.remove_metadata(&metadata);
-
-                            self.reserver
-                                .finish_reservation(&id, *failed_permanently)
-                                .await
-                        }
-                    };
                     reservations.lock().expect("No poison").remove(&id);
+                    let maybe_started_at = self
+                        .dispatcher
+                        .finish_reservation(
+                            &mut *conn,
+                            id,
+                            *failed_permanently.as_ref().unwrap_or(&false),
+                        )
+                        .await;
                     if let Some(started_at) = maybe_started_at {
                         histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM)
                             .record(started_at.elapsed())
@@ -249,7 +235,8 @@ impl Completer {
 
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
-                    db_res?;
+
+                    failed_permanently?;
                     Ok(())
                 }
             }

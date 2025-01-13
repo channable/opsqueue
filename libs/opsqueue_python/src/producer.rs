@@ -4,10 +4,7 @@ use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyItera
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
-    common::{
-        chunk,
-        submission::{self, MetadataMap},
-    },
+    common::{chunk, submission, StrategicMetadataMap},
     object_store::{ChunkRetrievalError, ChunkType},
     producer::common::ChunkContents,
     tracing::CarrierMap,
@@ -171,7 +168,7 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
-        strategic_metadata: Option<MetadataMap>,
+        strategic_metadata: Option<StrategicMetadataMap>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         SubmissionId,
@@ -260,7 +257,7 @@ impl ProducerClient {
         py: Python<'_>,
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
-        strategic_metadata: Option<MetadataMap>,
+        strategic_metadata: Option<StrategicMetadataMap>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         PyChunksIter,

@@ -5,7 +5,8 @@ use sqlx::{QueryBuilder, Sqlite};
 
 use crate::common::chunk::Chunk;
 
-use super::metastate::MetaState;
+#[cfg(feature = "server-logic")]
+use super::dispatcher::metastate::MetaState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {

@@ -2,10 +2,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use rustc_hash::FxHashMap;
 use ux_serde::u63;
-
-use crate::consumer::metastate::MetaStateVal;
 
 use super::chunk::{self, Chunk, ChunkFailed};
 use super::chunk::{ChunkCount, ChunkIndex};
@@ -90,8 +87,6 @@ impl SubmissionId {
         self.system_time().into()
     }
 }
-
-pub type MetadataMap = FxHashMap<String, MetaStateVal>;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
@@ -192,7 +187,10 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
-    use crate::common::errors::{DatabaseError, SubmissionNotFound, E};
+    use crate::{
+        common::errors::{DatabaseError, SubmissionNotFound, E},
+        common::StrategicMetadataMap,
+    };
     #[cfg(feature = "server-logic")]
     use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
@@ -264,7 +262,7 @@ pub mod db {
 
     pub async fn insert_submission_metadata_raw(
         submission: &Submission,
-        strategic_metadata: &MetadataMap,
+        strategic_metadata: &StrategicMetadataMap,
         conn: &mut SqliteConnection,
     ) -> Result<(), DatabaseError> {
         for (key, value) in strategic_metadata {
@@ -293,7 +291,7 @@ pub mod db {
     pub async fn insert_submission<'a>(
         submission: Submission,
         chunks: Vec<Chunk>,
-        strategic_metadata: MetadataMap,
+        strategic_metadata: StrategicMetadataMap,
         conn: &'a mut SqliteConnection,
     ) -> Result<(), DatabaseError> {
         use axum_prometheus::metrics::{counter, gauge};
@@ -329,7 +327,7 @@ pub mod db {
         prefix: Option<String>,
         chunks_contents: Vec<chunk::Content>,
         metadata: Option<Metadata>,
-        strategic_metadata: MetadataMap,
+        strategic_metadata: StrategicMetadataMap,
         conn: &mut SqliteConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = Submission::generate_id();
@@ -388,7 +386,7 @@ pub mod db {
     pub async fn get_submission_strategic_metadata(
         id: SubmissionId,
         conn: impl SqliteExecutor<'_>,
-    ) -> Result<MetadataMap, DatabaseError> {
+    ) -> Result<StrategicMetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
             r#"
@@ -734,6 +732,8 @@ pub mod test {
 
     use chrono::Utc;
 
+    use crate::common::StrategicMetadataMap;
+
     use super::db::*;
     use super::*;
 
@@ -773,7 +773,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_submission_strategic_metadata(db: sqlx::SqlitePool) {
-        let strategic_metadata: MetadataMap =
+        let strategic_metadata: StrategicMetadataMap =
             [("company_id".to_string(), 123), ("flavour".to_string(), 42)]
                 .into_iter()
                 .collect();

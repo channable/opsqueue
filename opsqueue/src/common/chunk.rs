@@ -165,7 +165,7 @@ impl Chunk {
 pub mod db {
     use super::*;
     use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
-    use crate::common::submission::MetadataMap;
+    use crate::common::StrategicMetadataMap;
     use axum_prometheus::metrics::{counter, gauge};
     use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
     use sqlx::{query_as, SqliteConnection};
@@ -361,6 +361,7 @@ pub mod db {
                     )
                     .fetch_one(&mut **tx)
                     .await?;
+                    tracing::trace!("Retries: {}", fields.retries);
                     if fields.retries >= MAX_RETRIES {
                         crate::common::submission::db::fail_submission_notx(
                             submission_id,
@@ -496,7 +497,7 @@ pub mod db {
     pub async fn get_chunk_strategic_metadata(
         full_chunk_id: ChunkId,
         conn: impl SqliteExecutor<'_>,
-    ) -> Result<MetadataMap, DatabaseError> {
+    ) -> Result<StrategicMetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
             r#"
@@ -544,7 +545,7 @@ pub mod db {
 
     pub async fn insert_many_chunks_metadata<Tx, Conn>(
         chunks: &[Chunk],
-        metadata: &MetadataMap,
+        metadata: &StrategicMetadataMap,
         mut conn: Tx,
     ) -> sqlx::Result<()>
     where
