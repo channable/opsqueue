@@ -45,7 +45,7 @@ def run_consumer() -> None:
         return data + 1
 
     client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/tracing_example")
-    client.run_each_op(incrementer, strategy=Strategy.Random)
+    client.run_each_op(incrementer, strategy=Strategy.Random())
 
 
 def main() -> None:

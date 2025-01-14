@@ -10,4 +10,4 @@ def my_operation(data: int) -> int:
 
 
 client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/integer_increment")
-client.run_each_op(my_operation, strategy=Strategy.Random)
+client.run_each_op(my_operation, strategy=Strategy.Random())

@@ -13,7 +13,7 @@ def run_a_consumer(id: int) -> None:
         return data + 1
 
     client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/multi/")
-    client.run_each_op(my_operation, strategy=Strategy.Random)
+    client.run_each_op(my_operation, strategy=Strategy.Random())
 
 
 def main() -> None:
