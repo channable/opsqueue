@@ -1,7 +1,8 @@
 pub mod common;
-#[cfg(feature = "server-logic")]
-pub mod reserver;
 pub mod strategy;
+
+#[cfg(feature = "server-logic")]
+pub mod dispatcher;
 
 #[cfg(feature = "server-logic")]
 pub mod server;

@@ -165,6 +165,7 @@ impl Chunk {
 pub mod db {
     use super::*;
     use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
+    use crate::common::StrategicMetadataMap;
     use axum_prometheus::metrics::{counter, gauge};
     use sqlx::{query, Executor, QueryBuilder, Sqlite, SqliteExecutor};
     use sqlx::{query_as, SqliteConnection};
@@ -224,6 +225,33 @@ pub mod db {
         .execute(conn)
         .await?;
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    pub async fn insert_chunk_metadata(
+        chunk: Chunk,
+        metadata_key: &[u8],
+        metadata_value: &[u8],
+        conn: impl SqliteExecutor<'_>,
+    ) -> sqlx::Result<()> {
+        query!(
+            "
+            INSERT INTO chunks_metadata
+            ( submission_id
+            , chunk_index
+            , metadata_key
+            , metadata_value
+            )
+            VALUES (?, ?, ?, ?)
+            ",
+            chunk.submission_id,
+            chunk.chunk_index,
+            metadata_key,
+            metadata_value,
+        )
+        .execute(conn)
+        .await?;
         Ok(())
     }
 
@@ -333,6 +361,7 @@ pub mod db {
                     )
                     .fetch_one(&mut **tx)
                     .await?;
+                    tracing::trace!("Retries: {}", fields.retries);
                     if fields.retries >= MAX_RETRIES {
                         crate::common::submission::db::fail_submission_notx(
                             submission_id,
@@ -458,20 +487,45 @@ pub mod db {
         .await
     }
 
+    /// Retrieves the earlier stored strategic metadata.
+    ///
+    /// Primarily for testing and introspection.
+    ///
+    /// Be aware that the strategic metadata for individual chunks
+    /// is cleaned up once the chunk is marked as completed or failed.
+    /// (At that time it is still available on the submission level).
+    pub async fn get_chunk_strategic_metadata(
+        full_chunk_id: ChunkId,
+        conn: impl SqliteExecutor<'_>,
+    ) -> Result<StrategicMetadataMap, DatabaseError> {
+        use futures::{future, TryStreamExt};
+        let metadata = query!(
+            r#"
+        SELECT metadata_key, metadata_value FROM chunks_metadata
+        WHERE submission_id = ? AND chunk_index = ?
+        "#,
+            full_chunk_id.submission_id,
+            full_chunk_id.chunk_index,
+        )
+        .fetch(conn)
+        .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
+        .try_collect()
+        .await?;
+        Ok(metadata)
+    }
+
     #[tracing::instrument(skip(chunks, conn))]
-    pub async fn insert_many_chunks<Tx, Conn, Iter>(chunks: Iter, mut conn: Tx) -> sqlx::Result<()>
+    pub async fn insert_many_chunks<Tx, Conn>(chunks: &[Chunk], mut conn: Tx) -> sqlx::Result<()>
     where
         for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
         Tx: Deref<Target = Conn> + DerefMut,
-        Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
-        <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
     {
-        let chunks_per_query = 1000;
+        const ROWS_PER_QUERY: usize = 1000;
 
         // let start = std::time::Instant::now();
-        let mut iter = chunks.into_iter().peekable();
+        let mut iter = chunks.iter().peekable();
         while iter.peek().is_some() {
-            let query_chunks = iter.by_ref().take(chunks_per_query);
+            let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
 
             let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
                 "INSERT INTO chunks (submission_id, chunk_index, input_content) ",
@@ -486,6 +540,44 @@ pub mod db {
             query.execute(conn.deref_mut()).await?;
         }
 
+        Ok(())
+    }
+
+    pub async fn insert_many_chunks_metadata<Tx, Conn>(
+        chunks: &[Chunk],
+        metadata: &StrategicMetadataMap,
+        mut conn: Tx,
+    ) -> sqlx::Result<()>
+    where
+        for<'a> &'a mut Conn: Executor<'a, Database = Sqlite>,
+        Tx: Deref<Target = Conn> + DerefMut,
+    {
+        use itertools::Itertools;
+        const ROWS_PER_QUERY: usize = 1000;
+
+        let mut iter = chunks.iter().cartesian_product(metadata).peekable();
+        while iter.peek().is_some() {
+            let query_rows = iter.by_ref().take(ROWS_PER_QUERY);
+
+            let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "
+            INSERT INTO chunks_metadata
+            ( submission_id
+            , chunk_index
+            , metadata_key
+            , metadata_value
+            )
+            ",
+            );
+            query_builder.push_values(query_rows, |mut b, (chunk, metadata)| {
+                b.push_bind(chunk.submission_id)
+                    .push_bind(chunk.chunk_index)
+                    .push_bind(metadata.0)
+                    .push_bind(metadata.1);
+            });
+            let query = query_builder.build();
+            query.execute(conn.deref_mut()).await?;
+        }
         Ok(())
     }
 
@@ -604,7 +696,9 @@ pub mod test {
             .await
             .expect("Insert chunk failed");
 
-        insert_submission_raw(submission, &mut *conn).await.unwrap();
+        insert_submission_raw(&submission, &mut *conn)
+            .await
+            .unwrap();
 
         conn.transaction(|tx| {
             Box::pin(async move {
@@ -631,6 +725,7 @@ pub mod test {
             None,
             vec![Some("first".into())],
             None,
+            Default::default(),
             &mut conn,
         )
         .await

@@ -9,13 +9,13 @@ import opentelemetry.baggage
 import opentelemetry.util.types
 
 from . import opsqueue_internal
-from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
+from .opsqueue_internal import Chunk, Strategy, PreferDistinct, SubmissionId  # type: ignore[import-not-found]
 from . import tracing
 from . import common
 
-DEFAULT_STRATEGY = Strategy.Newest
+DEFAULT_STRATEGY = Strategy.Random()
 
-__all__ = ["ConsumerClient", "Strategy", "Chunk", "SubmissionId"]
+__all__ = ["ConsumerClient", "Strategy", "PreferDistinct", "Chunk", "SubmissionId"]
 
 
 class ConsumerClient:

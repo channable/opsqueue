@@ -1,4 +1,5 @@
 use crate::common::NonZero;
+use crate::common::StrategicMetadataMap;
 
 use crate::common::{chunk, submission::Metadata};
 
@@ -6,6 +7,7 @@ use crate::common::{chunk, submission::Metadata};
 pub struct InsertSubmission {
     pub chunk_contents: ChunkContents,
     pub metadata: Option<Metadata>,
+    pub strategic_metadata: StrategicMetadataMap,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

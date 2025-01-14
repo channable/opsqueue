@@ -404,6 +404,7 @@ mod tests {
             None,
             input_chunks.clone(),
             None,
+            Default::default(),
             &mut conn,
         )
         .await

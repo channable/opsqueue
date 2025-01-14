@@ -94,12 +94,12 @@ def is_port_in_use(port: int) -> bool:
 def background_process(
     function: Callable[..., None],
     args: Iterable[Any] = (),
-) -> Generator[None, None, None]:
+) -> Generator[multiprocessing.Process, None, None]:
     proc = multiprocessing.Process(target=function, args=args)
     try:
         proc.daemon = True
         proc.start()
-        yield
+        yield proc
     finally:
         proc.terminate()
 
@@ -117,7 +117,7 @@ def multiple_background_processes(
 @pytest.fixture(
     scope="function",
     ids=lambda s: f"Strategy.{s}",
-    params=[Strategy.Random, Strategy.Newest, Strategy.Oldest],
+    params=[Strategy.Random(), Strategy.Newest(), Strategy.Oldest()],
 )
 def basic_consumer_strategy(request: pytest.FixtureRequest) -> Strategy:
     yield request.param

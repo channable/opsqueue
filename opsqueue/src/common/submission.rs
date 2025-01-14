@@ -187,7 +187,10 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
-    use crate::common::errors::{DatabaseError, SubmissionNotFound, E};
+    use crate::{
+        common::errors::{DatabaseError, SubmissionNotFound, E},
+        common::StrategicMetadataMap,
+    };
     #[cfg(feature = "server-logic")]
     use sqlx::{query, query_as, Connection, Executor, Sqlite, SqliteConnection, SqliteExecutor};
 
@@ -234,10 +237,9 @@ pub mod db {
         }
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument]
     pub async fn insert_submission_raw(
-        submission: Submission,
+        submission: &Submission,
         conn: impl Executor<'_, Database = Sqlite>,
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
@@ -258,26 +260,56 @@ pub mod db {
         Ok(())
     }
 
+    pub async fn insert_submission_metadata_raw(
+        submission: &Submission,
+        strategic_metadata: &StrategicMetadataMap,
+        conn: &mut SqliteConnection,
+    ) -> Result<(), DatabaseError> {
+        for (key, value) in strategic_metadata {
+            sqlx::query!(
+                "
+                INSERT INTO submissions_metadata
+                ( submission_id
+                , metadata_key
+                , metadata_value
+                )
+                VALUES (?, ?, ?)
+                ",
+                submission.id,
+                key,
+                value,
+            )
+            .execute(&mut *conn)
+            .await?;
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(chunks))]
-    pub async fn insert_submission<Iter>(
+    pub async fn insert_submission<'a>(
         submission: Submission,
-        chunks: Iter,
-        conn: &mut SqliteConnection,
-    ) -> Result<(), DatabaseError>
-    where
-        Iter: IntoIterator<Item = Chunk> + Send + Sync + 'static,
-        <Iter as IntoIterator>::IntoIter: Send + Sync + 'static,
-    {
+        chunks: Vec<Chunk>,
+        strategic_metadata: StrategicMetadataMap,
+        conn: &'a mut SqliteConnection,
+    ) -> Result<(), DatabaseError> {
         use axum_prometheus::metrics::{counter, gauge};
         let chunks_total = submission.chunks_total.into();
         tracing::debug!("Inserting submission {}", submission.id);
 
         let res = conn
-            .transaction(|tx| {
+            .transaction(move |tx| {
                 Box::pin(async move {
-                    insert_submission_raw(submission, &mut **tx).await?;
-                    super::chunk::db::insert_many_chunks(chunks, &mut **tx).await?;
+                    insert_submission_raw(&submission, &mut **tx).await?;
+                    insert_submission_metadata_raw(&submission, &strategic_metadata, tx).await?;
+                    super::chunk::db::insert_many_chunks(&chunks, &mut **tx).await?;
+                    super::chunk::db::insert_many_chunks_metadata(
+                        &chunks,
+                        &strategic_metadata,
+                        &mut **tx,
+                    )
+                    .await?;
                     Ok(())
                 })
             })
@@ -295,6 +327,7 @@ pub mod db {
         prefix: Option<String>,
         chunks_contents: Vec<chunk::Content>,
         metadata: Option<Metadata>,
+        strategic_metadata: StrategicMetadataMap,
         conn: &mut SqliteConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = Submission::generate_id();
@@ -314,8 +347,9 @@ pub mod db {
             .map(move |(chunk_index, uri)| {
                 // NOTE: Since `len` fits in a u64, these indexes by definition must too!
                 Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
-            });
-        insert_submission(submission, iter, conn).await?;
+            })
+            .collect();
+        insert_submission(submission, iter, strategic_metadata, conn).await?;
         Ok(submission_id)
     }
 
@@ -338,9 +372,34 @@ pub mod db {
             "#,
             id
         )
-        .fetch_one(conn)
+        .fetch_optional(conn)
         .await?;
-        Ok(submission)
+        match submission {
+            None => Err(E::R(SubmissionNotFound(id))),
+            Some(submission) => Ok(submission),
+        }
+    }
+
+    /// Retrieves the earlier stored strategic metadata.
+    ///
+    /// Primarily for testing and introspection.
+    pub async fn get_submission_strategic_metadata(
+        id: SubmissionId,
+        conn: impl SqliteExecutor<'_>,
+    ) -> Result<StrategicMetadataMap, DatabaseError> {
+        use futures::{future, TryStreamExt};
+        let metadata = query!(
+            r#"
+        SELECT metadata_key, metadata_value FROM submissions_metadata
+        WHERE submission_id = ?
+        "#,
+            id,
+        )
+        .fetch(conn)
+        .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
+        .try_collect()
+        .await?;
+        Ok(metadata)
     }
 
     #[tracing::instrument]
@@ -602,10 +661,10 @@ pub mod db {
         Ok(count.count as usize)
     }
 
-    /// Transactionally removes all completed/failed submissions (and all their chunks) older than a given timestamp from the database.
+    /// Transactionally removes all completed/failed submissions,
+    /// including all their chunks and associated strategic metadata.
     ///
     /// Submissions/chunks that are neither failed nor completed are not touched.
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument]
     pub async fn cleanup_old(
         conn: &mut SqliteConnection,
@@ -613,6 +672,27 @@ pub mod db {
     ) -> sqlx::Result<()> {
         conn.transaction(|tx| {
             Box::pin(async move {
+                // Clean up old submissions_metadata
+                query!(
+                    "DELETE FROM submissions_metadata
+                    WHERE submission_id = (
+                        SELECT id FROM submissions_completed WHERE completed_at < julianday(?)
+                    );",
+                    older_than
+                )
+                .execute(&mut **tx)
+                .await?;
+                query!(
+                    "DELETE FROM submissions_metadata
+                    WHERE submission_id = (
+                        SELECT id FROM submissions_failed WHERE failed_at < julianday(?)
+                    );",
+                    older_than
+                )
+                .execute(&mut **tx)
+                .await?;
+
+                // Clean up old submissions:
                 query!(
                     "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
                     older_than
@@ -626,6 +706,7 @@ pub mod db {
                 .execute(&mut **tx)
                 .await?;
 
+                // Clean up old chunks
                 query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
                     older_than
@@ -651,6 +732,8 @@ pub mod test {
 
     use chrono::Utc;
 
+    use crate::common::StrategicMetadataMap;
+
     use super::db::*;
     use super::*;
 
@@ -665,7 +748,7 @@ pub mod test {
             None,
         )
         .unwrap();
-        insert_submission(submission, chunks, &mut conn)
+        insert_submission(submission, chunks, Default::default(), &mut conn)
             .await
             .expect("insertion failed");
 
@@ -680,12 +763,54 @@ pub mod test {
             None,
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+        insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
             .await
             .expect("insertion failed");
 
         let fetched_submission = get_submission(submission.id, &mut *conn).await.unwrap();
         assert!(fetched_submission == submission);
+    }
+
+    #[sqlx::test]
+    pub async fn test_submission_strategic_metadata(db: sqlx::SqlitePool) {
+        let strategic_metadata: StrategicMetadataMap =
+            [("company_id".to_string(), 123), ("flavour".to_string(), 42)]
+                .into_iter()
+                .collect();
+        let mut conn = db.acquire().await.unwrap();
+        let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
+
+        let submission_id = insert_submission_from_chunks(
+            None,
+            chunks,
+            None,
+            strategic_metadata.clone(),
+            &mut conn,
+        )
+        .await
+        .expect("insertion failed");
+
+        let fetched_metadata = get_submission_strategic_metadata(submission_id, &mut *conn)
+            .await
+            .unwrap();
+        assert!(fetched_metadata == strategic_metadata);
+
+        let res = sqlx::query!("SELECT * FROM chunks_metadata;")
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap();
+        dbg!(res);
+
+        let chunk_id = (submission_id, ChunkIndex::zero()).into();
+        let chunk_fetched_metadata = chunk::db::get_chunk_strategic_metadata(chunk_id, &mut *conn)
+            .await
+            .unwrap();
+
+        dbg!(&strategic_metadata);
+        dbg!(&fetched_metadata);
+        dbg!(&chunk_fetched_metadata);
+
+        assert!(chunk_fetched_metadata == strategic_metadata);
     }
 
     #[sqlx::test]
@@ -696,7 +821,7 @@ pub mod test {
             None,
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+        insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
             .await
             .expect("insertion failed");
 
@@ -716,7 +841,7 @@ pub mod test {
             None,
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+        insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
             .await
             .expect("insertion failed");
         let mut conn = db.acquire().await.unwrap();
@@ -739,20 +864,42 @@ pub mod test {
         let mut conn = db.acquire().await.unwrap();
 
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-            .await
-            .unwrap();
-        let old_two = insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-            .await
-            .unwrap();
-        let old_three =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-                .await
-                .unwrap();
-        let old_four_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-                .await
-                .unwrap();
+        let old_one = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_two = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_three = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let old_four_unfailed = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
         fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
             .await
@@ -771,18 +918,33 @@ pub mod test {
 
         let cutoff_timestamp = Utc::now();
 
-        let too_new_one =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-                .await
-                .unwrap();
-        let _too_new_two_unfailed =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-                .await
-                .unwrap();
-        let too_new_three =
-            insert_submission_from_chunks(None, chunks_contents.clone(), None, &mut conn)
-                .await
-                .unwrap();
+        let too_new_one = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let _too_new_two_unfailed = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let too_new_three = insert_submission_from_chunks(
+            None,
+            chunks_contents.clone(),
+            None,
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
 
         fail_submission(
             too_new_one,
