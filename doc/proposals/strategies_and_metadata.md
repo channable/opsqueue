@@ -29,12 +29,12 @@ enum Strategy {
     CustomPriority,
     /// If there are more than `max` chunks whose submission has the same value for `meta_field`,
     /// prefer picking up other submissions. (But if there aren't any other, still pick up chunks from these)
-    /// 
+    ///
     /// This is 'soft' rate-limiting
     PreferDistinct(meta_field: String, max: PosInt, underlying: Strategy),
     /// If there are more than `max` chunks whose submission has the same value for `meta_field`,
     /// pretend they don't exist.
-    /// 
+    ///
     /// This is 'hard' rate-limiting
     MaxSimultaneous(meta_field: String, max: PosInt, underlying: Strategy),
     /// Try the first strategy, but if it gives no results, try the fallback strategy.
@@ -67,7 +67,7 @@ Most of these are straightforward, but to make sure everyone is on the same page
 Much of the current design of Opsqueue, and indeed also the new ideas proposed in this document depend on these assumptions. Especially the last point is important to emphasize. Opsqueue keeps a persistent connection for each connected consumer, and a little bit of data ('what chunks did this consumer register') in ephemeral memory. And specifically the `reserve_chunks` operation has a short critical section to ensure chunk reserevations are unique. As such, If someone wants or needs to scale to more than a 10_000 consumers, we should first ask:
 - Is your chunk size already optimal? It is quite likely that when making the chunk size larger or smaller, they can make better usage of a smaller pool of consumers.
 - If not, can you split your queue into separate unrelated operation-types?
-- If not, then you might have reached the scale at which you should shard[^1] the queue. 
+- If not, then you might have reached the scale at which you should shard[^1] the queue.
 
 
 [^1]: Split the queue into two or more queues. With this you lose a 'full picture' of the system but you regain more scalability. There is a path forward to support sharded queues gracefully; this is for instance one of the three reasons Submission IDs are snowflake IDs (knowing which of the shards a submission ID belongs to). But that is not the topic of this document.
@@ -96,7 +96,7 @@ These two calls never block a consumer however; from the perspective of the cons
 It also is the place where multiple consumers might race/contest: We need to make sure that we don't give the same chunk to two customers at the same time.
 `reserve_chunks` is implemented by a _read only_  query (that does not block any other readers or writers in SQLite) which returns a stream of results
 (i.e. evaluated lazily one by one by SQLite). Then in Rust we have a concurrent hashmap that keeps track of all open reservations.
-This concurrent hashmap we call the '**reserver**'. It is essentially our alternative to `SELECT FOR ... SKIP LOCKED` in Postgres, except that we keep the results reserved until 
+This concurrent hashmap we call the '**reserver**'. It is essentially our alternative to `SELECT FOR ... SKIP LOCKED` in Postgres, except that we keep the results reserved until
 a call to `complete_chunk`/`retry_or_fail_chunk` rather than only until the query returns.
 By keeping this hasmap only in memory and not persisting it to disk, we can just forget it during shutdown and start with a clean slate of 'no reservations' on startup, which is the behaviour that we want.
 
@@ -114,7 +114,7 @@ Because of how this is implemented, we want the queries that are generated from 
 
 These are the simplest strategies to implement.
 Since submissions and chunks are stored using the `submission_id`, which is a Snowflake ID containing the insertion timestamp, as primary key,
-these translate to simply using an 
+these translate to simply using an
 
 ```sql
 SELECT submission_id, chunk_index FROM chunks ORDER BY submission_id {ASC | DESC}
@@ -141,7 +141,7 @@ We encountered a similar situation (the old random selection being O(n), and imp
 
 Doing this kind of 'hashing at insertion' is trivial to accomplish, and since SQLite supports 'expression indexes' we only need to store this extra data _once_, keeping the extra overhead reasonably low.
 
-SQLite doesn't come with hashing functions itself, but we can either use a super-simple hashing function like the 16-bit [Fibonacci hash](https://en.wikipedia.org/wiki/Hash_function#Fibonacci_hashing)[^3], 
+SQLite doesn't come with hashing functions itself, but we can either use a super-simple hashing function like the 16-bit [Fibonacci hash](https://en.wikipedia.org/wiki/Hash_function#Fibonacci_hashing)[^3],
 or cop out to Rust using SQLite's `create_function` functionality.
 
 [^3]: A 16-bit hash is chosen to ensure that we'll never overflow the 63-bit unsigned range. Unfortunately SQLite doesn't come with 'wrapping multiplication' and on overflow ints are turned into floats. But for our purposes a 16-bit hash, i.e. uniformly distributing into `[0..65536)` is good enough (and also means less storage usage for the index!). Note that _not_ using `create_function` means that we can support external tooling easier since functions have to be added _when establishing a connection_.
@@ -171,7 +171,7 @@ This ensures:
 Using the `Random` strategy is, besides promoting fairness, currently the most performant strategy for Opsqueue.
 Therefore I think we should make it the default.
 
-### The Metadata-based strategies: 
+### The Metadata-based strategies:
 
 The more complex building blocks are based on metadata that is added at submission-insertion time.
 
@@ -308,7 +308,7 @@ It also is possible to just _not_ create such a new join table / index for `Sele
 
 ##### Per-key tables
 
-One more optimization we could theoretically do, is instead of having a single `strategic_metadata` table, create a key-specific table _per key value_. 
+One more optimization we could theoretically do, is instead of having a single `strategic_metadata` table, create a key-specific table _per key value_.
 This should be possible because the set of distinct keys that will be used inside one instance of opsqueue will be small.
 
 Doing that would allow the SQLite query planner to make the best choicess w.r.t. what join order to use. That might make some difference in cases where someone wants to construct very complex strategies with multiple `SelectOnly`'s.
