@@ -25,8 +25,9 @@ There are four main components:
 
 * The Rust library ('crate') 'opsqueue', found in `./opsqueue/src`. This contains the parts of opsqueue that are shared between the different compilation targets. The majority of the code lives here.
 * The binary executable program `opsqueue`, found in `./opsqueue/app/`.
-* The producer libraries found in `./opsqueue_producer`. These contain thin FFI wrappers around the Opsqueue crate
-* The consumer libraries found in `./opsqueue_consumer`. These contain thin FFI wrappers around the opsqueue crate
+* The client libraries found in `./libs`. These are thin FFI wrappers around the Opsqueue crate. Each of these libraries contains a:
+  * Producer Client (used to generate and send work to Opsqueue, and optionally receive results)
+  * Consuumer Client (used to execute chunks of work that was sent to Opsqueue)
 
 ## Building, running, testing
 
