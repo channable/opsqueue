@@ -31,7 +31,7 @@ pub const CONSUMERS_CONNECTED_GAUGE: &str = "consumers_connected_count";
 pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str =
     "consumer_fetch_and_reserve_chunks_duration_seconds";
 pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
-pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
+pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_fail_chunk_duration_seconds";
 
 pub fn describe_metrics() {
     describe_counter!(SUBMISSIONS_TOTAL_COUNTER, Unit::Count, "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system");
