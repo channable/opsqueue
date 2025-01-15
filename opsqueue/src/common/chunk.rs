@@ -371,8 +371,6 @@ pub mod db {
                         )
                         .await?;
 
-                        counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
-                        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
                         Ok::<_, sqlx::Error>(true)
                     } else {
                         counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
