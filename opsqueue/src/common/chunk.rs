@@ -376,7 +376,8 @@ pub mod db {
                         Ok::<_, sqlx::Error>(true)
                     } else {
                         counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
-                        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
+                        // When retrying, the chunk re-enters ('stays') in the backlog,
+                        // so we *don't* decrement the backlog gauge here.
                         Ok::<_, sqlx::Error>(false)
                     }
                 })
