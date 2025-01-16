@@ -12,6 +12,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "asyncio",
     # Default serialization format:
     "cbor2",
     # Tracing:
