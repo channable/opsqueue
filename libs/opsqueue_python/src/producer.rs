@@ -220,6 +220,61 @@ impl ProducerClient {
         })
     }
 
+//     #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, otel_trace_carrier=CarrierMap::default()))]
+//     pub fn async_insert_submission_chunks(&self, chunk_contents: Bound<'_, PyAny>,
+//         metadata: Option<submission::Metadata>,
+//         strategic_metadata: Option<StrategicMetadataMap>,
+//         otel_trace_carrier: CarrierMap,
+
+// ) -> PyResult<Bound<'_, PyAny>> {
+//         let prefix= uuid::Uuid::new_v4().to_string();
+
+//         let _tokio_active_runtime_guard = self.runtime.enter();
+//         let chunk_contents = pyo3_async_runtimes::tokio::into_stream_v2(chunk_contents)?;
+//         let stream = chunk_contents.map(|item| Python::with_gil(|py| item.extract(py))).map_err(Into::into);
+
+//         Python::with_gil(|py| {
+//         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+//             let chunk_count = self.object_store_client.store_chunks(&prefix, ChunkType::Input, stream).await.unwrap();
+
+//             // match res {
+//             //     Ok(chunk_count) => 
+//             //     {
+//                 let chunk_count =
+//                     NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).unwrap();// .map_err(|e| R(L(e))).unwrap();
+//                 log::debug!("Finished uploading to object store. {prefix} contains {} chunks", u64::from(*chunk_count.inner()));
+
+//                     let submission = opsqueue::producer::common::InsertSubmission {
+//                         chunk_contents: ChunkContents::SeeObjectStorage {
+//                             prefix: prefix.clone(),
+//                             count: chunk_count,
+//                         },
+//                         metadata,
+//                         strategic_metadata: strategic_metadata.unwrap_or_default(),
+//                     };
+
+//                     let res2: Result<SubmissionId, _> = self.producer_client
+//                         .insert_submission(&submission, &otel_trace_carrier)
+//                         .await
+//                         .map(|submission_id| {
+//                             log::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
+//                             submission_id.into()
+//                         });
+
+//                     match res2 {
+//                         Err(e) => todo!(),
+//                         Ok(submission_id) => {
+//                             Python::with_gil(|py| {
+//                                 Ok(submission_id.into_py(py))
+//                             })
+//                         }
+//                     }
+//             //    }
+//             //     Err(e) => todo!(),
+//             // }
+//         })})
+//     }
+
     #[allow(clippy::type_complexity)]
     pub fn try_stream_completed_submission_chunks(
         &self,
@@ -321,20 +376,13 @@ impl ProducerClient {
     }
 
     pub fn async_stream_completed_submission_chunks<'p>(&self, py: Python<'p>, submission_id: SubmissionId) -> PyResult<Bound<'p, PyAny>> {
-        log::warn!("Hello");
         let me = self.clone();
-        log::warn!("2");
         let _tokio_active_runtime_guard = me.runtime.enter();
-        log::warn!("3");
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        log::warn!("4");
             match me.stream_completed_submission_chunks(submission_id).await {
                 Ok(iter) => {
-                    log::warn!("5");
                     let async_iter = PyChunksAsyncIter::from(iter);
-                    log::warn!("6");
                     Python::with_gil(|py| {
-                        log::warn!("7");
                         Ok(async_iter.into_py(py))
                     })
                 },
@@ -372,10 +420,8 @@ impl ProducerClient {
             InternalProducerClientError
         ],
     > {
-        log::warn!("100");
         let mut interval = Duration::from_millis(10);
         loop {
-            log::warn!("101");
             if let Some(py_stream) = self
                 .maybe_stream_completed_submission(submission_id)
                 .await
@@ -402,7 +448,6 @@ impl ProducerClient {
         Option<PyChunksIter>,
         E![crate::errors::SubmissionFailed, InternalProducerClientError],
     > {
-        log::warn!("Aaa");
         match self
             .producer_client
             .get_submission(id.into())
@@ -410,7 +455,6 @@ impl ProducerClient {
             .map_err(R)?
         {
             Some(submission::SubmissionStatus::Completed(submission)) => {
-                log::warn!("Bbbb");
                 log::debug!(
                     "Submission {} completed! Streaming result-chunks from object store",
                     id.id
@@ -422,7 +466,6 @@ impl ProducerClient {
                 Ok(Some(py_chunks_iter))
             }
             Some(submission::SubmissionStatus::Failed(submission, chunk)) => {
-                log::warn!("Ccc");
                 let chunk_failed = crate::common::ChunkFailed::from_internal(chunk, &submission);
                 let submission_failed = submission.into();
                 Err(CError(L(crate::errors::SubmissionFailed(
@@ -431,7 +474,6 @@ impl ProducerClient {
                 ))))
             }
             _ => {
-                log::warn!("Ddd");
                 Ok(None)
             },
         }

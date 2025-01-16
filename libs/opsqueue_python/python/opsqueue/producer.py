@@ -329,7 +329,6 @@ async def _async_unchunk_iterator(
     encoded_chunks_iter: AsyncIterator[bytes], serialization_format: SerializationFormat
 ) -> AsyncIterator[Any]:
     async for chunk in encoded_chunks_iter:
-        print(f"Decoding chunk: {chunk}")
         ops = decode_chunk(chunk, serialization_format)
         for op in ops:
             yield op
