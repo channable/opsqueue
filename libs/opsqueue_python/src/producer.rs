@@ -1,6 +1,11 @@
 use std::{future::IntoFuture, sync::Arc, time::Duration};
 
-use pyo3::{create_exception, exceptions::{PyException, PyStopAsyncIteration}, prelude::*, types::PyIterator};
+use pyo3::{
+    create_exception,
+    exceptions::{PyException, PyStopAsyncIteration},
+    prelude::*,
+    types::PyIterator,
+};
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
@@ -220,61 +225,6 @@ impl ProducerClient {
         })
     }
 
-//     #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, otel_trace_carrier=CarrierMap::default()))]
-//     pub fn async_insert_submission_chunks(&self, chunk_contents: Bound<'_, PyAny>,
-//         metadata: Option<submission::Metadata>,
-//         strategic_metadata: Option<StrategicMetadataMap>,
-//         otel_trace_carrier: CarrierMap,
-
-// ) -> PyResult<Bound<'_, PyAny>> {
-//         let prefix= uuid::Uuid::new_v4().to_string();
-
-//         let _tokio_active_runtime_guard = self.runtime.enter();
-//         let chunk_contents = pyo3_async_runtimes::tokio::into_stream_v2(chunk_contents)?;
-//         let stream = chunk_contents.map(|item| Python::with_gil(|py| item.extract(py))).map_err(Into::into);
-
-//         Python::with_gil(|py| {
-//         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-//             let chunk_count = self.object_store_client.store_chunks(&prefix, ChunkType::Input, stream).await.unwrap();
-
-//             // match res {
-//             //     Ok(chunk_count) => 
-//             //     {
-//                 let chunk_count =
-//                     NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).unwrap();// .map_err(|e| R(L(e))).unwrap();
-//                 log::debug!("Finished uploading to object store. {prefix} contains {} chunks", u64::from(*chunk_count.inner()));
-
-//                     let submission = opsqueue::producer::common::InsertSubmission {
-//                         chunk_contents: ChunkContents::SeeObjectStorage {
-//                             prefix: prefix.clone(),
-//                             count: chunk_count,
-//                         },
-//                         metadata,
-//                         strategic_metadata: strategic_metadata.unwrap_or_default(),
-//                     };
-
-//                     let res2: Result<SubmissionId, _> = self.producer_client
-//                         .insert_submission(&submission, &otel_trace_carrier)
-//                         .await
-//                         .map(|submission_id| {
-//                             log::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
-//                             submission_id.into()
-//                         });
-
-//                     match res2 {
-//                         Err(e) => todo!(),
-//                         Ok(submission_id) => {
-//                             Python::with_gil(|py| {
-//                                 Ok(submission_id.into_py(py))
-//                             })
-//                         }
-//                     }
-//             //    }
-//             //     Err(e) => todo!(),
-//             // }
-//         })})
-//     }
-
     #[allow(clippy::type_complexity)]
     pub fn try_stream_completed_submission_chunks(
         &self,
@@ -375,18 +325,20 @@ impl ProducerClient {
         })
     }
 
-    pub fn async_stream_completed_submission_chunks<'p>(&self, py: Python<'p>, submission_id: SubmissionId) -> PyResult<Bound<'p, PyAny>> {
+    pub fn async_stream_completed_submission_chunks<'p>(
+        &self,
+        py: Python<'p>,
+        submission_id: SubmissionId,
+    ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
         let _tokio_active_runtime_guard = me.runtime.enter();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             match me.stream_completed_submission_chunks(submission_id).await {
                 Ok(iter) => {
                     let async_iter = PyChunksAsyncIter::from(iter);
-                    Python::with_gil(|py| {
-                        Ok(async_iter.into_py(py))
-                    })
-                },
-                Err(_e) => todo!(),
+                    Python::with_gil(|py| Ok(async_iter.into_py(py)))
+                }
+                Err(e) => PyResult::Err(e.into()),
             }
         })
     }
@@ -473,9 +425,7 @@ impl ProducerClient {
                     chunk_failed,
                 ))))
             }
-            _ => {
-                Ok(None)
-            },
+            _ => Ok(None),
         }
     }
 }
@@ -517,22 +467,6 @@ impl PyChunksIter {
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
-
-    // fn __anext__<'p>(mut slf: Py<Self>, py: Python<'p>) -> PyResult<Bound<'p, PyAny>> {
-    //     let me = &mut slf;
-    //     pyo3_async_runtimes::tokio::local_future_into_py(py, async move {
-    //         let stream = Python::with_gil(|py| {me.bind(py).deref().stream});
-    //         let stream = &mut me.stream;
-    //         let next = stream.next().await.map(|r| r.map(VecAsPyBytes));
-    //         Python::with_gil(|py| {
-    //             match next {
-    //                 None => Ok(None),
-    //                 Some(Ok(val)) => Ok(Some(val.into_py(py))),
-    //                 Some(Err(e)) => todo!(),
-    //             }
-    //         })
-    //     })
-    // }
 }
 
 #[pyclass]
@@ -561,12 +495,10 @@ impl PyChunksAsyncIter {
         let stream = slf.stream.clone();
         pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
             let res = stream.lock().await.next().await;
-            Python::with_gil(|py| {
-                match res {
-                    None => Err(PyStopAsyncIteration::new_err(())),
-                    Some(Ok(val)) => Ok(Some(VecAsPyBytes(val).into_py(py))),
-                    Some(Err(e)) => todo!(),
-                }
+            Python::with_gil(|py| match res {
+                None => Err(PyStopAsyncIteration::new_err(())),
+                Some(Ok(val)) => Ok(Some(VecAsPyBytes(val).into_py(py))),
+                Some(Err(e)) => Err(e.into()),
             })
         })
     }

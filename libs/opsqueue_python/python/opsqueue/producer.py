@@ -191,14 +191,16 @@ class ProducerClient:
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
     async def async_run_submission_chunks(
-            self, 
-           chunk_contents: Iterable[bytes],
-             *, 
-             metadata: None | bytes = None, 
-             strategic_metadata: None | dict[str, str | int] = None,
+        self,
+        chunk_contents: Iterable[bytes],
+        *,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
     ) -> AsyncIterator[bytes]:
         # TODO: the insertion is not async yet.
-        submission_id = self.insert_submission_chunks(chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata)
+        submission_id = self.insert_submission_chunks(
+            chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata
+        )
 
         return await self.async_stream_completed_submission_chunks(submission_id)
 
@@ -239,7 +241,9 @@ class ProducerClient:
         """
         return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
-    async def async_stream_completed_submission_chunks(self, submission_id: SubmissionId) -> AsyncIterator[bytes]:
+    async def async_stream_completed_submission_chunks(
+        self, submission_id: SubmissionId
+    ) -> AsyncIterator[bytes]:
         return await self.inner.async_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
     def try_stream_completed_submission_chunks(
@@ -325,6 +329,7 @@ def _unchunk_iterator(
         for op in ops:
             yield op
 
+
 async def _async_unchunk_iterator(
     encoded_chunks_iter: AsyncIterator[bytes], serialization_format: SerializationFormat
 ) -> AsyncIterator[Any]:
@@ -332,6 +337,7 @@ async def _async_unchunk_iterator(
         ops = decode_chunk(chunk, serialization_format)
         for op in ops:
             yield op
+
 
 class ChunkSizeIsZeroError(Exception):
     def __str__(self) -> str:

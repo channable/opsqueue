@@ -5,10 +5,12 @@ from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
-client = ProducerClient("localhost:3999", "gs://channable-opsqueue-experimentation/integer_increment")
+client = ProducerClient(
+    "localhost:3999", "gs://channable-opsqueue-experimentation/integer_increment"
+)
 
-async def main(top=1_000):
 
+async def main(top: int = 1_000) -> int:
     input_iter = range(0, top)
     output_iter = await client.async_run_submission(input_iter, chunk_size=1000)
     logging.info(f"Submission for {top} done!")
@@ -20,7 +22,8 @@ async def main(top=1_000):
     logging.info(f"Finished summing {top}: {res}")
     return res
 
-async def multi_main():
+
+async def multi_main() -> None:
     res = await asyncio.gather(
         main(100),
         main(1000),
