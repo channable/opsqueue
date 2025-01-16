@@ -1,5 +1,5 @@
 use clap::Parser;
-use opsqueue::config::Config;
+use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config};
 use std::{
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
@@ -49,6 +49,9 @@ pub async fn async_main() {
             &app_healthy_flag,
             prometheus_config,
         ));
+
+        let max_age = Duration::from_secs(60 * 60);
+        scope.spawn(periodically_cleanup_old(&db_pool.write_pool, max_age));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
         scope.spawn(opsqueue::server::app_watchdog(

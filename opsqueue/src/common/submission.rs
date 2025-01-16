@@ -665,11 +665,12 @@ pub mod db {
     /// including all their chunks and associated strategic metadata.
     ///
     /// Submissions/chunks that are neither failed nor completed are not touched.
-    #[tracing::instrument]
+    #[tracing::instrument(skip(conn))]
     pub async fn cleanup_old(
         conn: &mut SqliteConnection,
         older_than: DateTime<Utc>,
     ) -> sqlx::Result<()> {
+        tracing::info!("Cleaning up old completed/failed submissions...");
         conn.transaction(|tx| {
             Box::pin(async move {
                 // Clean up old submissions_metadata
@@ -693,36 +694,55 @@ pub mod db {
                 .await?;
 
                 // Clean up old submissions:
-                query!(
+                let n_submissions_completed = query!(
                     "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
                     older_than
                 )
                 .execute(&mut **tx)
-                .await?;
-                query!(
+                .await?.rows_affected();
+                let n_submissions_failed = query!(
                     "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
                     older_than
                 )
                 .execute(&mut **tx)
-                .await?;
+                .await?.rows_affected();
 
-                // Clean up old chunks
-                query!(
+                let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
                     older_than
                 )
                 .execute(&mut **tx)
-                .await?;
-                query!(
+                .await?.rows_affected();
+                let n_chunks_failed = query!(
                     "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
                     older_than
                 )
                 .execute(&mut **tx)
-                .await?;
+                .await?.rows_affected();
+
+                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks)");
+                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks)");
                 Ok(())
             })
         })
         .await
+    }
+
+    pub async fn periodically_cleanup_old(db: &sqlx::SqlitePool, max_age: Duration) {
+        const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+        loop {
+            let cutoff = Utc::now() - max_age;
+            let res: sqlx::Result<()> = async move {
+                let mut conn = db.acquire().await?;
+                cleanup_old(&mut conn, cutoff).await?;
+                Ok(())
+            }
+            .await;
+            if let Err(e) = res {
+                tracing::error!("Error during periodic cleanup: {}", e);
+            }
+            tokio::time::sleep(PERIODIC_CLEANUP_INTERVAL).await;
+        }
     }
 }
 
@@ -915,6 +935,10 @@ pub mod test {
         )
         .await
         .unwrap();
+
+        // Ensure the clock is advanced ever so slightly.
+        // Not doing this makes the test flaky.
+        tokio::time::sleep(Duration::from_millis(1)).await;
 
         let cutoff_timestamp = Utc::now();
 

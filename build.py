@@ -153,7 +153,7 @@ def cli_test_unit(test_arguments: tuple[str]) -> None:
 
     Extra arguments (after `--`) are forwarded to `cargo test`.
     """
-    subprocess.run(("cargo", "test", "--all-features", "--") + test_arguments)
+    subprocess.run(("cargo", "nextest", "run", "--all-features", "--") + test_arguments)
 
 
 @cli_test.command("integration")
