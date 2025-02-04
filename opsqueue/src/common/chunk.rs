@@ -217,7 +217,7 @@ pub mod db {
         conn: impl Executor<'_, Database = Sqlite>,
     ) -> sqlx::Result<()> {
         query!(
-            "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES (?, ?, ?)",
+            "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES ($1, $2, $3)",
             chunk.submission_id,
             chunk.chunk_index,
             chunk.input_content
@@ -243,7 +243,7 @@ pub mod db {
             , metadata_key
             , metadata_value
             )
-            VALUES (?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4)
             ",
             chunk.submission_id,
             chunk.chunk_index,
@@ -298,10 +298,10 @@ pub mod db {
 
         INSERT INTO chunks_completed
         (submission_id, chunk_index, output_content, completed_at)
-        SELECT submission_id, chunk_index, ?, julianday(?) FROM chunks
-        WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
+        SELECT submission_id, chunk_index, $1, julianday($2) FROM chunks
+        WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;
 
-        DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?
+        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6
         RETURNING submission_id, chunk_index;
         ;
         ",
@@ -327,7 +327,7 @@ pub mod db {
         // )
         query!(
             "
-        UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = ?;
+        UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1;
         ",
             chunk_id.submission_id,
         )
@@ -353,7 +353,7 @@ pub mod db {
                     let fields = query!(
                         "
         UPDATE chunks SET retries = retries + 1
-        WHERE submission_id = ? AND chunk_index = ?
+        WHERE submission_id = $1 AND chunk_index = $2
         RETURNING retries;
         ",
                         submission_id,
@@ -400,9 +400,9 @@ pub mod db {
 
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, failed_at)
-    SELECT submission_id, chunk_index, input_content, ?, julianday(?) FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ?;
+    SELECT submission_id, chunk_index, input_content, $1, julianday($2) FROM chunks WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;
 
-    DELETE FROM chunks WHERE chunks.submission_id = ? AND chunks.chunk_index = ? RETURNING *;
+    DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6 RETURNING *;
 
     RELEASE SAVEPOINT move_chunk_to_failed_chunks;
     ",
@@ -432,7 +432,7 @@ pub mod db {
             , chunk_index AS "chunk_index: ChunkIndex"
             , input_content
             , retries
-        FROM chunks WHERE submission_id =? AND chunk_index =?
+        FROM chunks WHERE submission_id = $1 AND chunk_index = $2
         "#,
             full_chunk_id.submission_id,
             full_chunk_id.chunk_index
@@ -454,7 +454,7 @@ pub mod db {
             , chunk_index AS "chunk_index: ChunkIndex"
             , output_content
             , completed_at AS "completed_at: DateTime<Utc>"
-        FROM chunks_completed WHERE submission_id = ? AND chunk_index = ?
+        FROM chunks_completed WHERE submission_id = $1 AND chunk_index = $2
         "#,
             full_chunk_id.submission_id,
             full_chunk_id.chunk_index
@@ -477,7 +477,7 @@ pub mod db {
             , input_content
             , failure AS "failure: String"
             , failed_at AS "failed_at: DateTime<Utc>"
-        FROM chunks_failed WHERE submission_id = ? AND chunk_index = ?
+        FROM chunks_failed WHERE submission_id = $1 AND chunk_index = $2
         "#,
             full_chunk_id.submission_id,
             full_chunk_id.chunk_index
@@ -501,7 +501,7 @@ pub mod db {
         let metadata = query!(
             r#"
         SELECT metadata_key, metadata_value FROM chunks_metadata
-        WHERE submission_id = ? AND chunk_index = ?
+        WHERE submission_id = $1 AND chunk_index = $2
         "#,
             full_chunk_id.submission_id,
             full_chunk_id.chunk_index,
@@ -592,9 +592,9 @@ pub mod db {
 
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, skipped, failed_at)
-    SELECT submission_id, chunk_index, input_content, '', 1, julianday(?) FROM chunks WHERE chunks.submission_id = ?;
+    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks WHERE chunks.submission_id = $2;
 
-    DELETE FROM chunks WHERE chunks.submission_id = ?;
+    DELETE FROM chunks WHERE chunks.submission_id = $3;
 
     RELEASE SAVEPOINT skip_remaining_chunks;
     ",

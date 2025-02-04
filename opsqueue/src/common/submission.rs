@@ -273,7 +273,7 @@ pub mod db {
                 , metadata_key
                 , metadata_value
                 )
-                VALUES (?, ?, ?)
+                VALUES ($1, $2, $3)
                 ",
                 submission.id,
                 key,
@@ -368,7 +368,7 @@ pub mod db {
             , chunks_done AS "chunks_done: ChunkCount"
             , metadata
             , otel_trace_carrier
-            FROM submissions WHERE id = ?
+            FROM submissions WHERE id = $1
             "#,
             id
         )
@@ -391,7 +391,7 @@ pub mod db {
         let metadata = query!(
             r#"
         SELECT metadata_key, metadata_value FROM submissions_metadata
-        WHERE submission_id = ?
+        WHERE submission_id = $1
         "#,
             id,
         )
@@ -409,11 +409,11 @@ pub mod db {
     ) -> Result<Option<SubmissionId>, DatabaseError> {
         let row = query!(
             r#"
-            SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = ?
+            SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = ?
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $2
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = ?
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $3
             "#,
             prefix,
             prefix,
@@ -443,7 +443,7 @@ pub mod db {
             , chunks_done AS "chunks_done: ChunkCount"
             , metadata
             , otel_trace_carrier
-        FROM submissions WHERE id = ?
+        FROM submissions WHERE id = $1
         "#,
             id
         )
@@ -463,7 +463,7 @@ pub mod db {
             , metadata
             , completed_at AS "completed_at: DateTime<Utc>"
             , otel_trace_carrier
-        FROM submissions_completed WHERE id = ?
+        FROM submissions_completed WHERE id = $1
         "#,
             id
         )
@@ -484,7 +484,7 @@ pub mod db {
             , failed_at AS "failed_at: DateTime<Utc>"
             , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
             , otel_trace_carrier
-        FROM submissions_failed WHERE id = ?
+        FROM submissions_failed WHERE id = $1
         "#,
             id
         )
@@ -541,9 +541,9 @@ pub mod db {
 
     INSERT INTO submissions_completed
     (id, chunks_total, prefix, metadata, completed_at)
-    SELECT id, chunks_total, prefix, metadata, julianday(?) FROM submissions WHERE id = ?;
+    SELECT id, chunks_total, prefix, metadata, julianday($1) FROM submissions WHERE id = $2;
 
-    DELETE FROM submissions WHERE id = ? RETURNING *;
+    DELETE FROM submissions WHERE id = $3 RETURNING *;
 
     RELEASE SAVEPOINT complete_submission_raw;
     ",
@@ -578,9 +578,9 @@ pub mod db {
             "
     INSERT INTO submissions_failed
     (id, chunks_total, prefix, metadata, failed_at, failed_chunk_id)
-    SELECT id, chunks_total, prefix, metadata, julianday(?), ? FROM submissions WHERE id = ?;
+    SELECT id, chunks_total, prefix, metadata, julianday($1), $2 FROM submissions WHERE id = $3;
 
-    DELETE FROM submissions WHERE id = ? RETURNING *;
+    DELETE FROM submissions WHERE id = $4 RETURNING *;
     ",
             now,
             failed_chunk_id,
@@ -677,7 +677,7 @@ pub mod db {
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id = (
-                        SELECT id FROM submissions_completed WHERE completed_at < julianday(?)
+                        SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
                     );",
                     older_than
                 )
@@ -686,7 +686,7 @@ pub mod db {
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id = (
-                        SELECT id FROM submissions_failed WHERE failed_at < julianday(?)
+                        SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
                     );",
                     older_than
                 )
@@ -695,26 +695,26 @@ pub mod db {
 
                 // Clean up old submissions:
                 let n_submissions_completed = query!(
-                    "DELETE FROM submissions_completed WHERE completed_at < julianday(?);",
+                    "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
                 .execute(&mut **tx)
                 .await?.rows_affected();
                 let n_submissions_failed = query!(
-                    "DELETE FROM submissions_failed WHERE failed_at < julianday(?);",
+                    "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
                 .execute(&mut **tx)
                 .await?.rows_affected();
 
                 let n_chunks_completed = query!(
-                    "DELETE FROM chunks_completed WHERE completed_at < julianday(?);",
+                    "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
                 .execute(&mut **tx)
                 .await?.rows_affected();
                 let n_chunks_failed = query!(
-                    "DELETE FROM chunks_failed WHERE failed_at < julianday(?);",
+                    "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
                 .execute(&mut **tx)
