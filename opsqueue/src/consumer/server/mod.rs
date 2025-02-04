@@ -27,13 +27,13 @@ pub async fn serve_for_tests(
     reservation_expiration: Duration,
 ) {
     let notify_on_insert = Arc::new(Notify::new());
-    let config: Arc<Config> = Arc::new(Default::default());
+    let config = Box::leak(Box::default());
     let state = ServerState::new(
         pool,
         notify_on_insert,
         cancellation_token.clone(),
         reservation_expiration,
-        &config,
+        config,
     );
     let router = ServerState::build_router(state);
     let app = Router::new().nest("/consumer", router);
@@ -56,7 +56,7 @@ pub struct ServerState {
     completer_tx: tokio::sync::mpsc::Sender<CompleterMessage>,
     notify_on_insert: Arc<Notify>,
     cancellation_token: CancellationToken,
-    config: Arc<Config>,
+    config: &'static Config,
 }
 
 impl ServerState {
@@ -65,7 +65,7 @@ impl ServerState {
         notify_on_insert: Arc<Notify>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
-        config: &Arc<Config>,
+        config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
         let (completer, completer_tx) = Completer::new(&pool.write_pool, &dispatcher);
@@ -76,7 +76,7 @@ impl ServerState {
             notify_on_insert,
             cancellation_token,
             dispatcher,
-            config: config.clone(),
+            config,
         }
     }
 

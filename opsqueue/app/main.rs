@@ -21,7 +21,7 @@ pub async fn async_main() {
 
     tracing::info!("Finished setting up tracing subscriber");
 
-    let config = Arc::new(Config::parse());
+    let config = Box::leak(Box::new(Config::parse()));
 
     let server_addr = Box::from(format!("0.0.0.0:{}", config.port));
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
@@ -41,7 +41,7 @@ pub async fn async_main() {
 
     moro_local::async_scope!(|scope| {
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
-            &config,
+            config,
             &server_addr,
             &db_pool,
             config.reservation_expiration.into(),

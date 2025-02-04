@@ -23,7 +23,7 @@ fn retry_policy() -> impl BackoffBuilder {
 
 #[cfg(feature = "server-logic")]
 pub async fn serve_producer_and_consumer(
-    config: &Arc<crate::config::Config>,
+    config: &'static crate::config::Config,
     server_addr: &str,
     pool: &DBPools,
     reservation_expiration: Duration,
@@ -56,7 +56,7 @@ pub async fn serve_producer_and_consumer(
 
 #[cfg(feature = "server-logic")]
 pub fn build_router(
-    config: &Arc<crate::config::Config>,
+    config: &'static crate::config::Config,
     pool: DBPools,
     reservation_expiration: Duration,
     cancellation_token: CancellationToken,
