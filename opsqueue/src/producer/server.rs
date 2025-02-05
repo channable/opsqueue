@@ -112,7 +112,7 @@ async fn insert_submission(
     let (prefix, chunk_contents) = match request.chunk_contents {
         ChunkContents::Direct { contents } => (None, contents),
         ChunkContents::SeeObjectStorage { prefix, count } => {
-            let count = u64::from(count.into_inner());
+            let count = u64::from(count);
             (Some(prefix), (0..count).map(|_index| None).collect())
         }
     };
