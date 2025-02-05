@@ -416,7 +416,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
         let res = Python::with_gil(|py| {
             if let Err(err) = py.check_signals() {
                 // A signal was triggered
-                Some(err)
+                return Some(err);
             } else if let Some(err) = PyErr::take(py) {
                 // A non-signal Python exception was thrown
                 return Some(err);
@@ -425,7 +425,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
             }
         });
         if let Some(res) = res {
-            return res.into();
+            return res.into()
         }
     }
 }
