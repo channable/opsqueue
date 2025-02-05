@@ -750,6 +750,7 @@ pub mod db {
 #[cfg(feature = "server-logic")]
 pub mod test {
 
+    use assert_matches::*;
     use chrono::Utc;
 
     use crate::common::StrategicMetadataMap;
@@ -772,7 +773,7 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        assert!(count_submissions(&db).await.unwrap() == 1);
+        assert_matches!(count_submissions(&db).await, Ok(1));
     }
 
     #[sqlx::test]
@@ -788,7 +789,7 @@ pub mod test {
             .expect("insertion failed");
 
         let fetched_submission = get_submission(submission.id, &mut *conn).await.unwrap();
-        assert!(fetched_submission == submission);
+        assert_eq!(fetched_submission, submission);
     }
 
     #[sqlx::test]
@@ -830,7 +831,7 @@ pub mod test {
         dbg!(&fetched_metadata);
         dbg!(&chunk_fetched_metadata);
 
-        assert!(chunk_fetched_metadata == strategic_metadata);
+        assert_eq!(chunk_fetched_metadata, strategic_metadata);
     }
 
     #[sqlx::test]
@@ -848,9 +849,9 @@ pub mod test {
         complete_submission_raw(submission.id, &mut *conn)
             .await
             .unwrap();
-        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 1);
-        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 0);
+        assert_matches!(count_submissions(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut *conn).await, Ok(1));
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(0));
     }
 
     #[sqlx::test]
@@ -874,9 +875,9 @@ pub mod test {
         )
         .await
         .unwrap();
-        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 1);
+        assert_matches!(count_submissions(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(1));
     }
 
     #[sqlx::test]
@@ -987,12 +988,12 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 5);
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(5));
 
         let mut conn2 = db.acquire().await.unwrap();
         cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
-        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(2));
 
         let _sub1 = submission_status(old_four_unfailed, &mut conn).await;
         let _sub2 = submission_status(old_four_unfailed, &mut conn).await;
