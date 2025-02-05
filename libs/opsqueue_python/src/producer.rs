@@ -21,7 +21,7 @@ use opsqueue::{
 use ux_serde::u63;
 
 use crate::{
-    common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus, VecAsPyBytes},
+    common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus},
     errors::{self, CError, CPyResult, FatalPythonException},
 };
 
@@ -395,7 +395,7 @@ impl ProducerClient {
 
 #[pyclass]
 pub struct PyChunksIter {
-    stream: BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>,
+    stream: tokio::sync::Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -408,7 +408,7 @@ impl PyChunksIter {
             .map_err(CError)
             .boxed();
         Self {
-            stream,
+            stream: tokio::sync::Mutex::new(stream),
             runtime: client.runtime.clone(),
         }
     }
@@ -422,10 +422,10 @@ impl PyChunksIter {
 
     fn __next__(
         mut slf: PyRefMut<'_, Self>,
-    ) -> Option<CPyResult<VecAsPyBytes, ChunkRetrievalError>> {
+    ) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
         let me = &mut *slf;
         let runtime = &mut me.runtime;
         let stream = &mut me.stream;
-        runtime.block_on(async { stream.next().await.map(|r| r.map(VecAsPyBytes)) })
+        runtime.block_on(async { stream.lock().await.next().await })
     }
 }

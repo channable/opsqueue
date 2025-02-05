@@ -29,11 +29,11 @@ fn opsqueue_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Exception classes
     m.add(
         "ConsumerClientError",
-        m.py().get_type_bound::<consumer::ConsumerClientError>(),
+        m.py().get_type::<consumer::ConsumerClientError>(),
     )?;
     m.add(
         "ProducerClientError",
-        m.py().get_type_bound::<producer::ProducerClientError>(),
+        m.py().get_type::<producer::ProducerClientError>(),
     )?;
 
     // Top-level functions

@@ -178,7 +178,7 @@ impl From<Strategy> for strategy::Strategy {
 pub struct Chunk {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
-    pub input_content: VecAsPyBytes,
+    pub input_content: Vec<u8>,
     pub retries: i64,
     pub submission_prefix: Option<String>,
     pub submission_metadata: Option<Metadata>,
@@ -207,7 +207,7 @@ impl Chunk {
         Ok(Chunk {
             submission_id: c.submission_id.into(),
             chunk_index: c.chunk_index.into(),
-            input_content: VecAsPyBytes(content),
+            input_content: content,
             retries: c.retries,
             submission_prefix: prefix,
             submission_metadata: s.metadata,
@@ -396,21 +396,6 @@ pub struct SubmissionFailed {
     pub metadata: Option<submission::Metadata>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VecAsPyBytes(pub Vec<u8>);
-
-impl IntoPy<PyObject> for VecAsPyBytes {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        self.0.as_slice().into_py(py)
-    }
-}
-
-impl From<Vec<u8>> for VecAsPyBytes {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
 }
 
 pub async fn run_unless_interrupted<T, E>(
