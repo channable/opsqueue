@@ -9,8 +9,5 @@ def my_operation(data: int) -> int:
     return data + 1
 
 
-# client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/integer_increment")
-client = ConsumerClient(
-    "localhost:3999", "gs://channable-opsqueue-experimentation/integer_increment"
-)
+client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/integer_increment")
 client.run_each_op(my_operation, strategy=Strategy.Random())

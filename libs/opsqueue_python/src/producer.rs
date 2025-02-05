@@ -381,7 +381,7 @@ impl ProducerClient {
             {
                 return Ok(py_stream);
             }
-            log::warn!(
+            log::info!(
                 "Submission {} not completed yet. Sleeping for {interval:?}...",
                 submission_id.id
             );
