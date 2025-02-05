@@ -420,9 +420,7 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(
-        mut slf: PyRefMut<'_, Self>,
-    ) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
         let me = &mut *slf;
         let runtime = &mut me.runtime;
         let stream = &mut me.stream;

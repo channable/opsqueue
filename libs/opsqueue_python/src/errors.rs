@@ -8,8 +8,7 @@ use opsqueue::common::errors::{
 };
 use opsqueue::common::NonZeroIsZero;
 use pyo3::exceptions::{PyBaseException, PyException};
-use pyo3::{import_exception, Bound, PyAny, PyErr, Python};
-use pyo3::{IntoPy, PyObject, IntoPyObjectExt};
+use pyo3::{import_exception, Bound, PyErr, Python};
 
 use crate::common::{ChunkIndex, SubmissionId};
 
@@ -226,9 +225,9 @@ impl From<CError<PyErr>> for PyErr {
     }
 }
 
-impl<'py, T> pyo3::IntoPyObject<'py> for CError<T> 
+impl<'py, T> pyo3::IntoPyObject<'py> for CError<T>
 where
-    CError<T>: Into<PyErr>
+    CError<T>: Into<PyErr>,
 {
     type Target = PyBaseException;
     type Output = Bound<'py, Self::Target>;

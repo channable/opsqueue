@@ -413,8 +413,19 @@ where
 pub async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
-        if let Err(err) = Python::with_gil(|py| py.check_signals()) {
-            return err.into();
+        let res = Python::with_gil(|py| {
+            if let Err(err) = py.check_signals() {
+                // A signal was triggered
+                Some(err)
+            } else if let Some(err) = PyErr::take(py) {
+                // A non-signal Python exception was thrown
+                return Some(err);
+            } else {
+                return None;
+            }
+        });
+        if let Some(res) = res {
+            return res.into();
         }
     }
 }
@@ -437,7 +448,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 pub fn format_pyerr(err: &PyErr) -> String {
     Python::with_gil(|py| {
         let msg: Option<String> = (|| {
-            let traceback = err.traceback_bound(py)?;
+            let traceback = err.traceback(py)?;
             let traceback_str = traceback
                 .format()
                 .expect("Tracebacks are always formattable");

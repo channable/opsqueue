@@ -15,7 +15,11 @@ use opsqueue::{
     },
     E,
 };
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use pyo3::{
+    create_exception,
+    exceptions::{PyException, PySystemError},
+    prelude::*,
+};
 
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
 use opsqueue::consumer::strategy;
