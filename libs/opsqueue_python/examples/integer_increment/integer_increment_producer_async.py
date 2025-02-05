@@ -6,7 +6,7 @@ from opsqueue.producer import ProducerClient
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
 client = ProducerClient(
-    "localhost:3999", "gs://channable-opsqueue-experimentation/integer_increment"
+    "localhost:3999", "file:///tmp/opsqueue/integer_increment"
 )
 
 

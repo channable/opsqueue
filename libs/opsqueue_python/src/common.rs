@@ -430,8 +430,15 @@ pub async fn check_signals_in_background() -> FatalPythonException {
     }
 }
 
+/// Sets up a Tokio runtime to use for a client.
+/// 
+/// Rather than the current-thread scheduler,
+/// we use a (single extra!) background thread,
+/// allowing us to keep (GIL-less) tasks alive in the background
+/// even when returning back to Python
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime in opsqueue client");
