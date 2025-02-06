@@ -5,9 +5,7 @@ from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
-client = ProducerClient(
-    "localhost:3999", "file:///tmp/opsqueue/integer_increment"
-)
+client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/integer_increment")
 
 
 async def main(top: int = 1_000) -> int:

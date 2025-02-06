@@ -431,7 +431,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 }
 
 /// Sets up a Tokio runtime to use for a client.
-/// 
+///
 /// Rather than the current-thread scheduler,
 /// we use a (single extra!) background thread,
 /// allowing us to keep (GIL-less) tasks alive in the background

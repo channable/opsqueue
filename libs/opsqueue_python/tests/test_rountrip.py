@@ -154,6 +154,7 @@ def test_many_consumers(
 
         assert res == sum(range(1, 1001))
 
+
 def test_async_producer(opsqueue: OpsqueueProcess) -> None:
     import asyncio
 
@@ -171,10 +172,12 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
         f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_async_producer"
     )
 
-    async def run_one_submission(top: int) -> None:
+    async def run_one_submission(top: int) -> int:
         logging.debug(f"Running submission {top}")
         input_iter = range(0, top)
-        output_iter = await producer_client.async_run_submission(input_iter, chunk_size=1000)
+        output_iter = await producer_client.async_run_submission(
+            input_iter, chunk_size=1000
+        )
         logging.debug(f"Submission for {top} done!")
 
         res = 0
@@ -187,7 +190,6 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
     async def run_many_submissions() -> None:
         res = await asyncio.gather(*[run_one_submission(top) for top in range(1, 10)])
         assert res == [1, 3, 6, 10, 15, 21, 28, 36, 45]
-
 
     with background_process(run_consumer) as _consumer:
         asyncio.run(run_many_submissions())
