@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use tracing::{info, warn};
 use ux_serde::u63;
 
 use super::chunk::{self, Chunk, ChunkFailed};
@@ -118,13 +119,6 @@ pub struct SubmissionFailed {
     pub failed_chunk_id: ChunkIndex,
     pub otel_trace_carrier: String,
 }
-
-// #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-// pub enum SubmissionStatusTag {
-//     InProgress,
-//     Completed,
-//     Failed,
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
@@ -288,7 +282,7 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(chunks))]
-    pub async fn insert_submission<'a>(
+    pub(crate) async fn insert_submission<'a>(
         submission: Submission,
         chunks: Vec<Chunk>,
         strategic_metadata: StrategicMetadataMap,
@@ -321,6 +315,9 @@ pub mod db {
         res
     }
 
+    /// Creates a new submission with the given chunks and inserts it into the database.
+    ///
+    /// If the number of chunks is 0, the submission is marked as completed immediately afterwards.
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(metadata, chunks_contents, conn))]
     pub async fn insert_submission_from_chunks(
@@ -350,6 +347,21 @@ pub mod db {
             })
             .collect();
         insert_submission(submission, iter, strategic_metadata, conn).await?;
+        // Empty submissions get special handling: we mark them as completed right away.
+        // See https://github.com/channable/opsqueue/issues/86 for rationale.
+        if len == 0 {
+            match maybe_complete_submission(submission_id, conn).await {
+                // Forward our database errors to the caller.
+                Err(E::L(e)) => return Err(e),
+                // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
+                Err(E::R(_)) => warn!(%submission_id, "Presumed zero-length submission not found"),
+                // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
+                // Our future selves might thank us.
+                Ok(true) => info!(%submission_id, "Zero-length submission marked as completed"),
+                // This should never happen. If it does, better log it.
+                Ok(false) => warn!(%submission_id, "Zero-length submission wasn't zero-length?!"),
+            }
+        }
         Ok(submission_id)
     }
 
@@ -507,7 +519,8 @@ pub mod db {
     #[tracing::instrument]
     /// Completes the submission, iff all chunks have been completed.
     ///
-    /// Do not call directly! MUST be called inside a transaction.
+    /// Returns `true` if all chunks were completed and the submission was marked as completed.
+    /// Otherwise, it returns `false`.
     pub async fn maybe_complete_submission(
         id: SubmissionId,
         conn: &mut SqliteConnection,
@@ -529,8 +542,8 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument]
-    /// TODO: Should only do the actual work iff chunks_done === chunks_total.
-    pub async fn complete_submission_raw(
+    /// Do not call directly! MUST be called inside a transaction.
+    pub(super) async fn complete_submission_raw(
         id: SubmissionId,
         conn: impl SqliteExecutor<'_>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
@@ -567,7 +580,7 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument]
-    pub async fn fail_submission_raw(
+    pub(super) async fn fail_submission_raw(
         id: SubmissionId,
         failed_chunk_id: ChunkIndex,
         conn: impl SqliteExecutor<'_>,
@@ -750,6 +763,7 @@ pub mod db {
 #[cfg(feature = "server-logic")]
 pub mod test {
 
+    use assert_matches::*;
     use chrono::Utc;
 
     use crate::common::StrategicMetadataMap;
@@ -772,7 +786,7 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        assert!(count_submissions(&db).await.unwrap() == 1);
+        assert_matches!(count_submissions(&db).await, Ok(1));
     }
 
     #[sqlx::test]
@@ -788,7 +802,7 @@ pub mod test {
             .expect("insertion failed");
 
         let fetched_submission = get_submission(submission.id, &mut *conn).await.unwrap();
-        assert!(fetched_submission == submission);
+        assert_eq!(fetched_submission, submission);
     }
 
     #[sqlx::test]
@@ -830,7 +844,7 @@ pub mod test {
         dbg!(&fetched_metadata);
         dbg!(&chunk_fetched_metadata);
 
-        assert!(chunk_fetched_metadata == strategic_metadata);
+        assert_eq!(chunk_fetched_metadata, strategic_metadata);
     }
 
     #[sqlx::test]
@@ -848,9 +862,9 @@ pub mod test {
         complete_submission_raw(submission.id, &mut *conn)
             .await
             .unwrap();
-        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 1);
-        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 0);
+        assert_matches!(count_submissions(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut *conn).await, Ok(1));
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(0));
     }
 
     #[sqlx::test]
@@ -874,9 +888,9 @@ pub mod test {
         )
         .await
         .unwrap();
-        assert!(count_submissions(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_completed(&mut *conn).await.unwrap() == 0);
-        assert!(count_submissions_failed(&mut *conn).await.unwrap() == 1);
+        assert_matches!(count_submissions(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(1));
     }
 
     #[sqlx::test]
@@ -987,14 +1001,37 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 5);
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(5));
 
         let mut conn2 = db.acquire().await.unwrap();
         cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
-        assert_eq!(count_submissions_failed(&mut *conn).await.unwrap(), 2);
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(2));
 
         let _sub1 = submission_status(old_four_unfailed, &mut conn).await;
         let _sub2 = submission_status(old_four_unfailed, &mut conn).await;
+    }
+
+    #[sqlx::test]
+    /// Test whether empty submissions are marked as completed right away by `insert_submission_from_chunks`.
+    pub async fn auto_complete_empty_submission(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        insert_submission_from_chunks(
+            // prefix
+            None,
+            // chunks
+            vec![],
+            // metadata
+            None,
+            // strategic_metadata
+            Default::default(),
+            &mut conn,
+        )
+        .await
+        .expect("insertion failed");
+
+        assert_matches!(count_submissions(&mut *conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut *conn).await, Ok(1));
+        assert_matches!(count_submissions_failed(&mut *conn).await, Ok(0));
     }
 }

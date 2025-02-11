@@ -13,7 +13,7 @@ use opsqueue::{
 use opsqueue::{
     common::{
         errors::E::{self, L, R},
-        NonZero, NonZeroIsZero,
+        NonZeroIsZero,
     },
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
@@ -183,6 +183,7 @@ impl ProducerClient {
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
         py.allow_threads(|| {
+            // TODO: maybe switch to sortable UUIDv7s?
             let prefix = uuid::Uuid::new_v4().to_string();
             log::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = Python::with_gil(|py| {
@@ -196,9 +197,8 @@ impl ProducerClient {
                         .map_err(|e| CError(R(R(L(e)))))
                 })
             })?;
-            let chunk_count =
-                NonZero::try_from(chunk::ChunkIndex::from(chunk_count)).map_err(|e| R(L(e)))?;
-            log::debug!("Finished uploading to object store. {prefix} contains {} chunks", u64::from(*chunk_count.inner()));
+            let chunk_count = chunk::ChunkIndex::from(chunk_count);
+            log::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {

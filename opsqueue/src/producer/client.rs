@@ -156,8 +156,6 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use ux_serde::u63;
-
     use crate::{
         common::submission::{self, SubmissionStatus},
         db::DBPools,
@@ -280,8 +278,8 @@ mod tests {
                 );
             }
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, u63::new(0).into());
-                assert_eq!(submission.chunks_total, u63::new(3).into());
+                assert_eq!(submission.chunks_done, 0);
+                assert_eq!(submission.chunks_total, 3);
                 assert_eq!(submission.id, submission_id);
             }
         }

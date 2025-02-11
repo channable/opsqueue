@@ -47,6 +47,12 @@ impl MayBeZero for ChunkIndex {
     }
 }
 
+impl PartialEq<u64> for ChunkIndex {
+    fn eq(&self, other: &u64) -> bool {
+        u64::from(*self) == *other
+    }
+}
+
 impl std::fmt::Display for ChunkIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -747,7 +753,7 @@ pub mod test {
                 .unwrap();
         match submission_status {
             SubmissionStatus::InProgress(submission) => {
-                assert_eq!(submission.chunks_done, u63::new(1).into());
+                assert_eq!(submission.chunks_done, 1);
             }
             _ => panic!("Expected InProgress"),
         }

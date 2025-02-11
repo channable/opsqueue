@@ -1,4 +1,3 @@
-use crate::common::NonZero;
 use crate::common::StrategicMetadataMap;
 
 use crate::common::{chunk, submission::Metadata};
@@ -18,7 +17,7 @@ pub enum ChunkContents {
     /// This is what you should use in production.
     SeeObjectStorage {
         prefix: String,
-        count: NonZero<chunk::ChunkIndex>,
+        count: chunk::ChunkIndex,
     },
     /// Directly pass the contents of each chunk in Opsqueue itself.
     ///
