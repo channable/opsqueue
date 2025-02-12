@@ -183,8 +183,7 @@ impl ProducerClient {
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
         py.allow_threads(|| {
-            // TODO: maybe switch to sortable UUIDv7s?
-            let prefix = uuid::Uuid::new_v4().to_string();
+            let prefix = uuid::Uuid::now_v7().to_string();
             log::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = Python::with_gil(|py| {
                 self.block_unless_interrupted(async {

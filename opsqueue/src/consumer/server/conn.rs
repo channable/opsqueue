@@ -62,7 +62,7 @@ impl ConsumerConn {
         let notify_on_insert = server_state.notify_on_insert.clone();
 
         Self {
-            id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::now_v7(),
             consumer_state,
             ws_stream,
             notify_on_insert,

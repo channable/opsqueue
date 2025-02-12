@@ -15,7 +15,7 @@ opsqueue = {path = "../../opsqueue/", default-features = false, features = ["cli
 
 # General-purpose datatypes:
 uuid = {version = "1.11.0", features = [
-        "v4",                # Fully random UUIDs
+        "v7",                # Temporally orderable UUIDs with random component
         "fast-rng",          # Use a faster (but still sufficiently random) RNG
     ]}
 chrono = { version = "0.4.38"}
