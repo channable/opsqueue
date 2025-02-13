@@ -7,9 +7,8 @@ use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use opsqueue::common::NonZeroIsZero;
-use pyo3::exceptions::PyException;
-use pyo3::{import_exception, PyErr};
-use pyo3::{IntoPy, PyObject};
+use pyo3::exceptions::{PyBaseException, PyException};
+use pyo3::{import_exception, Bound, PyErr, Python};
 
 use crate::common::{ChunkIndex, SubmissionId};
 
@@ -226,11 +225,15 @@ impl From<CError<PyErr>> for PyErr {
     }
 }
 
-impl<T> IntoPy<PyObject> for CError<T>
+impl<'py, T> pyo3::IntoPyObject<'py> for CError<T>
 where
     CError<T>: Into<PyErr>,
 {
-    fn into_py(self, py: pyo3::Python<'_>) -> PyObject {
-        CError(self.0).into().into_py(py)
+    type Target = PyBaseException;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok(CError(self.0).into().value(py).clone())
     }
 }

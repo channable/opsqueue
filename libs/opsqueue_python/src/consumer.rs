@@ -15,7 +15,11 @@ use opsqueue::{
     },
     E,
 };
-use pyo3::{create_exception, exceptions::PyException, prelude::*};
+use pyo3::{
+    create_exception,
+    exceptions::{PyException, PySystemError},
+    prelude::*,
+};
 
 use opsqueue::consumer::client::OuterClient as ActualConsumerClient;
 use opsqueue::consumer::strategy;
@@ -179,11 +183,21 @@ impl ConsumerClient {
 
                                 )?;
                                 log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
+
                                 // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
-                                // otherwise, continue with next chunk
                                 if !Python::with_gil(|py| {failure.is_instance_of::<PyException>(py)}) {
                                     return Err(failure.into())
                                 }
+
+                                // Exit also on SystemError
+                                // as this might be thrown when someone tries to Ctrl-C
+                                // while some native code (ex: OpenTelemetry integration)
+                                // is executing.
+                                if Python::with_gil(|py| {failure.is_instance_of::<PySystemError>(py)}) {
+                                    return Err(failure.into())
+                                }
+
+                                // otherwise, continue with next chunk
                             }
                         }
 

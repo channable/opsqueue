@@ -178,7 +178,7 @@ impl From<Strategy> for strategy::Strategy {
 pub struct Chunk {
     pub submission_id: SubmissionId,
     pub chunk_index: ChunkIndex,
-    pub input_content: VecAsPyBytes,
+    pub input_content: Vec<u8>,
     pub retries: i64,
     pub submission_prefix: Option<String>,
     pub submission_metadata: Option<Metadata>,
@@ -207,7 +207,7 @@ impl Chunk {
         Ok(Chunk {
             submission_id: c.submission_id.into(),
             chunk_index: c.chunk_index.into(),
-            input_content: VecAsPyBytes(content),
+            input_content: content,
             retries: c.retries,
             submission_prefix: prefix,
             submission_metadata: s.metadata,
@@ -398,21 +398,6 @@ pub struct SubmissionFailed {
     pub failed_chunk_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VecAsPyBytes(pub Vec<u8>);
-
-impl IntoPy<PyObject> for VecAsPyBytes {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        self.0.as_slice().into_py(py)
-    }
-}
-
-impl From<Vec<u8>> for VecAsPyBytes {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
 pub async fn run_unless_interrupted<T, E>(
     future: impl IntoFuture<Output = Result<T, E>>,
 ) -> Result<T, E>
@@ -428,8 +413,19 @@ where
 pub async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
-        if let Err(err) = Python::with_gil(|py| py.check_signals()) {
-            return err.into();
+        let res = Python::with_gil(|py| {
+            if let Err(err) = py.check_signals() {
+                // A signal was triggered
+                Some(err)
+            } else if let Some(err) = PyErr::take(py) {
+                // A non-signal Python exception was thrown
+                return Some(err);
+            } else {
+                return None;
+            }
+        });
+        if let Some(res) = res {
+            return res.into();
         }
     }
 }
@@ -452,7 +448,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 pub fn format_pyerr(err: &PyErr) -> String {
     Python::with_gil(|py| {
         let msg: Option<String> = (|| {
-            let traceback = err.traceback_bound(py)?;
+            let traceback = err.traceback(py)?;
             let traceback_str = traceback
                 .format()
                 .expect("Tracebacks are always formattable");
