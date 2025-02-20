@@ -336,7 +336,7 @@ impl ProducerClient {
             match me.stream_completed_submission_chunks(submission_id).await {
                 Ok(iter) => {
                     let async_iter = PyChunksAsyncIter::from(iter);
-                    Python::with_gil(|py| Ok(async_iter.into_py(py)))
+                    Ok(async_iter)
                 }
                 Err(e) => PyResult::Err(e.into()),
             }
@@ -430,9 +430,11 @@ impl ProducerClient {
     }
 }
 
+pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>;
+
 #[pyclass]
 pub struct PyChunksIter {
-    stream: tokio::sync::Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>,
+    stream: tokio::sync::Mutex<ChunksStream>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -471,7 +473,7 @@ impl PyChunksIter {
 
 #[pyclass]
 pub struct PyChunksAsyncIter {
-    stream: Arc<tokio::sync::Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>>,
+    stream: Arc<tokio::sync::Mutex<ChunksStream>>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -495,11 +497,11 @@ impl PyChunksAsyncIter {
         let stream = slf.stream.clone();
         pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
             let res = stream.lock().await.next().await;
-            Python::with_gil(|py| match res {
+            match res {
                 None => Err(PyStopAsyncIteration::new_err(())),
-                Some(Ok(val)) => Ok(Some(val.into_py(py))),
+                Some(Ok(val)) => Ok(Some(val)),
                 Some(Err(e)) => Err(e.into()),
-            })
+            }
         })
     }
 }
