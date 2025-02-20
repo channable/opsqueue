@@ -29,7 +29,20 @@ There are four main components:
   * Producer Client (used to generate and send work to Opsqueue, and optionally receive results)
   * Consuumer Client (used to execute chunks of work that was sent to Opsqueue)
 
-## Building, running, testing
+## For users: Including Opsqueue in other repos
+
+Opsqueue's client libraries are available through `niv`.
+
+1. Add opsqueue to your `nix/sources.json`, possibly by using `niv add https://github.com/channable/opsqueue`
+2. Package the now available `opsqueue` library as part of your overlay, using e.g.
+
+```nix
+opsqueue = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/opsqueue_python.nix") { };
+```
+
+An example to the changes required to your repo's nix overlay [can be found here](https://github.com/channable/ai/pull/763/files).
+
+## For devs modifying Opsqueue: Building, running, testing
 
 The builds are managed using Cargo + Maturin in development, and Nix for production release builds.
 
