@@ -478,7 +478,7 @@ pub struct PyChunksAsyncIter {
 impl From<PyChunksIter> for PyChunksAsyncIter {
     fn from(iter: PyChunksIter) -> Self {
         Self {
-            stream: Arc::new(tokio::sync::Mutex::new(iter.stream)),
+            stream: Arc::new(iter.stream),
             runtime: iter.runtime,
         }
     }
@@ -497,7 +497,7 @@ impl PyChunksAsyncIter {
             let res = stream.lock().await.next().await;
             Python::with_gil(|py| match res {
                 None => Err(PyStopAsyncIteration::new_err(())),
-                Some(Ok(val)) => Ok(Some(VecAsPyBytes(val).into_py(py))),
+                Some(Ok(val)) => Ok(Some(val.into_py(py))),
                 Some(Err(e)) => Err(e.into()),
             })
         })
