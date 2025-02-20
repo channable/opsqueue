@@ -1,6 +1,11 @@
 use std::{future::IntoFuture, sync::Arc, time::Duration};
 
-use pyo3::{create_exception, exceptions::PyException, prelude::*, types::PyIterator};
+use pyo3::{
+    create_exception,
+    exceptions::{PyException, PyStopAsyncIteration},
+    prelude::*,
+    types::PyIterator,
+};
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
@@ -315,26 +320,26 @@ impl ProducerClient {
     > {
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
-                let mut interval = Duration::from_millis(10);
-                loop {
-                    if let Some(py_stream) = self
-                        .maybe_stream_completed_submission(submission_id)
-                        .await
-                        .map_err(|CError(e)| CError(R(e)))?
-                    {
-                        return Ok(py_stream);
-                    }
-                    log::debug!(
-                        "Submission {} not completed yet. Sleeping for {interval:?}...",
-                        submission_id.id
-                    );
-                    tokio::time::sleep(interval).await;
-                    if interval < SUBMISSION_POLLING_INTERVAL {
-                        interval *= 2;
-                        interval = interval.min(SUBMISSION_POLLING_INTERVAL);
-                    }
-                }
+                self.stream_completed_submission_chunks(submission_id).await
             })
+        })
+    }
+
+    pub fn async_stream_completed_submission_chunks<'p>(
+        &self,
+        py: Python<'p>,
+        submission_id: SubmissionId,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let me = self.clone();
+        let _tokio_active_runtime_guard = me.runtime.enter();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            match me.stream_completed_submission_chunks(submission_id).await {
+                Ok(iter) => {
+                    let async_iter = PyChunksAsyncIter::from(iter);
+                    Ok(async_iter)
+                }
+                Err(e) => PyResult::Err(e.into()),
+            }
         })
     }
 }
@@ -354,6 +359,38 @@ impl ProducerClient {
         E: From<FatalPythonException>,
     {
         self.runtime.block_on(run_unless_interrupted(future))
+    }
+
+    async fn stream_completed_submission_chunks(
+        &self,
+        submission_id: SubmissionId,
+    ) -> CPyResult<
+        PyChunksIter,
+        E![
+            FatalPythonException,
+            errors::SubmissionFailed,
+            InternalProducerClientError
+        ],
+    > {
+        let mut interval = Duration::from_millis(10);
+        loop {
+            if let Some(py_stream) = self
+                .maybe_stream_completed_submission(submission_id)
+                .await
+                .map_err(|CError(e)| CError(R(e)))?
+            {
+                return Ok(py_stream);
+            }
+            log::info!(
+                "Submission {} not completed yet. Sleeping for {interval:?}...",
+                submission_id.id
+            );
+            tokio::time::sleep(interval).await;
+            if interval < SUBMISSION_POLLING_INTERVAL {
+                interval *= 2;
+                interval = interval.min(SUBMISSION_POLLING_INTERVAL);
+            }
+        }
     }
 
     async fn maybe_stream_completed_submission(
@@ -393,9 +430,11 @@ impl ProducerClient {
     }
 }
 
+pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>;
+
 #[pyclass]
 pub struct PyChunksIter {
-    stream: tokio::sync::Mutex<BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>>,
+    stream: tokio::sync::Mutex<ChunksStream>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -425,5 +464,44 @@ impl PyChunksIter {
         let runtime = &mut me.runtime;
         let stream = &mut me.stream;
         runtime.block_on(async { stream.lock().await.next().await })
+    }
+
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+}
+
+#[pyclass]
+pub struct PyChunksAsyncIter {
+    stream: Arc<tokio::sync::Mutex<ChunksStream>>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl From<PyChunksIter> for PyChunksAsyncIter {
+    fn from(iter: PyChunksIter) -> Self {
+        Self {
+            stream: Arc::new(iter.stream),
+            runtime: iter.runtime,
+        }
+    }
+}
+
+#[pymethods]
+impl PyChunksAsyncIter {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__(slf: PyRef<'_, Self>) -> PyResult<Bound<'_, PyAny>> {
+        let _tokio_active_runtime_guard = slf.runtime.enter();
+        let stream = slf.stream.clone();
+        pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
+            let res = stream.lock().await.next().await;
+            match res {
+                None => Err(PyStopAsyncIteration::new_err(())),
+                Some(Ok(val)) => Ok(Some(val)),
+                Some(Err(e)) => Err(e.into()),
+            }
+        })
     }
 }

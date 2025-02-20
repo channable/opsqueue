@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, AsyncIterator
 from typing import Any
 
 import itertools
@@ -87,6 +87,24 @@ class ProducerClient:
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
+    async def async_run_submission(
+        self,
+        ops: Iterable[Any],
+        *,
+        chunk_size: int,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
+    ) -> AsyncIterator[Any]:
+        tracer = trace.get_tracer("opsqueue.producer")
+        with tracer.start_as_current_span("run_submission"):
+            results_iter = await self.async_run_submission_chunks(
+                _chunk_iterator(ops, chunk_size, serialization_format),
+                metadata=metadata,
+                strategic_metadata=strategic_metadata,
+            )
+            return _async_unchunk_iterator(results_iter, serialization_format)
+
     def insert_submission(
         self,
         ops: Iterable[Any],
@@ -172,6 +190,20 @@ class ProducerClient:
         )
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
+    async def async_run_submission_chunks(
+        self,
+        chunk_contents: Iterable[bytes],
+        *,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
+    ) -> AsyncIterator[bytes]:
+        # TODO: the insertion is not async yet.
+        submission_id = self.insert_submission_chunks(
+            chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata
+        )
+
+        return await self.async_stream_completed_submission_chunks(submission_id)
+
     def insert_submission_chunks(
         self,
         chunk_contents: Iterable[bytes],
@@ -208,6 +240,11 @@ class ProducerClient:
         - TODO special exception for when the submission fails.
         """
         return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
+
+    async def async_stream_completed_submission_chunks(
+        self, submission_id: SubmissionId
+    ) -> AsyncIterator[bytes]:
+        return await self.inner.async_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
     def try_stream_completed_submission_chunks(
         self, submission_id: SubmissionId
@@ -287,14 +324,19 @@ def _chunk_iterator(
 def _unchunk_iterator(
     encoded_chunks_iter: Iterable[bytes], serialization_format: SerializationFormat
 ) -> Iterator[Any]:
-    return _flatten_iterator(
-        map(lambda c: decode_chunk(c, serialization_format), encoded_chunks_iter)
-    )
+    for chunk in encoded_chunks_iter:
+        ops = decode_chunk(chunk, serialization_format)
+        for op in ops:
+            yield op
 
 
-def _flatten_iterator(iter_of_iters: Iterable[Iterable[bytes]]) -> Iterator[bytes]:
-    "Flatten one level of nesting."
-    return itertools.chain.from_iterable(iter_of_iters)
+async def _async_unchunk_iterator(
+    encoded_chunks_iter: AsyncIterator[bytes], serialization_format: SerializationFormat
+) -> AsyncIterator[Any]:
+    async for chunk in encoded_chunks_iter:
+        ops = decode_chunk(chunk, serialization_format)
+        for op in ops:
+            yield op
 
 
 class ChunkSizeIsZeroError(Exception):
