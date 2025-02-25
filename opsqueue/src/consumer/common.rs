@@ -12,11 +12,6 @@ use crate::common::errors::{IncorrectUsage, LimitIsZero};
 use crate::common::submission::Submission;
 use crate::consumer::strategy::Strategy;
 
-// TODO: Make configurable
-pub const MAX_MISSABLE_HEARTBEATS: usize = 3;
-// TODO: Make configurable
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
-
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ClientToServerMessage {
     WantToReserveChunks {
@@ -37,6 +32,10 @@ pub enum ClientToServerMessage {
 pub enum ServerToClientMessage {
     Sync(Envelope<SyncServerToClientResponse>),
     Async(AsyncServerToClientMessage),
+    /// Initialization message. The client expects to receive this as the very first message
+    /// before it enters the main loop. Re-sending this message is tolerated but considered
+    /// invalid.
+    Init(ConsumerConfig),
 }
 
 /// Responses to earlier ClientToServerMessages
@@ -58,6 +57,21 @@ pub enum AsyncServerToClientMessage {
 pub struct Envelope<T> {
     pub nonce: usize,
     pub contents: T,
+}
+
+/// The part of the configuration that is shared with the consumer when it connects to
+/// the opsqueue server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumerConfig {
+    /// Specifies how long the heartbeat window is. See also [Config::max_missable_heartbeats].
+    ///
+    /// [Config::max_missable_heartbeats]: crate::config::Config::max_missable_heartbeats
+    pub max_missable_heartbeats: usize,
+    /// Specifies how long the heartbeat window is. This value is determined by the
+    /// [Config::heartbeat_interval] option set on the server.
+    ///
+    /// [Config::heartbeat_interval]: crate::config::Config::heartbeat_interval
+    pub heartbeat_interval: Duration,
 }
 
 #[cfg(feature = "server-logic")]

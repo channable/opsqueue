@@ -17,8 +17,8 @@ use crate::{
     },
     consumer::{
         common::{
-            AsyncServerToClientMessage, ClientToServerMessage, Envelope, ServerToClientMessage,
-            SyncServerToClientResponse,
+            AsyncServerToClientMessage, ClientToServerMessage, ConsumerConfig, Envelope,
+            ServerToClientMessage, SyncServerToClientResponse,
         },
         strategy::Strategy,
     },
@@ -80,6 +80,7 @@ impl ConsumerConn {
     /// Runs the consumer websocket connection loop
     /// Blocks until the loop is stopped (because the connection is closed intentionally or by network failure).
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
+        self.initialize().await?;
         loop {
             select! {
                 // On shutdown, gracefully shut down and ignore any errors
@@ -124,6 +125,17 @@ impl ConsumerConn {
             // This branch is taken if things were taking too long:
             () = tokio::time::sleep(GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT) => {},
         }
+    }
+
+    async fn initialize(&mut self) -> Result<(), ConsumerConnError> {
+        // Send the initialization message. The consumer client is waiting for this one before it enters its main loop.
+        let init_msg = ServerToClientMessage::Init(ConsumerConfig {
+            max_missable_heartbeats: self.max_missable_heartbeats,
+            heartbeat_interval: self.heartbeat_interval.period(),
+        })
+        .into();
+        self.ws_stream.send(init_msg).await?;
+        Ok(())
     }
 
     // Manages heartbeating:

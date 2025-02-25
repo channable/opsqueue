@@ -6,10 +6,7 @@ use std::{
 };
 
 use arc_swap::ArcSwapOption;
-use futures::{
-    stream::{SplitSink, SplitStream},
-    SinkExt, StreamExt,
-};
+use futures::{future, stream::SplitSink, SinkExt, Stream, StreamExt};
 use http::Uri;
 use tokio::{net::TcpStream, sync::oneshot::error::RecvError};
 use tokio::{
@@ -17,7 +14,10 @@ use tokio::{
     sync::{oneshot, Mutex},
     task::yield_now,
 };
-use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    tungstenite::{self, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 use tokio_util::sync::{CancellationToken, DropGuard};
 // use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
 
@@ -27,13 +27,12 @@ use crate::{
         errors::{IncorrectUsage, LimitIsZero, E},
         submission::Submission,
     },
-    consumer::common::{AsyncServerToClientMessage, Envelope, MAX_MISSABLE_HEARTBEATS},
+    consumer::common::{AsyncServerToClientMessage, Envelope},
 };
 
 use super::{
     common::{
-        ClientToServerMessage, ServerToClientMessage, SyncServerToClientResponse,
-        HEARTBEAT_INTERVAL,
+        ClientToServerMessage, ConsumerConfig, ServerToClientMessage, SyncServerToClientResponse,
     },
     strategy::Strategy,
 };
@@ -178,6 +177,23 @@ impl Client {
         let ws_sink = Arc::new(Mutex::new(ws_sink));
         let cancellation_token = CancellationToken::new();
 
+        // Create a stream that skips ahead to the first binary message, which we expect to be
+        // the init message. After that, we don't care anymore and hand it off to the background
+        // task to deal with the various pings and pongs and such.
+        let mut ws_stream = Box::pin(ws_stream.skip_while(|res| {
+            future::ready(if let Ok(ref msg) = res {
+                !msg.is_binary()
+            } else {
+                true
+            })
+        }));
+        let Some(initial_message) = ws_stream.next().await else {
+            anyhow::bail!("Websocket closed upon arrival")
+        };
+        let ServerToClientMessage::Init(config) = initial_message?.try_into()? else {
+            anyhow::bail!("Expected first message to be client initialization")
+        };
+
         let healthy = Arc::new(AtomicBool::new(true));
         tokio::spawn(Self::background_task(
             cancellation_token.clone(),
@@ -185,6 +201,7 @@ impl Client {
             in_flight_requests.clone(),
             ws_stream,
             ws_sink.clone(),
+            config,
         ));
 
         let me = Self {
@@ -204,17 +221,18 @@ impl Client {
         cancellation_token: CancellationToken,
         healthy: Arc<AtomicBool>,
         in_flight_requests: InFlightRequests,
-        mut ws_stream: SplitStream<WebsocketTcpStream>,
+        mut ws_stream: impl Stream<Item = tungstenite::Result<tungstenite::Message>> + Unpin,
         ws_sink: Arc<Mutex<SplitSink<WebsocketTcpStream, Message>>>,
+        config: ConsumerConfig,
     ) {
-        let mut heartbeat_interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        let mut heartbeat_interval = tokio::time::interval(config.heartbeat_interval);
         let mut heartbeats_missed = 0;
         loop {
             yield_now().await;
             select! {
                 _ = cancellation_token.cancelled() => break,
                 _ = heartbeat_interval.tick() => {
-                    if heartbeats_missed > MAX_MISSABLE_HEARTBEATS {
+                    if heartbeats_missed > config.max_missable_heartbeats {
                         log::warn!("Too many missed heartbeats! Closing connection and marking client as unhealthy.");
                         // Mark ourselves as unhealthy:
                         healthy.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -269,6 +287,7 @@ impl Client {
                                             },
                                         }
                                     }
+                                    ServerToClientMessage::Init(_) => log::error!("Initialization message received after client loop start! Ignoring.")
                                 }
                             }
                         },
