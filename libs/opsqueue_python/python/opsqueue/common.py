@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 import json
+import cbor2
 
 
 class SerializationFormat(Protocol):
@@ -25,7 +26,7 @@ class json_as_bytes:
         return json.loads(data.decode())
 
 
-DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = json_as_bytes
+DEFAULT_SERIALIZATION_FORMAT: SerializationFormat = cbor2
 
 
 def encode_chunk(
