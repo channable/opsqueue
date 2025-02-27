@@ -15,6 +15,7 @@ let
       pytest-parallel
 
       # Repeated here so MyPy sees them:
+      cbor2
       opentelemetry-api
       opentelemetry-exporter-otlp
       opentelemetry-sdk
