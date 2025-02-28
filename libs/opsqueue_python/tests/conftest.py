@@ -1,3 +1,5 @@
+import cbor2
+import pickle
 from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
 import multiprocessing
@@ -124,10 +126,6 @@ def basic_consumer_strategy(
     request: pytest.FixtureRequest,
 ) -> Generator[Strategy, None, None]:
     yield request.param
-
-
-import cbor2
-import pickle
 
 
 @pytest.fixture(scope="function", params=[json_as_bytes, cbor2, pickle])
