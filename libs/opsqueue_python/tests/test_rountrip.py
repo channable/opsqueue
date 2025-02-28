@@ -10,6 +10,7 @@ from opsqueue.producer import (
     SubmissionFailedError,
 )
 from opsqueue.consumer import ConsumerClient, Strategy, Chunk
+from opsqueue.common import SerializationFormat
 from conftest import background_process, multiple_background_processes, OpsqueueProcess
 import logging
 
@@ -48,7 +49,50 @@ def test_roundtrip(
         assert res == sum(range(1, 101))
 
 
+def test_roundtrip_explicit_serialization_format(
+    opsqueue: OpsqueueProcess,
+    basic_consumer_strategy: Strategy,
+    serialization_format: SerializationFormat,
+) -> None:
+    """
+    A most basic test that round-trips all three components,
+    but this time with explicitly specified serialization format.
+
+    Tests whether various serialization formats work with the interface correctly.
+    """
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_roundtrip"
+    )
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(
+            f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_roundtrip"
+        )
+        consumer_client.run_each_op(
+            increment,
+            strategy=basic_consumer_strategy,
+            serialization_format=serialization_format,
+        )
+
+    with background_process(run_consumer) as _consumer:
+        input_iter = range(0, 100)
+
+        output_iter: Iterator[int] = producer_client.run_submission(
+            input_iter, chunk_size=20, serialization_format=serialization_format
+        )
+        res = sum(output_iter)
+
+        assert res == sum(range(1, 101))
+
+
 def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
+    """
+    Ensure that if a chunk keeps on failing, the producer will raise a SubmissionFailedError.
+
+    (If this test hangs, it may be that the consumer crashed early.
+    Check by calling `run_consumer()` directly)
+    """
+
     producer_client = ProducerClient(
         f"localhost:{opsqueue.port}",
         "file:///tmp/opsqueue/test_submission_failure_exception",
@@ -71,9 +115,6 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
         )
         consumer_client.run_each_op(broken_increment)
 
-    # If this test hangs, it may be that the consumer crashed early.
-    # Check by calling `run_consumer()` directly.
-
     with background_process(run_consumer) as consumer:
         logging.error(f"Opsqueue: {opsqueue}")
         logging.error(f"Consumer: {consumer}")
@@ -94,7 +135,12 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
 def test_chunk_roundtrip(
     opsqueue: OpsqueueProcess, basic_consumer_strategy: Strategy
 ) -> None:
-    import json
+    """
+    Tests whether everything still works well
+    if we're directly reading/writing chunks as bytes
+    rather than relying on opsqueue.common.encode_chunk / opsqueue.common.decode_chunk
+    """
+    import cbor2
 
     producer_client = ProducerClient(
         f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_chunk_roundtrip"
@@ -111,9 +157,9 @@ def test_chunk_roundtrip(
         consumer_client.run_each_chunk(increment_list, strategy=basic_consumer_strategy)
 
     with background_process(run_consumer) as _consumer:
-        input_iter = map(lambda i: json.dumps([i, i, i]).encode(), range(0, 10))
+        input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(0, 10))
         output_iter: Iterator[list[int]] = map(
-            lambda c: json.loads(c),
+            lambda c: cbor2.loads(c),
             producer_client.run_submission_chunks(input_iter),
         )
         import itertools
@@ -126,6 +172,10 @@ def test_chunk_roundtrip(
 def test_many_consumers(
     opsqueue: OpsqueueProcess, basic_consumer_strategy: Strategy
 ) -> None:
+    """
+    Ensure the system still works if we have many consumers concurrently
+    working on thes same submission
+    """
     producer_client = ProducerClient(
         f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_many_consumers"
     )
@@ -156,6 +206,9 @@ def test_many_consumers(
 
 
 def test_async_producer(opsqueue: OpsqueueProcess) -> None:
+    """
+    A simple sanity check to ensure the async API does its basic job
+    """
     import asyncio
 
     def run_consumer() -> None:

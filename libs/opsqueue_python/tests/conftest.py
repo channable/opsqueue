@@ -1,3 +1,5 @@
+import cbor2
+import pickle
 from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
 import multiprocessing
@@ -9,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import functools
 
+from opsqueue.common import SerializationFormat, json_as_bytes
 from opsqueue.consumer import Strategy
 
 # @pytest.hookimpl(tryfirst=True)
@@ -119,5 +122,14 @@ def multiple_background_processes(
     ids=lambda s: f"Strategy.{s}",
     params=[Strategy.Random(), Strategy.Newest(), Strategy.Oldest()],
 )
-def basic_consumer_strategy(request: pytest.FixtureRequest) -> Strategy:
+def basic_consumer_strategy(
+    request: pytest.FixtureRequest,
+) -> Generator[Strategy, None, None]:
+    yield request.param
+
+
+@pytest.fixture(scope="function", params=[json_as_bytes, cbor2, pickle])
+def serialization_format(
+    request: pytest.FixtureRequest,
+) -> Generator[SerializationFormat, None, None]:
     yield request.param
