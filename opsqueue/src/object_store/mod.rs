@@ -100,7 +100,10 @@ impl ObjectStoreClient {
     ///
     /// The given `object_store_url` recognizes the formats detailed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
-    pub fn new(object_store_url: &str, options: Vec<(String, String)>) -> Result<Self, NewObjectStoreClientError> {
+    pub fn new(
+        object_store_url: &str,
+        options: Vec<(String, String)>,
+    ) -> Result<Self, NewObjectStoreClientError> {
         let url = Url::parse(object_store_url)?;
         let (object_store, base_path) = object_store::parse_url_opts(&url, options)?;
         Ok(ObjectStoreClient(Arc::new(ObjectStoreClientInner {

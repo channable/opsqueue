@@ -64,7 +64,8 @@ impl ProducerClient {
     ) -> CPyResult<Self, NewObjectStoreClientError> {
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
-        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
+        let object_store_client =
+            opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
         Ok(ProducerClient {
             producer_client,
             object_store_client,
