@@ -53,15 +53,19 @@ impl ProducerClient {
     ///   use `file:///tmp/my/local/path` to use a local file when running small examples in development.
     ///   use `gs://bucket-name/path/inside/bucket` to connect to GCS in production.
     ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
-    ///   Note that other GCS settings are read from environment variables, using the steps outlined here: https://cloud.google.com/docs/authentication/application-default-credentials.
+    /// :param object_store_options: A list of key-value strings as extra options for the chosen object store.
+    ///        For example, for GCS, see https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants
     #[new]
+    #[pyo3(signature = (address, object_store_url, object_store_options=vec![]))]
     pub fn new(
         address: &str,
         object_store_url: &str,
+        object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
-        let object_store_client = opsqueue::object_store::ObjectStoreClient::new(object_store_url)?;
+        let object_store_client =
+            opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
         Ok(ProducerClient {
             producer_client,
             object_store_client,

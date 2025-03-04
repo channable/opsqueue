@@ -25,7 +25,13 @@ class ConsumerClient:
 
     __slots__ = "inner"
 
-    def __init__(self, opsqueue_url: str, object_store_url: str):
+    def __init__(
+        self,
+        opsqueue_url: str,
+        object_store_url: str,
+        *,
+        object_store_options: list[tuple[str, str]] = [],
+    ):
         """
         Creates a new consumer client.
 
@@ -40,7 +46,9 @@ class ConsumerClient:
 
         Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
         """
-        self.inner = opsqueue_internal.ConsumerClient(opsqueue_url, object_store_url)
+        self.inner = opsqueue_internal.ConsumerClient(
+            opsqueue_url, object_store_url, object_store_options
+        )
 
     def run_each_op(
         self,

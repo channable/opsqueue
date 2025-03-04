@@ -42,7 +42,13 @@ class ProducerClient:
 
     __slots__ = "inner"
 
-    def __init__(self, opsqueue_url: str, object_store_url: str):
+    def __init__(
+        self,
+        opsqueue_url: str,
+        object_store_url: str,
+        *,
+        object_store_options: list[tuple[str, str]] = [],
+    ):
         """
         Creates a new producer client.
 
@@ -55,7 +61,9 @@ class ProducerClient:
 
         Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
         """
-        self.inner = opsqueue_internal.ProducerClient(opsqueue_url, object_store_url)
+        self.inner = opsqueue_internal.ProducerClient(
+            opsqueue_url, object_store_url, object_store_options
+        )
 
     def run_submission(
         self,
