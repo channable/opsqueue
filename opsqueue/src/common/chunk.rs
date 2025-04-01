@@ -548,13 +548,13 @@ pub mod db {
         Ok(())
     }
 
-    pub async fn insert_many_chunks_metadata<TX>(
+    pub async fn insert_many_chunks_metadata<Tx>(
         chunks: &[Chunk],
         metadata: &StrategicMetadataMap,
-        conn: &mut Conn<Writer, TX>,
+        conn: &mut Conn<Writer, Tx>,
     ) -> sqlx::Result<()>
     where
-        Conn<Writer, TX>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+        Conn<Writer, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
     {
         use itertools::Itertools;
         const ROWS_PER_QUERY: usize = 1000;
@@ -657,7 +657,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
         let db = Pool::new(db);
-        let mut conn = db.acquire().await.unwrap();
+        let mut conn = db.writer_conn().await.unwrap();
         let chunk = Chunk::new(
             u63::new(1).into(),
             u63::new(0).into(),
@@ -674,17 +674,19 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
         let db = Pool::new(db);
-        let mut conn = db.acquire().await.unwrap();
+        let mut w_conn = db.writer_conn().await.unwrap();
 
         let chunk = Chunk::new(
             u63::new(1).into(),
             u63::new(0).into(),
             vec![1, 2, 3, 4, 5].into(),
         );
-        insert_chunk(chunk.clone(), &mut conn)
+        insert_chunk(chunk.clone(), &mut w_conn)
             .await
             .expect("Insert chunk failed");
-        let fetched_chunk = get_chunk((chunk.submission_id, chunk.chunk_index).into(), &mut conn)
+
+        let mut r_conn = db.reader_conn().await.unwrap();
+        let fetched_chunk = get_chunk((chunk.submission_id, chunk.chunk_index).into(), &mut r_conn)
             .await
             .unwrap();
         assert!(chunk == fetched_chunk);
@@ -693,7 +695,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_chunk_raw(db: sqlx::SqlitePool) {
         let db = Pool::new(db);
-        let mut conn = db.acquire().await.unwrap();
+        let mut conn = db.writer_conn().await.unwrap();
 
         let mut submission = Submission::new();
         submission.chunks_total = u63::new(1).into();
@@ -731,7 +733,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
         let db: Pool<Writer> = Pool::new(db);
-        let mut conn = db.acquire().await.unwrap();
+        let mut conn = db.writer_conn().await.unwrap();
         let submission_id = crate::common::submission::db::insert_submission_from_chunks(
             None,
             vec![Some("first".into())],
@@ -773,7 +775,7 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let db = Pool::new(db);
-        let mut conn = db.acquire().await.unwrap();
+        let mut conn = db.writer_conn().await.unwrap();
         let chunk = Chunk::new(
             u63::new(1).into(),
             u63::new(0).into(),

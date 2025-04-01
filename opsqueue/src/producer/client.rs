@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(count, 0);
 
         let pool = Pool::<Writer>::new(pool);
-        let mut conn = pool.acquire().await.unwrap();
+        let mut conn = pool.writer_conn().await.unwrap();
         submission::db::insert_submission_from_chunks(
             None,
             vec![None, None, None],
@@ -205,7 +205,7 @@ mod tests {
         let client = Client::new(url);
 
         let pool = Pool::<Writer>::new(pool);
-        let mut conn = pool.acquire().await.unwrap();
+        let mut conn = pool.writer_conn().await.unwrap();
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");

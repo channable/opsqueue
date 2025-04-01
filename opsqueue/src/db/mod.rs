@@ -23,17 +23,39 @@ use sqlx::{
 /// and warning thresholds for each pool.
 #[derive(Debug, Clone)]
 pub struct DBPools {
-    pub read_pool: Pool<Reader>,
-    pub write_pool: Pool<Writer>,
+    read_pool: Pool<Reader>,
+    write_pool: Pool<Writer>,
 }
 
-#[cfg(test)]
 impl DBPools {
+    /// Create a `DBPools` instance from a single test pool. Only usable in tests.
+    #[cfg(test)]
     pub(crate) fn from_test_pool(pool: &sqlx::SqlitePool) -> Self {
         DBPools {
             read_pool: Pool::new(pool.clone()),
             write_pool: Pool::new(pool.clone()),
         }
+    }
+    /// Access a reader connection.
+    ///
+    /// Such a connection can't be used to make changes to the state in the database.
+    pub async fn reader_conn(&self) -> Result<Conn<Reader, NoTransaction>, sqlx::Error> {
+        self.read_pool.acquire().await
+    }
+    /// Access a writer connection.
+    ///
+    /// This connection can be used both for functions requiring read-only access and for functions
+    /// that make changes to the state in the database.
+    pub async fn writer_conn(&self) -> Result<Conn<Writer, NoTransaction>, sqlx::Error> {
+        self.write_pool.acquire().await
+    }
+    /// Access the pool containing the reader connections.
+    pub fn reader_pool(&self) -> &Pool<Reader> {
+        &self.read_pool
+    }
+    /// Access the pool containing the writer connection.
+    pub fn writer_pool(&self) -> &Pool<Writer> {
+        &self.write_pool
     }
 }
 
@@ -51,8 +73,18 @@ impl<T> Pool<T> {
             _type: PhantomData,
         }
     }
-    /// Acquire a transactionless connection.
-    pub async fn acquire(&self) -> Result<Conn<T, NoTransaction>, sqlx::Error> {
+    /// Acquire one of the read-only database connections.
+    ///
+    /// If you need a `Conn<Writer>`, you need to use `writer_conn` on `Pool<Writer>`.
+    ///
+    /// See [`DBPools`] for further explanation about readers and writers.
+    pub async fn reader_conn(&self) -> Result<Conn<Reader, NoTransaction>, sqlx::Error> {
+        self.acquire().await
+    }
+    /// Acquire a new connection from the underlying pool and wrap it in our typed connection.
+    ///
+    /// Internal convenience method for implementing `writer_conn` and `reader_conn`-esque inherent methods.
+    async fn acquire<X>(&self) -> Result<Conn<X, NoTransaction>, sqlx::Error> {
         self.inner.acquire().await.map(|inner| Conn {
             inner: InnerConn::Pool(inner),
             _type: PhantomData,
@@ -60,35 +92,42 @@ impl<T> Pool<T> {
     }
 }
 
+impl Pool<Writer> {
+    /// Acquire the connection capable of writing to the database.
+    ///
+    /// See [`DBPools`] for further explanation about readers and writers.
+    pub async fn writer_conn(&self) -> Result<Conn<Writer, NoTransaction>, sqlx::Error> {
+        self.acquire().await
+    }
+}
+
 #[derive(Debug)]
-pub struct Conn<T, TX = NoTransaction> {
-    inner: InnerConn<TX>,
+pub struct Conn<T, Tx> {
+    inner: InnerConn<Tx>,
     _type: PhantomData<T>,
 }
 
-/// You can only call these functions if not in a transaction.
-impl<T> Conn<T, NoTransaction> {
-    pub async fn run_tx<'s, O, E, FN>(&'s mut self, f: FN) -> Result<O, E>
+impl<T, Tx> Conn<T, Tx>
+where
+    Conn<T, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+{
+    pub async fn run_tx<O, E, F>(&mut self, f: F) -> Result<O, E>
     where
-        for<'t> FN:
-            FnOnce(Conn<T, TxRef<'t, '_>>) -> BoxFuture<'t, Result<O, E>> + Send + Sync + 't,
+        for<'t> F: FnOnce(Conn<T, TxRef<'t, '_>>) -> BoxFuture<'t, Result<O, E>> + Send + Sync + 't,
         O: Send,
         E: From<sqlx::Error> + Send,
     {
-        let inner: &mut SqliteConnection = <Conn<T, NoTransaction> as DerefMut>::deref_mut(self);
+        let inner: &mut SqliteConnection = <Self as DerefMut>::deref_mut(self);
         inner
             .transaction(move |tx| {
-                let conn = Self::from_tx(tx);
+                let conn = Conn::from_tx(tx);
                 f(conn)
             })
             .await
     }
-}
-
-impl<T, TX> Conn<T, TX> {
-    fn from_tx<'t, 'c>(tx: &'t mut Transaction<'c, Sqlite>) -> Conn<T, TxRef<'t, 'c>> {
+    fn from_tx<'t, 'c>(tx: TxRef<'t, 'c>) -> Conn<T, TxRef<'t, 'c>> {
         Conn {
-            inner: InnerConn::Tx(tx),
+            inner: InnerConn::InTransaction(tx),
             _type: PhantomData,
         }
     }
@@ -99,11 +138,12 @@ impl<T, TX> Conn<T, TX> {
 pub enum NoTransaction {}
 
 #[derive(Debug)]
-enum InnerConn<TX> {
+enum InnerConn<Tx> {
     Pool(PoolConnection<Sqlite>),
-    Tx(TX),
+    InTransaction(Tx),
 }
 
+/// Represents a reference to a transaction.
 pub type TxRef<'tx, 'conn> = &'tx mut Transaction<'conn, Sqlite>;
 
 impl<T> std::ops::Deref for Conn<T, NoTransaction> {
@@ -112,16 +152,16 @@ impl<T> std::ops::Deref for Conn<T, NoTransaction> {
     fn deref(&self) -> &Self::Target {
         match &self.inner {
             InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::Tx(_) => panic!("impossible!"),
+            InnerConn::InTransaction(_) => panic!("impossible!"),
         }
     }
 }
 
-impl<'tx, 'conn, T> std::ops::DerefMut for Conn<T, NoTransaction> {
+impl<T> std::ops::DerefMut for Conn<T, NoTransaction> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.inner {
             InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::Tx(_) => panic!("impossible!"),
+            InnerConn::InTransaction(_) => panic!("impossible!"),
         }
     }
 }
@@ -132,7 +172,7 @@ impl<T> std::ops::Deref for Conn<T, TxRef<'_, '_>> {
     fn deref(&self) -> &Self::Target {
         match &self.inner {
             InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::Tx(transaction) => transaction,
+            InnerConn::InTransaction(transaction) => transaction,
         }
     }
 }
@@ -141,7 +181,7 @@ impl<T> std::ops::DerefMut for Conn<T, TxRef<'_, '_>> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.inner {
             InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::Tx(transaction) => transaction,
+            InnerConn::InTransaction(transaction) => transaction,
         }
     }
 }
@@ -243,7 +283,7 @@ pub async fn ensure_db_migrated(db: &Pool<Writer>) {
 /// This handles the case where for whatever reason some other thing
 /// holds the write lock for the DB for a (too) long time.
 pub async fn is_db_healthy(pool: &Pool<Writer>) -> bool {
-    match pool.acquire().await {
+    match pool.writer_conn().await {
         Ok(mut conn) => conn
             .run_tx(|mut tx| {
                 Box::pin(async move {

@@ -408,7 +408,7 @@ mod tests {
         let cancellation_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
 
-        let mut conn = db_pools.write_pool.acquire().await.unwrap();
+        let mut conn = db_pools.writer_conn().await.unwrap();
         let input_chunks = vec![
             Some("a".into()),
             Some("b".into()),

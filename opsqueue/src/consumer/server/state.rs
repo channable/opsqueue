@@ -65,7 +65,7 @@ impl ConsumerState {
             .server_state
             .dispatcher
             .fetch_and_reserve_chunks(
-                &self.server_state.pool.read_pool,
+                self.server_state.pool.reader_pool(),
                 strategy.clone(),
                 limit,
                 stale_chunks_notifier,

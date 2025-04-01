@@ -72,7 +72,7 @@ impl ServerState {
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) = Completer::new(&pool.write_pool, &dispatcher);
+        let (completer, completer_tx) = Completer::new(pool.writer_pool(), &dispatcher);
         Self {
             pool,
             completer: Some(completer),
@@ -186,7 +186,7 @@ impl Completer {
         let start = tokio::time::Instant::now();
 
         let res: anyhow::Result<()> = async move {
-            let mut conn = self.pool.acquire().await?;
+            let mut conn = self.pool.writer_conn().await?;
 
             match msg {
                 CompleterMessage::Complete {
@@ -203,7 +203,7 @@ impl Completer {
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self
                         .dispatcher
-                        .finish_reservation(&mut *conn, id, true)
+                        .finish_reservation(&mut conn, id, true)
                         .await
                     {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
@@ -227,7 +227,7 @@ impl Completer {
                     let maybe_started_at = self
                         .dispatcher
                         .finish_reservation(
-                            &mut *conn,
+                            &mut conn,
                             id,
                             *failed_permanently.as_ref().unwrap_or(&false),
                         )
