@@ -1,9 +1,11 @@
-use std::{num::NonZero, time::Duration};
+use std::{marker::PhantomData, num::NonZero, ops::DerefMut, time::Duration};
 
+use futures::future::BoxFuture;
 use sqlx::{
     migrate::MigrateDatabase,
+    pool::PoolConnection,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-    Connection, Sqlite, SqliteConnection, SqlitePool,
+    Connection, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
 
 /// We maintain two database connection pools.
@@ -21,9 +23,134 @@ use sqlx::{
 /// and warning thresholds for each pool.
 #[derive(Debug, Clone)]
 pub struct DBPools {
-    pub read_pool: SqlitePool,
-    pub write_pool: SqlitePool,
+    pub read_pool: Pool<Reader>,
+    pub write_pool: Pool<Writer>,
 }
+
+#[cfg(test)]
+impl DBPools {
+    pub(crate) fn from_test_pool(pool: &sqlx::SqlitePool) -> Self {
+        DBPools {
+            read_pool: Pool::new(pool.clone()),
+            write_pool: Pool::new(pool.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Pool<T> {
+    pub(crate) inner: SqlitePool,
+    _type: PhantomData<T>,
+}
+
+impl<T> Pool<T> {
+    /// Wrap the [`SqlitePool`] to add a type-level tag identifying it as either a reader or a writer pool.
+    pub fn new(pool: SqlitePool) -> Pool<T> {
+        Pool {
+            inner: pool,
+            _type: PhantomData,
+        }
+    }
+    /// Acquire a transactionless connection.
+    pub async fn acquire(&self) -> Result<Conn<T, NoTransaction>, sqlx::Error> {
+        self.inner.acquire().await.map(|inner| Conn {
+            inner: InnerConn::Pool(inner),
+            _type: PhantomData,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Conn<T, TX = NoTransaction> {
+    inner: InnerConn<TX>,
+    _type: PhantomData<T>,
+}
+
+/// You can only call these functions if not in a transaction.
+impl<T> Conn<T, NoTransaction> {
+    pub async fn run_tx<'s, O, E, FN>(&'s mut self, f: FN) -> Result<O, E>
+    where
+        for<'t> FN:
+            FnOnce(Conn<T, TxRef<'t, '_>>) -> BoxFuture<'t, Result<O, E>> + Send + Sync + 't,
+        O: Send,
+        E: From<sqlx::Error> + Send,
+    {
+        let inner: &mut SqliteConnection = <Conn<T, NoTransaction> as DerefMut>::deref_mut(self);
+        inner
+            .transaction(move |tx| {
+                let conn = Self::from_tx(tx);
+                f(conn)
+            })
+            .await
+    }
+}
+
+impl<T, TX> Conn<T, TX> {
+    fn from_tx<'t, 'c>(tx: &'t mut Transaction<'c, Sqlite>) -> Conn<T, TxRef<'t, 'c>> {
+        Conn {
+            inner: InnerConn::Tx(tx),
+            _type: PhantomData,
+        }
+    }
+}
+
+/// Empty value that can never be populated. Used for the `TX` slot if we're not in a transaction.
+#[derive(Debug)]
+pub enum NoTransaction {}
+
+#[derive(Debug)]
+enum InnerConn<TX> {
+    Pool(PoolConnection<Sqlite>),
+    Tx(TX),
+}
+
+pub type TxRef<'tx, 'conn> = &'tx mut Transaction<'conn, Sqlite>;
+
+impl<T> std::ops::Deref for Conn<T, NoTransaction> {
+    type Target = SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        match &self.inner {
+            InnerConn::Pool(pool_connection) => pool_connection,
+            InnerConn::Tx(_) => panic!("impossible!"),
+        }
+    }
+}
+
+impl<'tx, 'conn, T> std::ops::DerefMut for Conn<T, NoTransaction> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match &mut self.inner {
+            InnerConn::Pool(pool_connection) => pool_connection,
+            InnerConn::Tx(_) => panic!("impossible!"),
+        }
+    }
+}
+
+impl<T> std::ops::Deref for Conn<T, TxRef<'_, '_>> {
+    type Target = SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        match &self.inner {
+            InnerConn::Pool(pool_connection) => pool_connection,
+            InnerConn::Tx(transaction) => transaction,
+        }
+    }
+}
+
+impl<T> std::ops::DerefMut for Conn<T, TxRef<'_, '_>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match &mut self.inner {
+            InnerConn::Pool(pool_connection) => pool_connection,
+            InnerConn::Tx(transaction) => transaction,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Reader {}
+
+#[derive(Debug, Clone)]
+pub enum Writer {}
 
 /// Connects to the SQLite database,
 /// creating it if it doesn't exist yet,
@@ -59,21 +186,23 @@ pub fn db_options(database_filename: &str) -> SqliteConnectOptions {
 pub async fn db_connect_read_pool(
     database_filename: &str,
     max_read_pool_size: NonZero<u32>,
-) -> SqlitePool {
+) -> Pool<Reader> {
     SqlitePoolOptions::new()
         .min_connections(16)
         .max_connections(max_read_pool_size.into())
         .connect_with(db_options(database_filename))
         .await
+        .map(Pool::new)
         .expect("Could not connect to sqlite DB")
 }
 
-pub async fn db_connect_write_pool(database_filename: &str) -> SqlitePool {
+pub async fn db_connect_write_pool(database_filename: &str) -> Pool<Writer> {
     SqlitePoolOptions::new()
         .min_connections(1)
         .max_connections(1)
         .connect_with(db_options(database_filename))
         .await
+        .map(Pool::new)
         .expect("Could not connect to sqlite DB")
 }
 
@@ -98,12 +227,12 @@ pub async fn ensure_db_exists(database_filename: &str) {
     }
 }
 
-pub async fn ensure_db_migrated(db: &SqlitePool) {
+pub async fn ensure_db_migrated(db: &Pool<Writer>) {
     tracing::info!("Migrating backing DB");
     sqlx::migrate!("./migrations")
         // When rolling back, we want to be able to keep running even when the DB's schema is newer:
         .set_ignore_missing(true)
-        .run(db)
+        .run(&db.inner)
         .await
         .expect("DB migrations failed");
     tracing::info!("Finished migrating backing DB");
@@ -113,13 +242,20 @@ pub async fn ensure_db_migrated(db: &SqlitePool) {
 ///
 /// This handles the case where for whatever reason some other thing
 /// holds the write lock for the DB for a (too) long time.
-pub async fn is_db_healthy(pool: &SqlitePool) -> bool {
-    async move {
-        let mut conn = pool.acquire().await?;
-        let mut tx = conn.begin().await?;
-        let _count = crate::common::submission::db::count_submissions(&mut *tx).await?;
-        Ok::<_, anyhow::Error>(())
+pub async fn is_db_healthy(pool: &Pool<Writer>) -> bool {
+    match pool.acquire().await {
+        Ok(mut conn) => conn
+            .run_tx(|mut tx| {
+                Box::pin(async move {
+                    let _count = crate::common::submission::db::count_submissions(&mut tx).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .is_ok(),
+        Err(error) => {
+            tracing::error!("DB unhealthy; could not acquire DB connection: {error:?}");
+            false
+        }
     }
-    .await
-    .is_ok()
 }

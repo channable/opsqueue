@@ -13,7 +13,11 @@ use axum_prometheus::metrics::{gauge, histogram};
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
-use crate::{common::chunk::ChunkId, config::Config, db::DBPools};
+use crate::{
+    common::chunk::ChunkId,
+    config::Config,
+    db::{self, DBPools},
+};
 
 use super::dispatcher::Dispatcher;
 
@@ -139,14 +143,14 @@ pub enum CompleterMessage {
 #[derive(Debug)]
 pub struct Completer {
     mailbox: tokio::sync::mpsc::Receiver<CompleterMessage>,
-    pool: sqlx::SqlitePool,
+    pool: db::Pool<db::Writer>,
     dispatcher: Dispatcher,
     count: usize,
 }
 
 impl Completer {
     pub fn new(
-        pool: &sqlx::SqlitePool,
+        pool: &db::Pool<db::Writer>,
         dispatcher: &Dispatcher,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);

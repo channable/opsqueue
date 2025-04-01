@@ -137,13 +137,15 @@ pub struct InsertSubmissionResponse {
 }
 
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
-    let count = submission::db::count_submissions(&state.pool.read_pool).await?;
+    let mut conn = state.pool.read_pool.acquire().await?;
+    let count = submission::db::count_submissions(&mut conn).await?;
     Ok(Json(count.try_into()?))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
 ) -> Result<Json<u32>, ServerError> {
-    let count = submission::db::count_submissions_completed(&state.pool.read_pool).await?;
+    let mut conn = state.pool.read_pool.acquire().await?;
+    let count = submission::db::count_submissions_completed(&mut conn).await?;
     Ok(Json(count.try_into()?))
 }

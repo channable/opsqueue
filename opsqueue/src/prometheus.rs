@@ -127,7 +127,8 @@ pub fn setup_prometheus() -> (
 /// Instead of asking the DB for a count very frequently, we only fetch the count at startup
 /// and keep it up-to-date over the lifespan of the application
 pub async fn prefill_special_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
-    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&db_pool.read_pool)
+    let mut conn = db_pool.read_pool.acquire().await?;
+    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
         .await?
         .into();
     gauge!(CHUNKS_BACKLOG_GAUGE).set(chunk_count as f64);

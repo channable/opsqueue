@@ -1,14 +1,17 @@
 pub mod metastate;
 pub mod reserver;
 
-use crate::common::{
-    chunk::{Chunk, ChunkId},
-    submission::Submission,
+use crate::{
+    common::{
+        chunk::{Chunk, ChunkId},
+        submission::Submission,
+    },
+    db,
 };
 use futures::stream::{StreamExt, TryStreamExt};
 use metastate::MetaState;
 use reserver::Reserver;
-use sqlx::{QueryBuilder, SqliteExecutor, SqlitePool};
+use sqlx::{QueryBuilder, SqliteExecutor};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -57,7 +60,7 @@ impl Dispatcher {
 
     pub async fn fetch_and_reserve_chunks(
         &self,
-        pool: &SqlitePool,
+        pool: &db::Pool<db::Reader>,
         strategy: strategy::Strategy,
         limit: usize,
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
@@ -89,10 +92,10 @@ impl Dispatcher {
         Ok(val)
     }
 
-    async fn join_chunk_with_submission_info(
+    async fn join_chunk_with_submission_info<T>(
         &self,
         chunk: Chunk,
-        pool: &SqlitePool,
+        pool: &db::Pool<T>,
     ) -> Result<(Chunk, Submission), sqlx::Error> {
         let conn = &mut pool.acquire().await?;
         let submission =

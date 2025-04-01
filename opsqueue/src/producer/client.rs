@@ -158,17 +158,14 @@ impl InternalProducerClientError {
 mod tests {
     use crate::{
         common::submission::{self, SubmissionStatus},
-        db::DBPools,
+        db::{DBPools, Pool, Writer},
         producer::common::ChunkContents,
     };
 
     use super::*;
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
-        let db_pools = DBPools {
-            read_pool: pool.clone(),
-            write_pool: pool.clone(),
-        };
+        let db_pools = DBPools::from_test_pool(pool);
 
         tokio::spawn(super::super::server::serve_for_tests(db_pools, url.into()));
         // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
@@ -185,6 +182,7 @@ mod tests {
         let count = client.count_submissions().await.expect("Should be OK");
         assert_eq!(count, 0);
 
+        let pool = Pool::<Writer>::new(pool);
         let mut conn = pool.acquire().await.unwrap();
         submission::db::insert_submission_from_chunks(
             None,
@@ -206,7 +204,9 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let count = submission::db::count_submissions(&pool)
+        let pool = Pool::<Writer>::new(pool);
+        let mut conn = pool.acquire().await.unwrap();
+        let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
         assert_eq!(count, 0);
@@ -223,7 +223,7 @@ mod tests {
             .await
             .expect("Should be OK");
 
-        let count = submission::db::count_submissions(&pool)
+        let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
         assert_eq!(count, 1);
@@ -241,7 +241,7 @@ mod tests {
             .await
             .expect("Should be OK");
 
-        let count = submission::db::count_submissions(&pool)
+        let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
         assert_eq!(count, 4);
