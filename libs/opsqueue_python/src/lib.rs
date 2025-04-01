@@ -16,7 +16,6 @@ fn opsqueue_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<common::SubmissionId>()?;
     m.add_class::<common::ChunkIndex>()?;
     m.add_class::<common::Strategy>()?;
-    m.add_class::<common::PreferDistinct>()?;
     m.add_class::<common::Chunk>()?;
     m.add_class::<common::ChunkFailed>()?;
     m.add_class::<common::SubmissionStatus>()?;

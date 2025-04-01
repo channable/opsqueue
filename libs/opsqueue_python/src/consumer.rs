@@ -79,7 +79,7 @@ impl ConsumerClient {
         &self,
         py: Python<'_>,
         max: usize,
-        strategy: Strategy,
+        strategy: &Strategy,
     ) -> CPyResult<
         Vec<Chunk>,
         E![
@@ -89,7 +89,7 @@ impl ConsumerClient {
             IncorrectUsage<LimitIsZero>,
         ],
     > {
-        py.allow_threads(|| self.reserve_chunks_gilless(max, strategy))
+        py.allow_threads(|| self.reserve_chunks_gilless(max, strategy.into()))
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
@@ -135,7 +135,7 @@ impl ConsumerClient {
     #[allow(clippy::type_complexity)]
     pub fn run_per_chunk(
         &self,
-        strategy: Strategy,
+        strategy: &Strategy,
         fun: &Bound<'_, PyAny>,
     ) -> CError<
         E![
@@ -160,7 +160,7 @@ impl ConsumerClient {
             loop {
                 #[allow(clippy::type_complexity)]
                 let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkStorageError, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
-                    let chunks = self.reserve_chunks_gilless(1, strategy.clone()).map_err(|e| match e {
+                    let chunks = self.reserve_chunks_gilless(1, strategy.into()).map_err(|e| match e {
                         CError(L(e)) => CError(L(e)),
                         CError(R(L(e))) => CError(R(R(L(e)))),
                         CError(R(R(e))) => CError(R(R(R(e)))),
@@ -268,7 +268,7 @@ impl ConsumerClient {
     fn reserve_chunks_gilless(
         &self,
         max: usize,
-        strategy: Strategy,
+        strategy: strategy::Strategy,
     ) -> CPyResult<
         Vec<Chunk>,
         E<
@@ -279,7 +279,6 @@ impl ConsumerClient {
         // TODO: Currently we do short-polling here if there are no chunks available.
         // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
-        let strategy: strategy::Strategy = strategy.into();
         loop {
             let res = self.block_unless_interrupted(async {
                 self.reserve_and_retrieve_chunks(max, strategy.clone())

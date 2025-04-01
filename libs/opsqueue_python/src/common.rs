@@ -98,28 +98,7 @@ impl From<u63> for ChunkIndex {
 }
 
 #[pyclass(frozen, eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreferDistinct {
-    meta_key: String,
-    underlying: Box<Strategy>,
-}
-#[pymethods]
-impl PreferDistinct {
-    #[new]
-    fn new(meta_key: String, underlying: Strategy) -> Self {
-        Self {
-            meta_key,
-            underlying: Box::new(underlying),
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        format!("{self:?}")
-    }
-}
-
-#[pyclass(frozen, eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Strategy {
     #[pyo3(constructor=())]
     Oldest(),
@@ -127,8 +106,11 @@ pub enum Strategy {
     Newest(),
     #[pyo3(constructor=())]
     Random(),
-    #[pyo3(constructor=(_0))]
-    PreferDistinct(PreferDistinct),
+    #[pyo3(constructor=(*, meta_key, underlying))]
+    PreferDistinct {
+        meta_key: String,
+        underlying: Py<Strategy>,
+    },
 }
 
 impl From<strategy::Strategy> for Strategy {
@@ -142,26 +124,27 @@ impl From<strategy::Strategy> for Strategy {
                 underlying,
             } => {
                 let underlying = Strategy::from(*underlying);
-                Strategy::PreferDistinct(PreferDistinct {
+                let underlying =
+                    Python::with_gil(|py| Py::new(py, underlying)).expect("A valid Strategy");
+                Strategy::PreferDistinct {
                     meta_key,
-                    underlying: Box::new(underlying),
-                })
+                    underlying,
+                }
             }
         }
     }
 }
-
 impl From<Strategy> for strategy::Strategy {
     fn from(val: Strategy) -> Self {
         match val {
             Strategy::Oldest() => strategy::Strategy::Oldest,
             Strategy::Newest() => strategy::Strategy::Newest,
             Strategy::Random() => strategy::Strategy::Random,
-            Strategy::PreferDistinct(PreferDistinct {
+            Strategy::PreferDistinct {
                 meta_key,
                 underlying,
-            }) => {
-                let underlying = strategy::Strategy::from(*underlying);
+            } => {
+                let underlying = strategy::Strategy::from(underlying.get());
                 strategy::Strategy::PreferDistinct {
                     meta_key,
                     underlying: Box::new(underlying),
@@ -170,6 +153,34 @@ impl From<Strategy> for strategy::Strategy {
         }
     }
 }
+
+impl From<&Strategy> for strategy::Strategy {
+    fn from(val: &Strategy) -> Self {
+        match val {
+            Strategy::Oldest() => strategy::Strategy::Oldest,
+            Strategy::Newest() => strategy::Strategy::Newest,
+            Strategy::Random() => strategy::Strategy::Random,
+            Strategy::PreferDistinct {
+                meta_key,
+                underlying,
+            } => {
+                let underlying = strategy::Strategy::from(underlying.get());
+                strategy::Strategy::PreferDistinct {
+                    meta_key: meta_key.to_string(),
+                    underlying: Box::new(underlying),
+                }
+            }
+        }
+    }
+}
+
+impl PartialEq for Strategy {
+    fn eq(&self, other: &Self) -> bool {
+        strategy::Strategy::from(self) == strategy::Strategy::from(other)
+    }
+}
+
+impl Eq for Strategy {}
 
 /// Wrapper for the internal Opsqueue Chunk datatype
 /// Note that it also includes some fields originating from the Submission

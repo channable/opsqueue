@@ -21,9 +21,7 @@ def increment(data: int) -> int:
     return data + 1
 
 
-def test_roundtrip(
-    opsqueue: OpsqueueProcess, basic_consumer_strategy: Strategy
-) -> None:
+def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -> None:
     """
     A most basic test that round-trips all three components.
     If this fails, something is very wrong.
@@ -36,13 +34,13 @@ def test_roundtrip(
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_roundtrip"
         )
-        consumer_client.run_each_op(increment, strategy=basic_consumer_strategy)
+        consumer_client.run_each_op(increment, strategy=any_consumer_strategy)
 
     with background_process(run_consumer) as _consumer:
         input_iter = range(0, 100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
-            input_iter, chunk_size=20
+            input_iter, chunk_size=20, strategic_metadata={"id": 42}
         )
         res = sum(output_iter)
 
