@@ -117,12 +117,30 @@ def multiple_background_processes(
         yield
 
 
+basic_strategies = Strategy.Random(), Strategy.Newest(), Strategy.Oldest()
+any_strategies = [
+    *basic_strategies,
+    *(Strategy.PreferDistinct(meta_key="id", underlying=s) for s in basic_strategies),
+]
+
+
 @pytest.fixture(
     scope="function",
     ids=lambda s: f"Strategy.{s}",
-    params=[Strategy.Random(), Strategy.Newest(), Strategy.Oldest()],
+    params=basic_strategies,
 )
 def basic_consumer_strategy(
+    request: pytest.FixtureRequest,
+) -> Generator[Strategy, None, None]:
+    yield request.param
+
+
+@pytest.fixture(
+    scope="function",
+    ids=lambda s: f"Strategy.{s}",
+    params=any_strategies,
+)
+def any_consumer_strategy(
     request: pytest.FixtureRequest,
 ) -> Generator[Strategy, None, None]:
     yield request.param
