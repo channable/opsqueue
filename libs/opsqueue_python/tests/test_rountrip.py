@@ -49,7 +49,7 @@ def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -
 
 def test_roundtrip_explicit_serialization_format(
     opsqueue: OpsqueueProcess,
-    basic_consumer_strategy: Strategy,
+    any_consumer_strategy: Strategy,
     serialization_format: SerializationFormat,
 ) -> None:
     """
@@ -68,7 +68,7 @@ def test_roundtrip_explicit_serialization_format(
         )
         consumer_client.run_each_op(
             increment,
-            strategy=basic_consumer_strategy,
+            strategy=any_consumer_strategy,
             serialization_format=serialization_format,
         )
 
@@ -168,7 +168,7 @@ def test_chunk_roundtrip(
 
 
 def test_many_consumers(
-    opsqueue: OpsqueueProcess, basic_consumer_strategy: Strategy
+    opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy
 ) -> None:
     """
     Ensure the system still works if we have many consumers concurrently
@@ -190,7 +190,7 @@ def test_many_consumers(
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_many_consumers"
         )
-        consumer_client.run_each_op(increment, strategy=basic_consumer_strategy)
+        consumer_client.run_each_op(increment, strategy=any_consumer_strategy)
 
     n_consumers = 16
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
