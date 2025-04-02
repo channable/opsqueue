@@ -1,5 +1,59 @@
+//! Core database abstractions for the opsqueue server internals.
+//!
+//! We use compile-time constraints to express requirements for our queries. For this, we
+//! have some type-level ✨ magic ✨ to help us do this in a readable way.
+//!
+//! The core of this system is the [`TypedConnection`] along with a number of type parameters
+//! on the [`Conn`] struct.
+//!
+//! # Example
+//!
+//! This is how the interface works in practice.
+//!
+//! ```
+//! use opsqueue::db::{TypedConnection, bool::*, Pool};
+//!
+//! // Let's say that we do some kind of operation here that requires
+//! // write access to the database. Note that it's up to the author
+//! // of the function to ensure that the correct constraints are added.
+//! async fn some_insert(
+//!     mut conn: impl TypedConnection<Writer = True>
+//! ) -> sqlx::Result<()> {
+//!     let n: i32 = sqlx::query_scalar("SELECT 1")
+//!         .fetch_one(conn.get_inner())
+//!         .await?;
+//!     assert_eq!(n, 1);
+//!     Ok(())
+//! }
+//!
+//! // This one does not require any write access, so we should leave
+//! // that unspecified. This way we can use either a reader or a
+//! // writer connection.
+//! async fn some_select(
+//!     mut conn: impl TypedConnection
+//! ) -> sqlx::Result<()> {
+//!     let n: i32 = sqlx::query_scalar("SELECT 2")
+//!         .fetch_one(conn.get_inner())
+//!         .await?;
+//!     assert_eq!(n, 2);
+//!     Ok(())
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() -> sqlx::Result<()> {
+//! // This is not how you acquire the production database pool. This
+//! // is for demonstration only. Use `open_and_setup`.
+//! let db = sqlx::SqlitePool::connect(":memory:").await?;
+//! let mut conn = Pool::new(db).writer_conn().await?;
+//!
+//! some_insert(&mut conn).await?;
+//! some_select(&mut conn).await?;
+//! # Ok (()) }
+//! ```
+
 use std::{marker::PhantomData, num::NonZero, time::Duration};
 
+use bool::Bool;
 use futures::future::BoxFuture;
 use sqlx::{
     migrate::MigrateDatabase,
@@ -7,6 +61,8 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     Connection, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
+
+pub use bool::{False, True};
 
 /// We maintain two database connection pools.
 ///
@@ -17,7 +73,6 @@ use sqlx::{
 /// Conversely, we have _many_ read connections,
 /// ensuring that usually there need not be any waiting for any
 /// read paths on these.
-///
 ///
 /// This also allows us to customize different timeouts
 /// and warning thresholds for each pool.
@@ -36,6 +91,14 @@ impl DBPools {
             write_pool: Pool::new(pool.clone()),
         }
     }
+    /// Access the pool containing the reader connections.
+    pub fn reader_pool(&self) -> &Pool<Reader> {
+        &self.read_pool
+    }
+    /// Access the pool containing the writer connection.
+    pub fn writer_pool(&self) -> &Pool<Writer> {
+        &self.write_pool
+    }
     /// Access a reader connection.
     ///
     /// Such a connection can't be used to make changes to the state in the database.
@@ -48,14 +111,6 @@ impl DBPools {
     /// that make changes to the state in the database.
     pub async fn writer_conn(&self) -> Result<Conn<Writer, NoTransaction>, sqlx::Error> {
         self.write_pool.acquire::<Writer>().await
-    }
-    /// Access the pool containing the reader connections.
-    pub fn reader_pool(&self) -> &Pool<Reader> {
-        &self.read_pool
-    }
-    /// Access the pool containing the writer connection.
-    pub fn writer_pool(&self) -> &Pool<Writer> {
-        &self.write_pool
     }
 }
 
@@ -144,6 +199,7 @@ pub trait TypedConnection {
 pub trait WriterConnection: TypedConnection<Writer = True> {
     type Transaction: Bool;
 }
+
 impl<T> WriterConnection for T
 where
     T: TypedConnection<Writer = True>,
@@ -151,18 +207,36 @@ where
     type Transaction = <T as TypedConnection>::Transaction;
 }
 
-pub enum True {}
-pub enum False {}
+impl<C> TypedConnection for &mut C
+where
+    C: TypedConnection,
+{
+    type Writer = <C as TypedConnection>::Writer;
+    type Transaction = <C as TypedConnection>::Transaction;
 
-pub trait Bool {
-    type If<Then, Else>;
+    fn get_inner(&mut self) -> &mut SqliteConnection {
+        <C as TypedConnection>::get_inner(*self)
+    }
 }
 
-impl Bool for True {
-    type If<Then, Else> = Then;
-}
-impl Bool for False {
-    type If<Then, Else> = Else;
+pub mod bool {
+    //! Home of the sealed [`Bool`] trait, used for indicating constraints on
+    //! a [`TypedConnection`][super::TypedConnection].
+
+    pub enum True {}
+    pub enum False {}
+
+    /// A type-level boolean
+    pub trait Bool {
+        type If<Then, Else>;
+    }
+
+    impl Bool for True {
+        type If<Then, Else> = Then;
+    }
+    impl Bool for False {
+        type If<Then, Else> = Else;
+    }
 }
 
 impl TypedConnection for Conn<Writer, NoTransaction>
