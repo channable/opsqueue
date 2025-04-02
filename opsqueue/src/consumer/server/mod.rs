@@ -143,14 +143,14 @@ pub enum CompleterMessage {
 #[derive(Debug)]
 pub struct Completer {
     mailbox: tokio::sync::mpsc::Receiver<CompleterMessage>,
-    pool: db::Pool<db::Writer>,
+    pool: db::WriterPool,
     dispatcher: Dispatcher,
     count: usize,
 }
 
 impl Completer {
     pub fn new(
-        pool: &db::Pool<db::Writer>,
+        pool: &db::WriterPool,
         dispatcher: &Dispatcher,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);

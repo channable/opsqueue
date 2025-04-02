@@ -158,7 +158,7 @@ impl InternalProducerClientError {
 mod tests {
     use crate::{
         common::submission::{self, SubmissionStatus},
-        db::{DBPools, Pool, Writer},
+        db::{DBPools, WriterPool},
         producer::common::ChunkContents,
     };
 
@@ -182,7 +182,7 @@ mod tests {
         let count = client.count_submissions().await.expect("Should be OK");
         assert_eq!(count, 0);
 
-        let pool = Pool::<Writer>::new(pool);
+        let pool = WriterPool::new(pool);
         let mut conn = pool.writer_conn().await.unwrap();
         submission::db::insert_submission_from_chunks(
             None,
@@ -204,7 +204,7 @@ mod tests {
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);
 
-        let pool = Pool::<Writer>::new(pool);
+        let pool = WriterPool::new(pool);
         let mut conn = pool.writer_conn().await.unwrap();
         let count = submission::db::count_submissions(&mut conn)
             .await

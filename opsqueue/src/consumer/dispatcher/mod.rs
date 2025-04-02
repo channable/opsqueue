@@ -6,12 +6,12 @@ use crate::{
         chunk::{Chunk, ChunkId},
         submission::Submission,
     },
-    db::{self, Conn},
+    db::{Pool, ReaderPool, TypedConnection},
 };
 use futures::stream::{StreamExt, TryStreamExt};
 use metastate::MetaState;
 use reserver::Reserver;
-use sqlx::{QueryBuilder, SqliteConnection};
+use sqlx::QueryBuilder;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -60,7 +60,7 @@ impl Dispatcher {
 
     pub async fn fetch_and_reserve_chunks(
         &self,
-        pool: &db::Pool<db::Reader>,
+        pool: &ReaderPool,
         strategy: strategy::Strategy,
         limit: usize,
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
@@ -70,7 +70,7 @@ impl Dispatcher {
         let stream = strategy
             .build_query(&mut query_builder, &self.metastate)
             .build_query_as()
-            .fetch(&mut *conn);
+            .fetch(conn.get_inner());
         stream
             .try_filter_map(|chunk| self.reserve_chunk(chunk, stale_chunks_notifier))
             .and_then(|chunk| self.join_chunk_with_submission_info(chunk, pool))
@@ -95,7 +95,7 @@ impl Dispatcher {
     async fn join_chunk_with_submission_info<T>(
         &self,
         chunk: Chunk,
-        pool: &db::Pool<T>,
+        pool: &Pool<T>,
     ) -> Result<(Chunk, Submission), sqlx::Error> {
         let mut conn = pool.reader_conn().await?;
         let submission =
@@ -118,15 +118,12 @@ impl Dispatcher {
         }
     }
 
-    pub async fn finish_reservation<R, Tx>(
+    pub async fn finish_reservation(
         &self,
-        conn: &mut Conn<R, Tx>,
+        conn: impl TypedConnection,
         id: ChunkId,
         delayed: bool,
-    ) -> Option<Instant>
-    where
-        Conn<R, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+    ) -> Option<Instant> {
         let maybe_started_at = self.reserver.finish_reservation(&id, delayed).await;
 
         // In the highly unlikely event that this DB query fails,

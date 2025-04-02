@@ -167,9 +167,9 @@ pub mod db {
     use super::*;
     use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
     use crate::common::StrategicMetadataMap;
-    use crate::db::{Conn, True, TypedConnection, Writer, WriterConnection};
+    use crate::db::{True, TypedConnection, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};
-    use sqlx::{query, query_as, SqliteConnection};
+    use sqlx::{query, query_as};
     use sqlx::{QueryBuilder, Sqlite};
 
     impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
@@ -211,17 +211,14 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(conn))]
-    pub async fn insert_chunk<Tx>(chunk: Chunk, conn: &mut Conn<Writer, Tx>) -> sqlx::Result<()>
-    where
-        Conn<Writer, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+    pub async fn insert_chunk(chunk: Chunk, mut conn: impl WriterConnection) -> sqlx::Result<()> {
         query!(
             "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES ($1, $2, $3)",
             chunk.submission_id,
             chunk.chunk_index,
             chunk.input_content
         )
-        .execute(&mut **conn)
+        .execute(conn.get_inner())
         .await?;
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
         Ok(())
@@ -232,7 +229,7 @@ pub mod db {
         chunk: Chunk,
         metadata_key: &[u8],
         metadata_value: &[u8],
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         query!(
             "
@@ -258,7 +255,7 @@ pub mod db {
     pub async fn complete_chunk(
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
         let res = conn
             .run_tx(move |mut tx| {
@@ -289,7 +286,7 @@ pub mod db {
     pub async fn complete_chunk_raw(
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
-        tx: &mut impl WriterConnection<Transaction = True>,
+        mut tx: impl WriterConnection<Transaction = True>,
     ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
         query!(
@@ -337,7 +334,7 @@ pub mod db {
     pub async fn retry_or_fail_chunk(
         chunk_id: ChunkId,
         failure: String,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<bool> {
         let failed_permanently = conn
             .run_tx(move |mut tx| {
@@ -385,7 +382,7 @@ pub mod db {
     pub async fn move_chunk_to_failed_chunks(
         chunk_id: ChunkId,
         failure: String,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
         let ChunkId {
@@ -419,7 +416,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk(
         full_chunk_id: ChunkId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> sqlx::Result<Chunk> {
         query_as!(
             Chunk,
@@ -441,7 +438,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk_completed(
         full_chunk_id: ChunkId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> sqlx::Result<ChunkCompleted> {
         query_as!(
             ChunkCompleted,
@@ -463,7 +460,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk_failed(
         full_chunk_id: ChunkId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> sqlx::Result<ChunkFailed> {
         query_as!(
             ChunkFailed,
@@ -492,7 +489,7 @@ pub mod db {
     /// (At that time it is still available on the submission level).
     pub async fn get_chunk_strategic_metadata(
         full_chunk_id: ChunkId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> Result<StrategicMetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
@@ -513,7 +510,7 @@ pub mod db {
     #[tracing::instrument(skip(chunks, conn))]
     pub async fn insert_many_chunks(
         chunks: &[Chunk],
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         const ROWS_PER_QUERY: usize = 1000;
 
@@ -541,7 +538,7 @@ pub mod db {
     pub async fn insert_many_chunks_metadata(
         chunks: &[Chunk],
         metadata: &StrategicMetadataMap,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         use itertools::Itertools;
         const ROWS_PER_QUERY: usize = 1000;
@@ -575,7 +572,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn skip_remaining_chunks(
         submission_id: SubmissionId,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
 
@@ -601,7 +598,7 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks(db: &mut impl TypedConnection) -> sqlx::Result<u63> {
+    pub async fn count_chunks(mut db: impl TypedConnection) -> sqlx::Result<u63> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
             .fetch_one(db.get_inner())
             .await?;
@@ -610,7 +607,7 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_completed(db: &mut impl TypedConnection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_completed(mut db: impl TypedConnection) -> sqlx::Result<u63> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
             .fetch_one(db.get_inner())
             .await?;
@@ -619,7 +616,7 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_failed(db: &mut impl TypedConnection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_failed(mut db: impl TypedConnection) -> sqlx::Result<u63> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
             .fetch_one(db.get_inner())
             .await?;
@@ -633,7 +630,7 @@ pub mod db {
 pub mod test {
     use crate::common::submission::db::insert_submission_raw;
     use crate::common::submission::{Submission, SubmissionStatus};
-    use crate::db::{Pool, TypedConnection as _, Writer};
+    use crate::db::{Pool, TypedConnection as _, WriterPool};
 
     use super::db::*;
     use super::*;
@@ -678,7 +675,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_complete_chunk_raw(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
         let mut submission = Submission::new();
@@ -716,7 +713,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
-        let db: Pool<Writer> = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let submission_id = crate::common::submission::db::insert_submission_from_chunks(
             None,

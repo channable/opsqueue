@@ -187,10 +187,10 @@ pub mod db {
             errors::{DatabaseError, SubmissionNotFound, E},
             StrategicMetadataMap,
         },
-        db::{Conn, Pool, Writer, WriterConnection},
+        db::{WriterConnection, WriterPool},
     };
     #[cfg(feature = "server-logic")]
-    use sqlx::{query, query_as, Connection, Sqlite, SqliteConnection};
+    use sqlx::{query, query_as, Sqlite};
 
     #[cfg(feature = "server-logic")]
     use axum_prometheus::metrics::{counter, histogram};
@@ -238,7 +238,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn insert_submission_raw(
         submission: &Submission,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
@@ -261,7 +261,7 @@ pub mod db {
     pub async fn insert_submission_metadata_raw(
         submission: &Submission,
         strategic_metadata: &StrategicMetadataMap,
-        conn: &mut impl WriterConnection<Transaction = True>,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), DatabaseError> {
         for (key, value) in strategic_metadata {
             sqlx::query!(
@@ -286,11 +286,11 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(chunks, conn))]
-    pub(crate) async fn insert_submission<'a>(
+    pub(crate) async fn insert_submission(
         submission: Submission,
         chunks: Vec<Chunk>,
         strategic_metadata: StrategicMetadataMap,
-        conn: &'a mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> Result<(), DatabaseError> {
         use axum_prometheus::metrics::{counter, gauge};
         use futures::FutureExt as _;
@@ -333,7 +333,7 @@ pub mod db {
         chunks_contents: Vec<chunk::Content>,
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = Submission::generate_id();
         let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
@@ -354,7 +354,7 @@ pub mod db {
                 Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
             })
             .collect();
-        insert_submission(submission, iter, strategic_metadata, conn).await?;
+        insert_submission(submission, iter, strategic_metadata, &mut conn).await?;
         // Empty submissions get special handling: we mark them as completed right away.
         // See https://github.com/channable/opsqueue/issues/86 for rationale.
         if len == 0 {
@@ -377,7 +377,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn get_submission(
         id: SubmissionId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
         let submission = query_as!(
             Submission,
@@ -403,13 +403,10 @@ pub mod db {
     /// Retrieves the earlier stored strategic metadata.
     ///
     /// Primarily for testing and introspection.
-    pub async fn get_submission_strategic_metadata<R, SomeTx>(
+    pub async fn get_submission_strategic_metadata(
         id: SubmissionId,
-        conn: &mut Conn<R, SomeTx>,
-    ) -> Result<StrategicMetadataMap, DatabaseError>
-    where
-        Conn<R, SomeTx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+        mut conn: impl TypedConnection,
+    ) -> Result<StrategicMetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
             r#"
@@ -418,7 +415,7 @@ pub mod db {
         "#,
             id,
         )
-        .fetch(&mut **conn)
+        .fetch(conn.get_inner())
         .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
         .try_collect()
         .await?;
@@ -428,7 +425,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn lookup_id_by_prefix(
         prefix: &str,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> Result<Option<SubmissionId>, DatabaseError> {
         let row = query!(
             r#"
@@ -451,7 +448,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn submission_status(
         id: SubmissionId,
-        conn: &mut impl TypedConnection,
+        mut conn: impl TypedConnection,
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
         // from InProgress to Completed/Failed in-between the queries.
@@ -533,7 +530,7 @@ pub mod db {
     /// Otherwise, it returns `false`.
     pub async fn maybe_complete_submission(
         id: SubmissionId,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
         conn.run_tx(move |mut tx| {
             Box::pin(async move {
@@ -555,7 +552,7 @@ pub mod db {
     /// Do not call directly! MUST be called inside a transaction.
     pub(super) async fn complete_submission_raw(
         id: SubmissionId,
-        conn: &mut impl WriterConnection<Transaction = True>,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
         query!(
@@ -593,7 +590,7 @@ pub mod db {
     pub(super) async fn fail_submission_raw(
         id: SubmissionId,
         failed_chunk_id: ChunkIndex,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
 
@@ -626,7 +623,7 @@ pub mod db {
         id: SubmissionId,
         failed_chunk_index: ChunkIndex,
         failure: String,
-        conn: &mut impl WriterConnection,
+        mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         conn.run_tx(move |mut tx| {
             Box::pin(
@@ -641,13 +638,13 @@ pub mod db {
         id: SubmissionId,
         failed_chunk_index: ChunkIndex,
         failure: String,
-        conn: &mut impl TypedConnection<Writer = True, Transaction = True>,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> sqlx::Result<()> {
-        fail_submission_raw(id, failed_chunk_index, conn).await?;
+        fail_submission_raw(id, failed_chunk_index, &mut conn).await?;
         super::chunk::db::move_chunk_to_failed_chunks(
             (id, failed_chunk_index).into(),
             failure,
-            conn,
+            &mut conn,
         )
         .await?;
         super::chunk::db::skip_remaining_chunks(id, conn).await?;
@@ -656,36 +653,27 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions<R, Tx>(db: &mut Conn<R, Tx>) -> sqlx::Result<usize>
-    where
-        Conn<R, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+    pub async fn count_submissions(mut db: impl TypedConnection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
-            .fetch_one(&mut **db)
+            .fetch_one(db.get_inner())
             .await?;
         Ok(count.count as usize)
     }
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_completed<R, Tx>(db: &mut Conn<R, Tx>) -> sqlx::Result<usize>
-    where
-        Conn<R, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+    pub async fn count_submissions_completed(mut db: impl TypedConnection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
-            .fetch_one(&mut **db)
+            .fetch_one(db.get_inner())
             .await?;
         Ok(count.count as usize)
     }
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_failed<R, Tx>(db: &mut Conn<R, Tx>) -> sqlx::Result<usize>
-    where
-        Conn<R, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-    {
+    pub async fn count_submissions_failed(mut db: impl TypedConnection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
-            .fetch_one(&mut **db)
+            .fetch_one(db.get_inner())
             .await?;
         Ok(count.count as usize)
     }
@@ -696,11 +684,11 @@ pub mod db {
     /// Submissions/chunks that are neither failed nor completed are not touched.
     #[tracing::instrument(skip(conn))]
     pub async fn cleanup_old(
-        conn: &mut SqliteConnection,
+        mut conn: impl TypedConnection,
         older_than: DateTime<Utc>,
     ) -> sqlx::Result<()> {
         tracing::info!("Cleaning up old completed/failed submissions...");
-        conn.transaction(|tx| {
+        conn.run_tx(move |mut tx| {
             Box::pin(async move {
                 // Clean up old submissions_metadata
                 query!(
@@ -710,7 +698,7 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?;
                 query!(
                     "DELETE FROM submissions_metadata
@@ -719,7 +707,7 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?;
 
                 // Clean up old submissions:
@@ -727,26 +715,26 @@ pub mod db {
                     "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?.rows_affected();
                 let n_submissions_failed = query!(
                     "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?.rows_affected();
 
                 let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?.rows_affected();
                 let n_chunks_failed = query!(
                     "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(&mut **tx)
+                .execute(tx.get_inner())
                 .await?.rows_affected();
 
                 tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks)");
@@ -757,7 +745,7 @@ pub mod db {
         .await
     }
 
-    pub async fn periodically_cleanup_old(db: &Pool<Writer>, max_age: Duration) {
+    pub async fn periodically_cleanup_old(db: &WriterPool, max_age: Duration) {
         const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
         loop {
             let cutoff = Utc::now() - max_age;
@@ -850,7 +838,7 @@ pub mod test {
         assert!(fetched_metadata == strategic_metadata);
 
         let res = sqlx::query!("SELECT * FROM chunks_metadata;")
-            .fetch_all(&mut *conn)
+            .fetch_all(conn.get_inner())
             .await
             .unwrap();
         dbg!(res);
