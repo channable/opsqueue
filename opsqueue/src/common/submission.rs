@@ -2,12 +2,10 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use tracing::{info, warn};
 use ux_serde::u63;
 
 use super::chunk::{self, Chunk, ChunkFailed};
 use super::chunk::{ChunkCount, ChunkIndex};
-use crate::db::{Connection, True};
 
 pub type Metadata = Vec<u8>;
 
@@ -187,12 +185,11 @@ pub mod db {
             errors::{DatabaseError, SubmissionNotFound, E},
             StrategicMetadataMap,
         },
-        db::{WriterConnection, WriterPool},
+        db::{Connection, True, WriterConnection, WriterPool},
     };
-    #[cfg(feature = "server-logic")]
     use sqlx::{query, query_as, Sqlite};
+    use tracing::{info, warn};
 
-    #[cfg(feature = "server-logic")]
     use axum_prometheus::metrics::{counter, histogram};
 
     use super::*;
@@ -284,7 +281,6 @@ pub mod db {
         Ok(())
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(chunks, conn))]
     pub(crate) async fn insert_submission(
         submission: Submission,
@@ -326,7 +322,6 @@ pub mod db {
     /// Creates a new submission with the given chunks and inserts it into the database.
     ///
     /// If the number of chunks is 0, the submission is marked as completed immediately afterwards.
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(metadata, chunks_contents, conn))]
     pub async fn insert_submission_from_chunks(
         prefix: Option<String>,
@@ -373,7 +368,6 @@ pub mod db {
         Ok(submission_id)
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     pub async fn get_submission(
         id: SubmissionId,
@@ -444,7 +438,6 @@ pub mod db {
         Ok(row.map(|row| row.id))
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     pub async fn submission_status(
         id: SubmissionId,
@@ -522,7 +515,6 @@ pub mod db {
         Ok(None)
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     /// Completes the submission, iff all chunks have been completed.
     ///
@@ -547,7 +539,6 @@ pub mod db {
         .await
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     /// Do not call directly! MUST be called inside a transaction.
     pub(super) async fn complete_submission_raw(
@@ -585,7 +576,6 @@ pub mod db {
         Ok(())
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     pub(super) async fn fail_submission_raw(
         id: SubmissionId,
@@ -617,7 +607,6 @@ pub mod db {
         Ok(())
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(conn))]
     pub async fn fail_submission(
         id: SubmissionId,
@@ -651,7 +640,6 @@ pub mod db {
         Ok(())
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
     pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
@@ -660,7 +648,6 @@ pub mod db {
         Ok(count.count as usize)
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
     pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
@@ -669,7 +656,6 @@ pub mod db {
         Ok(count.count as usize)
     }
 
-    #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
     pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
@@ -771,7 +757,7 @@ pub mod test {
     use chrono::Utc;
 
     use crate::common::StrategicMetadataMap;
-    use crate::db::WriterPool;
+    use crate::db::{Connection as _, WriterPool};
 
     use super::db::*;
     use super::*;

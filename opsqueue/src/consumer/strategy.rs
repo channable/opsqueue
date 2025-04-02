@@ -1,8 +1,10 @@
+#[cfg(feature = "server-logic")]
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server-logic")]
 use sqlx::{QueryBuilder, Sqlite};
 
+#[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
 
 #[cfg(feature = "server-logic")]
