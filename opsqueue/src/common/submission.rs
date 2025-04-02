@@ -7,7 +7,7 @@ use ux_serde::u63;
 
 use super::chunk::{self, Chunk, ChunkFailed};
 use super::chunk::{ChunkCount, ChunkIndex};
-use crate::db::{True, TypedConnection};
+use crate::db::{Connection, True};
 
 pub type Metadata = Vec<u8>;
 
@@ -299,7 +299,7 @@ pub mod db {
         tracing::debug!("Inserting submission {}", submission.id);
 
         let res = conn
-            .run_tx(move |mut tx| {
+            .transaction(move |mut tx| {
                 async move {
                     insert_submission_raw(&submission, &mut tx).await?;
                     insert_submission_metadata_raw(&submission, &strategic_metadata, &mut tx)
@@ -377,7 +377,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn get_submission(
         id: SubmissionId,
-        mut conn: impl TypedConnection,
+        mut conn: impl Connection,
     ) -> Result<Submission, E<DatabaseError, SubmissionNotFound>> {
         let submission = query_as!(
             Submission,
@@ -405,7 +405,7 @@ pub mod db {
     /// Primarily for testing and introspection.
     pub async fn get_submission_strategic_metadata(
         id: SubmissionId,
-        mut conn: impl TypedConnection,
+        mut conn: impl Connection,
     ) -> Result<StrategicMetadataMap, DatabaseError> {
         use futures::{future, TryStreamExt};
         let metadata = query!(
@@ -425,7 +425,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn lookup_id_by_prefix(
         prefix: &str,
-        mut conn: impl TypedConnection,
+        mut conn: impl Connection,
     ) -> Result<Option<SubmissionId>, DatabaseError> {
         let row = query!(
             r#"
@@ -448,7 +448,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub async fn submission_status(
         id: SubmissionId,
-        mut conn: impl TypedConnection,
+        mut conn: impl Connection,
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
         // from InProgress to Completed/Failed in-between the queries.
@@ -532,7 +532,7 @@ pub mod db {
         id: SubmissionId,
         mut conn: impl WriterConnection,
     ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
-        conn.run_tx(move |mut tx| {
+        conn.transaction(move |mut tx| {
             Box::pin(async move {
                 let submission = get_submission(id, &mut tx).await?;
 
@@ -625,7 +625,7 @@ pub mod db {
         failure: String,
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
-        conn.run_tx(move |mut tx| {
+        conn.transaction(move |mut tx| {
             Box::pin(
                 async move { fail_submission_notx(id, failed_chunk_index, failure, &mut tx).await },
             )
@@ -653,7 +653,7 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions(mut db: impl TypedConnection) -> sqlx::Result<usize> {
+    pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions;")
             .fetch_one(db.get_inner())
             .await?;
@@ -662,7 +662,7 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_completed(mut db: impl TypedConnection) -> sqlx::Result<usize> {
+    pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_completed;")
             .fetch_one(db.get_inner())
             .await?;
@@ -671,7 +671,7 @@ pub mod db {
 
     #[cfg(feature = "server-logic")]
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_failed(mut db: impl TypedConnection) -> sqlx::Result<usize> {
+    pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<usize> {
         let count = sqlx::query!("SELECT COUNT(1) as count FROM submissions_failed;")
             .fetch_one(db.get_inner())
             .await?;
@@ -684,11 +684,11 @@ pub mod db {
     /// Submissions/chunks that are neither failed nor completed are not touched.
     #[tracing::instrument(skip(conn))]
     pub async fn cleanup_old(
-        mut conn: impl TypedConnection,
+        mut conn: impl Connection,
         older_than: DateTime<Utc>,
     ) -> sqlx::Result<()> {
         tracing::info!("Cleaning up old completed/failed submissions...");
-        conn.run_tx(move |mut tx| {
+        conn.transaction(move |mut tx| {
             Box::pin(async move {
                 // Clean up old submissions_metadata
                 query!(
@@ -771,14 +771,14 @@ pub mod test {
     use chrono::Utc;
 
     use crate::common::StrategicMetadataMap;
-    use crate::db::Pool;
+    use crate::db::WriterPool;
 
     use super::db::*;
     use super::*;
 
     #[sqlx::test]
     pub async fn test_insert_submission(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
         assert!(count_submissions(&mut conn).await.unwrap() == 0);
@@ -797,7 +797,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_get_submission(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -818,7 +818,7 @@ pub mod test {
             [("company_id".to_string(), 123), ("flavour".to_string(), 42)]
                 .into_iter()
                 .collect();
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
 
@@ -857,34 +857,31 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_complete_submission_raw(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
-        let mut w_conn = db.writer_conn().await.unwrap();
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, Default::default(), &mut w_conn)
+        insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
             .await
             .expect("insertion failed");
 
-        w_conn
-            .run_tx(move |mut tx| {
-                Box::pin(async move { complete_submission_raw(submission.id, &mut tx).await })
-            })
-            .await
-            .unwrap();
+        conn.transaction(move |mut tx| {
+            Box::pin(async move { complete_submission_raw(submission.id, &mut tx).await })
+        })
+        .await
+        .unwrap();
 
-        // If this does not compile, these read-only queries require writer access.
-        let mut r_conn = db.reader_conn().await.unwrap();
-        assert_matches!(count_submissions(&mut r_conn).await, Ok(0));
-        assert_matches!(count_submissions_completed(&mut r_conn).await, Ok(1));
-        assert_matches!(count_submissions_failed(&mut r_conn).await, Ok(0));
+        assert_matches!(count_submissions(&mut conn).await, Ok(0));
+        assert_matches!(count_submissions_completed(&mut conn).await, Ok(1));
+        assert_matches!(count_submissions_failed(&mut conn).await, Ok(0));
     }
 
     #[sqlx::test]
     pub async fn test_fail_submission_raw(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -910,7 +907,7 @@ pub mod test {
 
     #[sqlx::test]
     pub async fn test_cleanup_old(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
@@ -1031,7 +1028,7 @@ pub mod test {
     #[sqlx::test]
     /// Test whether empty submissions are marked as completed right away by `insert_submission_from_chunks`.
     pub async fn auto_complete_empty_submission(db: sqlx::SqlitePool) {
-        let db = Pool::new(db);
+        let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         insert_submission_from_chunks(
             // prefix

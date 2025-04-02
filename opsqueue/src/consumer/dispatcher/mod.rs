@@ -6,9 +6,9 @@ use crate::{
         chunk::{Chunk, ChunkId},
         submission::Submission,
     },
-    db::{Pool, ReaderPool, TypedConnection},
+    db::{magic::Bool, Connection, Pool, ReaderPool},
 };
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::{StreamExt as _, TryStreamExt as _};
 use metastate::MetaState;
 use reserver::Reserver;
 use sqlx::QueryBuilder;
@@ -92,12 +92,12 @@ impl Dispatcher {
         Ok(val)
     }
 
-    async fn join_chunk_with_submission_info<T>(
+    async fn join_chunk_with_submission_info(
         &self,
         chunk: Chunk,
-        pool: &Pool<T>,
+        pool: &Pool<impl Bool>,
     ) -> Result<(Chunk, Submission), sqlx::Error> {
-        let mut conn = pool.reader_conn().await?;
+        let mut conn = pool.acquire().await?;
         let submission =
             crate::common::submission::db::get_submission(chunk.submission_id, &mut conn)
                 .await
@@ -120,7 +120,7 @@ impl Dispatcher {
 
     pub async fn finish_reservation(
         &self,
-        conn: impl TypedConnection,
+        conn: impl Connection,
         id: ChunkId,
         delayed: bool,
     ) -> Option<Instant> {
