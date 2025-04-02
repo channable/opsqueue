@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, num::NonZero, ops::DerefMut, time::Duration};
+use std::{marker::PhantomData, num::NonZero, time::Duration};
 
 use futures::future::BoxFuture;
 use sqlx::{
@@ -47,7 +47,7 @@ impl DBPools {
     /// This connection can be used both for functions requiring read-only access and for functions
     /// that make changes to the state in the database.
     pub async fn writer_conn(&self) -> Result<Conn<Writer, NoTransaction>, sqlx::Error> {
-        self.write_pool.acquire().await
+        self.write_pool.acquire::<Writer>().await
     }
     /// Access the pool containing the reader connections.
     pub fn reader_pool(&self) -> &Pool<Reader> {
@@ -102,34 +102,110 @@ impl Pool<Writer> {
 }
 
 #[derive(Debug)]
-pub struct Conn<T, Tx> {
+pub struct Conn<Xs, Tx> {
     inner: InnerConn<Tx>,
-    _type: PhantomData<T>,
+    _type: PhantomData<Xs>,
 }
 
-impl<T, Tx> Conn<T, Tx>
-where
-    Conn<T, Tx>: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
-{
-    pub async fn run_tx<O, E, F>(&mut self, f: F) -> Result<O, E>
+pub trait TypedConnection {
+    /// Indicates whether this is a writer connection or not. This can be used to constrain the
+    /// allowed connections to only connections obtained from the writer pool, so that the user
+    /// will be alerted to misuse
+    type Writer: Bool;
+    type Transaction: Bool;
+
+    /// Access the [`sqlx`] connection.
+    fn get_inner(&mut self) -> &mut SqliteConnection;
+
+    #[allow(async_fn_in_trait)]
+    async fn run_tx<O, E, F>(&mut self, f: F) -> Result<O, E>
     where
-        for<'t> F: FnOnce(Conn<T, TxRef<'t, '_>>) -> BoxFuture<'t, Result<O, E>> + Send + Sync + 't,
+        for<'t> F: FnOnce(
+                Conn<<Self::Writer as Bool>::If<Writer, Reader>, TxRef<'t, '_>>,
+            ) -> BoxFuture<'t, Result<O, E>>
+            + Send
+            + Sync
+            + 't,
         O: Send,
         E: From<sqlx::Error> + Send,
     {
-        let inner: &mut SqliteConnection = <Self as DerefMut>::deref_mut(self);
-        inner
+        self.get_inner()
             .transaction(move |tx| {
-                let conn = Conn::from_tx(tx);
+                let conn = Conn {
+                    inner: InnerConn::InTransaction(tx),
+                    _type: PhantomData,
+                };
                 f(conn)
             })
             .await
     }
-    fn from_tx<'t, 'c>(tx: TxRef<'t, 'c>) -> Conn<T, TxRef<'t, 'c>> {
-        Conn {
-            inner: InnerConn::InTransaction(tx),
-            _type: PhantomData,
-        }
+}
+
+pub trait WriterConnection: TypedConnection<Writer = True> {
+    type Transaction: Bool;
+}
+impl<T> WriterConnection for T
+where
+    T: TypedConnection<Writer = True>,
+{
+    type Transaction = <T as TypedConnection>::Transaction;
+}
+
+pub enum True {}
+pub enum False {}
+
+pub trait Bool {
+    type If<Then, Else>;
+}
+
+impl Bool for True {
+    type If<Then, Else> = Then;
+}
+impl Bool for False {
+    type If<Then, Else> = Else;
+}
+
+impl TypedConnection for Conn<Writer, NoTransaction>
+where
+    Self: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+{
+    type Writer = True;
+    type Transaction = False;
+    fn get_inner(&mut self) -> &mut SqliteConnection {
+        &mut *self
+    }
+}
+
+impl TypedConnection for Conn<Reader, NoTransaction>
+where
+    Self: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+{
+    type Writer = False;
+    type Transaction = False;
+    fn get_inner(&mut self) -> &mut SqliteConnection {
+        &mut *self
+    }
+}
+
+impl TypedConnection for Conn<Writer, TxRef<'_, '_>>
+where
+    Self: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+{
+    type Writer = True;
+    type Transaction = True;
+    fn get_inner(&mut self) -> &mut SqliteConnection {
+        &mut *self
+    }
+}
+
+impl TypedConnection for Conn<Reader, TxRef<'_, '_>>
+where
+    Self: std::ops::Deref<Target = SqliteConnection> + std::ops::DerefMut,
+{
+    type Writer = False;
+    type Transaction = True;
+    fn get_inner(&mut self) -> &mut SqliteConnection {
+        &mut *self
     }
 }
 
