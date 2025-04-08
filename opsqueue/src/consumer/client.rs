@@ -396,22 +396,19 @@ mod tests {
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
-    use crate::db::DBPools;
+    use crate::db;
 
     use super::*;
 
     #[sqlx::test]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
-        let db_pools = DBPools {
-            read_pool: pool.clone(),
-            write_pool: pool.clone(),
-        };
+        let db_pools = db::DBPools::from_test_pool(&pool);
         let uri = "0.0.0.0:10083";
         let ws_uri = "ws://0.0.0.0:10083";
         let cancellation_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
 
-        let mut conn = pool.acquire().await.unwrap();
+        let mut conn = db_pools.writer_conn().await.unwrap();
         let input_chunks = vec![
             Some("a".into()),
             Some("b".into()),

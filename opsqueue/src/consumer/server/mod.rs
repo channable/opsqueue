@@ -13,7 +13,11 @@ use axum_prometheus::metrics::{gauge, histogram};
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
-use crate::{common::chunk::ChunkId, config::Config, db::DBPools};
+use crate::{
+    common::chunk::ChunkId,
+    config::Config,
+    db::{self, DBPools},
+};
 
 use super::dispatcher::Dispatcher;
 
@@ -68,7 +72,7 @@ impl ServerState {
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) = Completer::new(&pool.write_pool, &dispatcher);
+        let (completer, completer_tx) = Completer::new(pool.writer_pool(), &dispatcher);
         Self {
             pool,
             completer: Some(completer),
@@ -139,14 +143,14 @@ pub enum CompleterMessage {
 #[derive(Debug)]
 pub struct Completer {
     mailbox: tokio::sync::mpsc::Receiver<CompleterMessage>,
-    pool: sqlx::SqlitePool,
+    pool: db::WriterPool,
     dispatcher: Dispatcher,
     count: usize,
 }
 
 impl Completer {
     pub fn new(
-        pool: &sqlx::SqlitePool,
+        pool: &db::WriterPool,
         dispatcher: &Dispatcher,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
@@ -182,7 +186,7 @@ impl Completer {
         let start = tokio::time::Instant::now();
 
         let res: anyhow::Result<()> = async move {
-            let mut conn = self.pool.acquire().await?;
+            let mut conn = self.pool.writer_conn().await?;
 
             match msg {
                 CompleterMessage::Complete {
@@ -199,7 +203,7 @@ impl Completer {
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self
                         .dispatcher
-                        .finish_reservation(&mut *conn, id, true)
+                        .finish_reservation(&mut conn, id, true)
                         .await
                     {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
@@ -223,7 +227,7 @@ impl Completer {
                     let maybe_started_at = self
                         .dispatcher
                         .finish_reservation(
-                            &mut *conn,
+                            &mut conn,
                             id,
                             *failed_permanently.as_ref().unwrap_or(&false),
                         )

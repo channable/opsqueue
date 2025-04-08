@@ -90,7 +90,7 @@ async fn submission_status(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
 ) -> Result<Json<Option<submission::SubmissionStatus>>, ServerError> {
-    let mut conn = state.pool.read_pool.acquire().await?;
+    let mut conn = state.pool.reader_conn().await?;
     let status = submission::db::submission_status(submission_id, &mut conn).await?;
     Ok(Json(status))
 }
@@ -99,7 +99,7 @@ async fn lookup_submission_id_by_prefix(
     State(state): State<ServerState>,
     Path(prefix): Path<String>,
 ) -> Result<Json<Option<SubmissionId>>, ServerError> {
-    let mut conn = state.pool.read_pool.acquire().await?;
+    let mut conn = state.pool.reader_conn().await?;
     let submission_id = submission::db::lookup_id_by_prefix(&prefix, &mut conn).await?;
     Ok(Json(submission_id))
 }
@@ -108,7 +108,7 @@ async fn insert_submission(
     State(state): State<ServerState>,
     Json(request): Json<InsertSubmission>,
 ) -> Result<Json<SubmissionId>, ServerError> {
-    let mut conn = state.pool.write_pool.acquire().await?;
+    let mut conn = state.pool.writer_conn().await?;
     let (prefix, chunk_contents) = match request.chunk_contents {
         ChunkContents::Direct { contents } => (None, contents),
         ChunkContents::SeeObjectStorage { prefix, count } => {
@@ -137,13 +137,15 @@ pub struct InsertSubmissionResponse {
 }
 
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
-    let count = submission::db::count_submissions(&state.pool.read_pool).await?;
+    let mut conn = state.pool.reader_conn().await?;
+    let count = submission::db::count_submissions(&mut conn).await?;
     Ok(Json(count.try_into()?))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
 ) -> Result<Json<u32>, ServerError> {
-    let count = submission::db::count_submissions_completed(&state.pool.read_pool).await?;
+    let mut conn = state.pool.reader_conn().await?;
+    let count = submission::db::count_submissions_completed(&mut conn).await?;
     Ok(Json(count.try_into()?))
 }

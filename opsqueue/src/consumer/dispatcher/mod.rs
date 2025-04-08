@@ -1,14 +1,17 @@
 pub mod metastate;
 pub mod reserver;
 
-use crate::common::{
-    chunk::{Chunk, ChunkId},
-    submission::Submission,
+use crate::{
+    common::{
+        chunk::{Chunk, ChunkId},
+        submission::Submission,
+    },
+    db::{magic::Bool, Connection, Pool, ReaderPool},
 };
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::{StreamExt as _, TryStreamExt as _};
 use metastate::MetaState;
 use reserver::Reserver;
-use sqlx::{QueryBuilder, SqliteExecutor, SqlitePool};
+use sqlx::QueryBuilder;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -57,17 +60,17 @@ impl Dispatcher {
 
     pub async fn fetch_and_reserve_chunks(
         &self,
-        pool: &SqlitePool,
+        pool: &ReaderPool,
         strategy: strategy::Strategy,
         limit: usize,
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
-        let mut conn = pool.acquire().await?;
+        let mut conn = pool.reader_conn().await?;
         let mut query_builder = QueryBuilder::new("");
         let stream = strategy
             .build_query(&mut query_builder, &self.metastate)
             .build_query_as()
-            .fetch(&mut *conn);
+            .fetch(conn.get_inner());
         stream
             .try_filter_map(|chunk| self.reserve_chunk(chunk, stale_chunks_notifier))
             .and_then(|chunk| self.join_chunk_with_submission_info(chunk, pool))
@@ -92,16 +95,16 @@ impl Dispatcher {
     async fn join_chunk_with_submission_info(
         &self,
         chunk: Chunk,
-        pool: &SqlitePool,
+        pool: &Pool<impl Bool>,
     ) -> Result<(Chunk, Submission), sqlx::Error> {
-        let conn = &mut pool.acquire().await?;
+        let mut conn = pool.acquire().await?;
         let submission =
-            crate::common::submission::db::get_submission(chunk.submission_id, &mut **conn)
+            crate::common::submission::db::get_submission(chunk.submission_id, &mut conn)
                 .await
                 .expect("get_submission while reserving failed");
         let metadata = crate::common::submission::db::get_submission_strategic_metadata(
             chunk.submission_id,
-            &mut **conn,
+            &mut conn,
         )
         .await
         .expect("get_submission_strategic_metadata while reserving failed");
@@ -117,7 +120,7 @@ impl Dispatcher {
 
     pub async fn finish_reservation(
         &self,
-        conn: impl SqliteExecutor<'_>,
+        conn: impl Connection,
         id: ChunkId,
         delayed: bool,
     ) -> Option<Instant> {
