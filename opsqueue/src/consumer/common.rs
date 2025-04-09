@@ -72,6 +72,10 @@ pub struct ConsumerConfig {
     ///
     /// [Config::heartbeat_interval]: crate::config::Config::heartbeat_interval
     pub heartbeat_interval: Duration,
+    /// The server includes its opsqueue library version
+    /// which is mainly used for logging in the client
+    /// to facilitate recognizing incorrect/potentially incompatible versions
+    pub version_info: String,
 }
 
 #[cfg(feature = "server-logic")]

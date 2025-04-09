@@ -123,15 +123,13 @@ impl OuterClient {
     async fn ensure_initialized(&self) {
         let inner = self.0.load();
         if inner.is_none() || inner.as_ref().is_some_and(|c| !c.is_healthy()) {
-            log::info!("Initializing (or re-initializing) consumer client connection");
             let client = self.initialize().await;
-
-            log::info!("Consumer client connection established");
             self.0.store(Some(Arc::new(client)));
         }
     }
 
     async fn initialize(&self) -> Client {
+        log::info!("Initializing (or re-initializing) consumer client connection...");
         (|| Client::new(&self.1))
         .retry(retry_policy())
         .notify(|err, duration| { log::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
@@ -193,6 +191,13 @@ impl Client {
         let ServerToClientMessage::Init(config) = initial_message?.try_into()? else {
             anyhow::bail!("Expected first message to be client initialization")
         };
+        log::info!(
+            "Consumer client connection established with Opsqueue server {}",
+            config.version_info
+        );
+        if config.version_info != crate::version_info() {
+            log::warn!("Careful! Consumer and Server use different Opsqueue library versions! Client is version {} whereas Server is version {}.", crate::version_info(), config.version_info)
+        }
 
         let healthy = Arc::new(AtomicBool::new(true));
         tokio::spawn(Self::background_task(

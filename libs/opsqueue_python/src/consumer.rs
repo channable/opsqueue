@@ -62,7 +62,7 @@ impl ConsumerClient {
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
         log::info!(
-            "Initializing Opsqueue ProducerClient (Opsqueue version: {})",
+            "Initializing Opsqueue ConsumerClient (Opsqueue version: {})",
             opsqueue::version_info()
         );
         let runtime = start_runtime();
