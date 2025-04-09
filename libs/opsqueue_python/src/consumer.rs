@@ -61,11 +61,15 @@ impl ConsumerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
+        log::info!(
+            "Initializing Opsqueue ProducerClient (Opsqueue version: {})",
+            opsqueue::version_info()
+        );
         let runtime = start_runtime();
         let client = ActualConsumerClient::new(address);
         let object_store_client =
             ObjectStoreClient::new(object_store_url, object_store_options).map_err(CError)?;
-        log::info!("Opsqueue consumer client initialized");
+        log::info!("Opsqueue ConsumerClient initialized");
 
         Ok(ConsumerClient {
             client,

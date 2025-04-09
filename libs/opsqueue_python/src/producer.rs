@@ -62,10 +62,17 @@ impl ProducerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
+        log::info!(
+            "Initializing Opsqueue ProducerClient (Opsqueue version: {})",
+            opsqueue::version_info()
+        );
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
         let object_store_client =
             opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
+
+        log::info!("Opsqueue producer client initialized");
+
         Ok(ProducerClient {
             producer_client,
             object_store_client,
