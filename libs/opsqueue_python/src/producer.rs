@@ -88,6 +88,21 @@ impl ProducerClient {
         )
     }
 
+    /// Return the Opsqueue server's version information
+    pub fn server_version(
+        &self,
+        py: Python<'_>,
+    ) -> CPyResult<String, E<FatalPythonException, InternalProducerClientError>> {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .server_version()
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+        })
+    }
+
     /// Counts the number of ongoing submissions in the queue.
     ///
     /// Completed and failed submissions are not included in the count.

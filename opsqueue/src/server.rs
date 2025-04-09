@@ -97,6 +97,7 @@ pub fn build_router(
     // We do not want to trace, log nor gather metrics for the `ping` or `metrics` endpoints
     let routes = traced_routes
         .route("/ping", get(|| async move { ping(app_healthy_flag).await }))
+        .route("/version", get(version_endpoint))
         .route(
             "/metrics",
             get(|| async move { prometheus_config.1.render() }),
@@ -113,6 +114,10 @@ pub fn build_router(
 
 async fn intentionally_panic_for_tests() {
     panic!("Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration")
+}
+
+pub async fn version_endpoint() -> String {
+    crate::version_info()
 }
 
 fn handle_panic(err: Box<dyn Any + Send + 'static>) -> Response<String> {

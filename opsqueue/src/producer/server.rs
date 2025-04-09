@@ -57,6 +57,7 @@ impl ServerState {
                 get(lookup_submission_id_by_prefix),
             )
             .route("/submissions/:submission_id", get(submission_status))
+            .route("/version", get(crate::server::version_endpoint)) // We're also exposing it here so the producer client can view it
             // TODO: Cancel a submission from the producer side
             .with_state(self)
     }

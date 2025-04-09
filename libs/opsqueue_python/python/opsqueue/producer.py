@@ -65,6 +65,14 @@ class ProducerClient:
             opsqueue_url, object_store_url, object_store_options
         )
 
+    def server_version(self) -> str:
+        """
+        Ask the Opsqueue server/service to return its version information as a string.
+
+        This is mainly useful for debugging
+        """
+        return self.inner.server_version()
+
     def run_submission(
         self,
         ops: Iterable[Any],

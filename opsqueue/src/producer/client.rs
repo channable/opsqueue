@@ -127,6 +127,17 @@ impl Client {
         })
         .await
     }
+
+    pub async fn server_version(&self) -> Result<String, InternalProducerClientError> {
+        let endpoint_url = &self.endpoint_url;
+        let resp = self
+            .http_client
+            .get(format!("http://{endpoint_url}/version"))
+            .send()
+            .await?;
+        let text = resp.text().await?;
+        Ok(text)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
