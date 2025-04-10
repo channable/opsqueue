@@ -20,11 +20,15 @@ build-bin *ARGS:
 [group('build')]
 build-python:
   #!/usr/bin/env bash
-  set -e
+  set -euxo pipefail
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
   maturin develop
+
+[group('build')]
+clean:
+  cargo clean
 
 # Run all tests
 [group('test')]
@@ -39,9 +43,23 @@ test-unit:
 [group('test')]
 test-integration *TEST_ARGS: build-bin build-python
   #!/usr/bin/env bash
-  set -e
+  set -euxo pipefail
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
+
+  pytest --color=yes {{TEST_ARGS}}
+
+# Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
+[group('nix')]
+nix-test-integration *TEST_ARGS:
+  #!/usr/bin/env bash
+  set -euxo pipefail
+  nix_build_python_library_dir=$(just nix-build-python)
+
+  cd libs/opsqueue_python/tests
+  export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.12/site-packages"
+  export OPSQUEUE_VIA_NIX=true
+  export RUST_LOG="opsqueue=debug"
 
   pytest --color=yes {{TEST_ARGS}}
 
