@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections.abc import Sequence
 import typing
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import opentelemetry
 import opentelemetry.trace
@@ -51,7 +51,7 @@ class ConsumerClient:
         )
 
     def __repr__(self) -> str:
-        return self.inner.__repr__()
+        return cast(str, self.inner.__repr__())
 
     def run_each_op(
         self,

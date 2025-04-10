@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections.abc import Iterable, Iterator, AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import itertools
 
@@ -66,7 +66,7 @@ class ProducerClient:
         )
 
     def __repr__(self) -> str:
-        return self.inner.__repr__()
+        return cast(str, self.inner.__repr__())
 
     def server_version(self) -> str:
         """
@@ -74,7 +74,7 @@ class ProducerClient:
 
         This is mainly useful for debugging
         """
-        return self.inner.server_version()
+        return cast(str, self.inner.server_version())
 
     def run_submission(
         self,
