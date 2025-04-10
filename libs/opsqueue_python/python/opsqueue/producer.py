@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections.abc import Iterable, Iterator, AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import itertools
 
@@ -64,6 +64,17 @@ class ProducerClient:
         self.inner = opsqueue_internal.ProducerClient(
             opsqueue_url, object_store_url, object_store_options
         )
+
+    def __repr__(self) -> str:
+        return cast(str, self.inner.__repr__())
+
+    def server_version(self) -> str:
+        """
+        Ask the Opsqueue server/service to return its version information as a string.
+
+        This is mainly useful for debugging
+        """
+        return cast(str, self.inner.server_version())
 
     def run_submission(
         self,

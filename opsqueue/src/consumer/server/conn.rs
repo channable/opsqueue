@@ -132,6 +132,7 @@ impl ConsumerConn {
         let init_msg = ServerToClientMessage::Init(ConsumerConfig {
             max_missable_heartbeats: self.max_missable_heartbeats,
             heartbeat_interval: self.heartbeat_interval.period(),
+            version_info: crate::version_info(),
         })
         .into();
         self.ws_stream.send(init_msg).await?;

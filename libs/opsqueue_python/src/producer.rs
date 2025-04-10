@@ -62,10 +62,17 @@ impl ProducerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
+        log::info!(
+            "Initializing Opsqueue ProducerClient (Opsqueue version: {})",
+            opsqueue::version_info()
+        );
         let runtime = start_runtime();
         let producer_client = ActualClient::new(address);
         let object_store_client =
             opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
+
+        log::info!("Opsqueue ProducerClient initialized");
+
         Ok(ProducerClient {
             producer_client,
             object_store_client,
@@ -79,6 +86,21 @@ impl ProducerClient {
             self.producer_client.endpoint_url,
             self.object_store_client.url()
         )
+    }
+
+    /// Return the Opsqueue server's version information
+    pub fn server_version(
+        &self,
+        py: Python<'_>,
+    ) -> CPyResult<String, E<FatalPythonException, InternalProducerClientError>> {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .server_version()
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+        })
     }
 
     /// Counts the number of ongoing submissions in the queue.

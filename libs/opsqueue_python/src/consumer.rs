@@ -61,17 +61,29 @@ impl ConsumerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
+        log::info!(
+            "Initializing Opsqueue ConsumerClient (Opsqueue version: {})",
+            opsqueue::version_info()
+        );
         let runtime = start_runtime();
         let client = ActualConsumerClient::new(address);
         let object_store_client =
             ObjectStoreClient::new(object_store_url, object_store_options).map_err(CError)?;
-        log::info!("Opsqueue consumer client initialized");
+        log::info!("Opsqueue ConsumerClient initialized");
 
         Ok(ConsumerClient {
             client,
             object_store_client,
             runtime,
         })
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "<opsqueue_producer.ConsumerClient(address={:?}, object_store_url={:?})>",
+            self.client.address(),
+            self.object_store_client.url()
+        )
     }
 
     #[allow(clippy::type_complexity)]

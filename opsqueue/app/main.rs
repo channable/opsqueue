@@ -8,7 +8,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
 fn main() {
-    tracing::info!("Starting Opsqueue");
+    println!(
+        "Starting Opsqueue {}\nHello, hello!",
+        opsqueue::version_info()
+    );
 
     // Sentry has to be initialized before starting the Tokio runtime
     let _sentry_guard = init_sentry();
@@ -18,7 +21,6 @@ fn main() {
 #[tokio::main]
 pub async fn async_main() {
     let _tracing_guard = setup_tracing();
-
     tracing::info!("Finished setting up tracing subscriber");
 
     let config = Box::leak(Box::new(Config::parse()));
@@ -60,7 +62,11 @@ pub async fn async_main() {
             cancellation_token.clone(),
         ));
 
-        tracing::info!("Startup complete; listening on {}", &server_addr);
+        tracing::info!(
+            "Startup of Opsqueue ({}) complete.",
+            opsqueue::version_info()
+        );
+        tracing::info!("Listening on {}", &server_addr);
 
         tokio::signal::ctrl_c()
             .await
@@ -78,7 +84,10 @@ pub async fn async_main() {
     .await;
 
     println!();
-    println!("Opsqueue Stopped");
+    println!(
+        "Graceful shutdown of Opsqueue {} completed.\nGoodbye!",
+        opsqueue::version_info()
+    );
 }
 
 /// Starts up the Sentry client to forward errors/panics to it.
