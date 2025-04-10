@@ -10,9 +10,6 @@
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
 }:
-let
-  projectGit = fetchGit ./../..;
-in
 buildPythonPackage rec {
   pname = "opsqueue";
   version = "0.1.0";
@@ -61,7 +58,6 @@ buildPythonPackage rec {
 
   env = {
     DATABASE_URL = "sqlite:///build/opsqueue_python/opsqueue/opsqueue_example_database_schema.db";
-    GIT_REV_REPORTED_BY_NIX = projectGit.rev;
   };
 
   pythonImportsCheck = [ pname ];

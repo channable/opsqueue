@@ -10,14 +10,8 @@
   perl,
   git,
 }:
-let
-  git-rev = pkgs.runCommand "gitrev" {
-    buildInputs = [ pkgs.git ];
-  } "git --git-dir ${./../.git} rev-parse HEAD > $out";
-in
 rustPlatform.buildRustPackage {
   name = "opsqueue";
-  version = git-rev;
   inherit
     buildType
     checkType
@@ -55,7 +49,6 @@ rustPlatform.buildRustPackage {
 
   env = {
     DATABASE_URL = "sqlite:///build/opsqueue/opsqueue_example_database_schema.db";
-    GIT_REV_REPORTED_BY_NIX = git-rev;
   };
 
   nativeBuildInputs = [

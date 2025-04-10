@@ -24,11 +24,19 @@ pub const VERSION_CARGO_SEMVER: &str = env!("CARGO_PKG_VERSION");
 
 /// The current git tag and/or git hash
 /// as reported by `git describe`
+///
+/// Not always available; notably Nix removes the `.git` folder
+/// before building the package.
 pub const VERSION_GIT_HASH: &str = git_version::git_version!(
     args = ["--always", "--dirty=-modified", "--abbrev=40"],
-    fallback = env!("GIT_REV_REPORTED_BY_NIX")
+    fallback = ""
 );
 
+#[allow(clippy::const_is_empty)]
 pub fn version_info() -> String {
-    format!("v{VERSION_CARGO_SEMVER} (git: {VERSION_GIT_HASH})")
+    if VERSION_GIT_HASH.is_empty() {
+        format!("v{VERSION_CARGO_SEMVER}")
+    } else {
+        format!("v{VERSION_CARGO_SEMVER} (git: {VERSION_GIT_HASH})")
+    }
 }
