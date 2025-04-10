@@ -6,7 +6,7 @@ use std::{
 };
 
 use arc_swap::ArcSwapOption;
-use futures::{future, stream::SplitSink, SinkExt, Stream, StreamExt};
+use futures::{stream::SplitSink, SinkExt, Stream, StreamExt};
 use http::Uri;
 use tokio::{net::TcpStream, sync::oneshot::error::RecvError};
 use tokio::{
@@ -176,20 +176,10 @@ impl Client {
         let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
         let (websocket_conn, _resp) = tokio_tungstenite::connect_async(endpoint_uri).await?;
-        let (ws_sink, ws_stream) = websocket_conn.split();
+        let (ws_sink, mut ws_stream) = websocket_conn.split();
         let ws_sink = Arc::new(Mutex::new(ws_sink));
         let cancellation_token = CancellationToken::new();
 
-        // Create a stream that skips ahead to the first binary message, which we expect to be
-        // the init message. After that, we don't care anymore and hand it off to the background
-        // task to deal with the various pings and pongs and such.
-        let mut ws_stream = Box::pin(ws_stream.skip_while(|res| {
-            future::ready(if let Ok(ref msg) = res {
-                !msg.is_binary()
-            } else {
-                true
-            })
-        }));
         let Some(initial_message) = ws_stream.next().await else {
             anyhow::bail!("Websocket closed upon arrival")
         };
