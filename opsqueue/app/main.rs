@@ -168,12 +168,23 @@ fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) 
 /// including the desired sampling rate and exporter to use.
 fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
     use opentelemetry::trace::TracerProvider;
+
+    // Allow overriding the default trace sample rate using an environment variable.
+    // By default, 1% is used.
+    // Note that if a producer or consumer request arrives at Opsqueue
+    // with the appropriate traceparent header set,
+    // the trace will be sampled regardless of this value.
+    let default_trace_sample_rate: f64 = std::env::var("OPSQUEUE_OTEL_DEFAULT_TRACE_SAMPLE_RATE")
+        .ok()
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(0.01);
+
     let provider = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_trace_config(
             opentelemetry_sdk::trace::Config::default()
                 .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
-                    opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(0.01),
+                    opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(default_trace_sample_rate),
                 )))
                 .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
                 .with_resource(opentelemetry_resource()),
