@@ -62,7 +62,7 @@ blocks:
       jobs:
         - name: "Build Opsqueue binary (in release mode) & run unit tests"
           commands:
-            - "./build.py build opsqueue | cachix push channable"
+            - "just nix-build-bin | cachix push channable"
             # Once a day, we update the devenv cache.
             # Except when fresh, this takes < 1 second
             # but it cannot live in the prologue
@@ -70,7 +70,7 @@ blocks:
             - cache store nix-store-$(date -u -Idate) /nix
         - name: "Build Python library (in release mode)"
           commands:
-            - "./build.py build opsqueue_python | cachix push channable"
+            - "just nix-build-python | cachix push channable"
   - name: "Integration"
     dependencies:
       - "Build"
@@ -78,10 +78,13 @@ blocks:
       when: "branch = 'master'"
     task:
       jobs:
-        - name: "Run Integration tests"
+        - name: "Run Integration tests (Directly)"
           commands:
-            # Relies on the output of the previous block's build steps to now live in Cachix
-            - "./build.py test integration --via-nix"
+            - "just test-integration"
+
+        - name: "Run Integration tests (via Nix)"
+          commands:
+            - "just nix-test-integration"
   - name: "Style"
     dependencies: []
     skip:
@@ -90,5 +93,5 @@ blocks:
       jobs:
         - name: "Type- and format-check"
           commands:
-            - "./build.py check pre-commit --all"
-            - "./build.py check type"
+            - "just lint-light --all"
+            - "just lint-heavy"
