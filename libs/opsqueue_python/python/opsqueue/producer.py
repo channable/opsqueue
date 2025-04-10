@@ -65,6 +65,9 @@ class ProducerClient:
             opsqueue_url, object_store_url, object_store_options
         )
 
+    def __repr__(self) -> str:
+        return self.inner.__repr__()
+
     def server_version(self) -> str:
         """
         Ask the Opsqueue server/service to return its version information as a string.

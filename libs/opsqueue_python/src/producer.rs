@@ -71,7 +71,7 @@ impl ProducerClient {
         let object_store_client =
             opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
 
-        log::info!("Opsqueue producer client initialized");
+        log::info!("Opsqueue ProducerClient initialized");
 
         Ok(ProducerClient {
             producer_client,

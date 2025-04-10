@@ -50,6 +50,9 @@ class ConsumerClient:
             opsqueue_url, object_store_url, object_store_options
         )
 
+    def __repr__(self) -> str:
+        return self.inner.__repr__()
+
     def run_each_op(
         self,
         op_callback: Callable[[Any], Any],

@@ -11,7 +11,7 @@
   opentelemetry-sdk,
 }:
 let
-  projectGit = fetchGit ./..;
+  projectGit = fetchGit ./../..;
 in
 buildPythonPackage rec {
   pname = "opsqueue";

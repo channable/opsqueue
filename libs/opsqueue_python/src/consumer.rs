@@ -78,6 +78,14 @@ impl ConsumerClient {
         })
     }
 
+    pub fn __repr__(&self) -> String {
+        format!(
+            "<opsqueue_producer.ConsumerClient(address={:?}, object_store_url={:?})>",
+            self.client.address(),
+            self.object_store_client.url()
+        )
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn reserve_chunks(
         &self,

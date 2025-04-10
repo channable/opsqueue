@@ -59,6 +59,11 @@ impl OuterClient {
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
     }
+
+    pub fn address(&self) -> &str {
+        &self.1
+    }
+
     pub async fn reserve_chunks(
         &self,
         max: usize,
