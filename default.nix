@@ -25,6 +25,9 @@ let
   defaultEnv = pkgs.buildEnv {
     name = "opsqueue-env-default";
     paths = with pkgs; [
+      # Command runner
+      just
+
       # For linting and formatting
       pre-commit
       pre-commit-env
