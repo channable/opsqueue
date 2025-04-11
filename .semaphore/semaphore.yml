@@ -78,10 +78,6 @@ blocks:
       when: "branch = 'master'"
     task:
       jobs:
-        - name: "Run Integration tests (Directly)"
-          commands:
-            - "just test-integration"
-
         - name: "Run Integration tests (via Nix)"
           commands:
             - "just nix-test-integration"
