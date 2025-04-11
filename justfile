@@ -18,13 +18,14 @@ build-bin *ARGS:
 
 # Build the `opsqueue_python` Python client library (development profile)
 [group('build')]
-build-python:
+build-python *ARGS:
   #!/usr/bin/env bash
   set -euxo pipefail
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  maturin develop
+  maturin develop {{ARGS}}
+  maturin build {{ARGS}}
 
 [group('build')]
 clean:
@@ -36,8 +37,8 @@ test: test-unit test-integration
 
 # Rust unit test suite
 [group('test')]
-test-unit:
-  cargo test
+test-unit *TEST_ARGS:
+  cargo test {{TEST_ARGS}}
 
 # Python integration test suite. Args are forwarded to pytest
 [group('test')]
