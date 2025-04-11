@@ -1,5 +1,5 @@
 {
-  channalib,
+  fileFilter,
   buildPythonPackage,
   rustPlatform,
   perl,
@@ -15,7 +15,7 @@ buildPythonPackage rec {
   version = "0.1.0";
   pyproject = true;
 
-  src = channalib.fileFilter {
+  src = fileFilter {
     name = "opsqueue_python";
     src = ../../.;
 

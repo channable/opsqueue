@@ -1,10 +1,4 @@
 {
-    "devops": {
-        "branch": "master",
-        "repo": "git@github.com:channable/devops.git",
-        "rev": "6df7b1f836ec57b43e9f1b4e5103d61ff515d764",
-        "type": "git"
-    },
     "nixpkgs": {
         "branch": "nixpkgs-unstable",
         "description": "Nix Packages collection",

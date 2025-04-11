@@ -43,7 +43,7 @@ url = {version = "2.5.2"}
 tokio-util = { version = "0.7.11", features = ["io", "rt", "time"] }
 tower-http = { version = "0.6.1", features = ["trace", "catch-panic"], optional = true }
 # Logging and tracing:
-log = { version = "0.4.22", features = ["std", "serde"] }
+log = { version = "0.4.13", features = ["std", "serde"] }
 tracing = {version = "0.1", features = [] }
 tracing-subscriber = {version = "0.3", features = ["std", "env-filter"] }
 sentry = {version = "0.35", optional = true, default-features=false, features=["rustls", "reqwest"]}

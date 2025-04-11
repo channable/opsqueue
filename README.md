@@ -44,40 +44,73 @@ An example to the changes required to your repo's nix overlay [can be found here
 
 ## For devs modifying Opsqueue: Building, running, testing
 
-The builds are managed using Cargo + Maturin in development, and Nix for production release builds.
+The [just](https://github.com/casey/just) command runner is used to wrap common commands.
+Just is very similar to Make, but simpler.
+Commands are defined in the justfile.
+
+To make it easier to have a well-defined development environment,
+build-dependencies are managed by [Nix](https://nixos.org/download/) and [direnv](https://github.com/direnv/direnv). While it is possible to install `just` + `cargo` + `python` + `maturin` + `pyO3` + various linters and related tooling manually, it is strongly recommended to use Nix + Direnv instead.
+
+Run
+
+```bash
+just
+```
+to see the list of supported commands.
 
 ### Building
 
 To build a development version (of the binary and the rust-side of all client libraries):
 
 ```bash
-cargo build
+# Build everything (in dev mode):
+just build
+
+# Or, only building the executable:
+just build-bin
+
+# Or, only building the Python client library:
+just build-python
 ```
+
+Those last two commands also accept extra parameters.
+
+For example, to build in release mode:
+
+```bash
+just build-bin --profile release # Args passed to `cargo`
+
+just build-python --release # Args passed to `maturin develop` and `maturin build`
+```
+
+### Building release builds with Nix
 
 To build a production version (of both the binary and the client libraries) with the same Nix build setup that is also used on CI/CD, instead use:
 
 ```bash
 # Build everything:
-./build.py build
+just nix-build
 
 # Or, only building the executable:
-./build.py build opsqueue
+just nix-build-bin
 
 # Or, only building the Python client library:
-./build.py build opsqueue_python
+just nix-build-python
 ```
+
+These commands will print the resulting store paths to STDOUT.
 
 ### Testing
 
 ```bash
 # To run all tests:
-./build.py test
+just test
 
 # Or, to run only (Rust) unit tests:
-./build.py test unit
+just test-unit
 
 # Or, to run only (Python) integration tests:
-./build.py test integration
+just test-integration
 ```
 
 For some Rust unit tests, we use the [insta](https://insta.rs/docs/quickstart/) golden test library.
@@ -89,27 +122,32 @@ To run the main `opsqueue` executable:
 
 ```bash
 # To build-and-run the executable in dev mode:
-./build.py run -- --maybe --some --arguments
+just run -- --maybe --some --arguments
 
 # or:
-cargo build
+just build
 ./target/debug/opsqueue
 
 # or, in release mode (faster and smaller executable, identical to what will run in production):
-cargo build --profile release
+just build --profile release
 ./target/release/opsqueue
 ```
 
 ## Lints and checks
 
-All lints are run with `pre-commit`*. Running `precommit` can be done with `./build.py check
-pre-commit [--all]`. Installing the git pre-commit hook can be done with `.build.py install
-pre-commit-hook`.
+Simple lints can be run using `just lint-light`.
+This will only execute lints that can run on individual files, and only run them
+on the files that you changed since the last commit.
+It should complete within a second.
+Run `just lint-light --all` to run them on _all_ files.
 
-Type checks are run `./build.py check type`.
+The heavy lint passes, which do static analysis of the full codebase,
+can be run using `just lint-heavy`.
 
-\* We strive to keep the git pre-commit hook fast. If a check takes too much time (especially those
-that cannot be run on a subset of files), we'll move them back to `build.py`.
+Both `lint-light` and `lint-heavy` might modify files if their complaints are auto-fixable.
+
+You can also run the full set of lints using `just lint`.
+The linter also runs on CI.
 
 ## Database migrations
 
@@ -135,23 +173,11 @@ When _running_ the `opsqueue` binary, it will automatically on startup:
 
 Currently, making the Rust FFI library usable from python is done using `maturin`.
 
-If you want to create a temporary Python environment with the producer library
-or consumer library in scope,
-you can go to the `libs/opsqueue_python` directory
-and run:
+Building the latest Python library using `just build-python` will call `maturin develop` on a mostly-empty Python .venv internally. This allows you to use `ipython` or run any of the examples in `libs/opsqueue_python` directly from that directory.
 
-```bash
-# NOTE: we depend on `direnv` to load a (mostly empty!) Python virtualenv, as it is a requirement for the next step.
-# c.f. `./libs/opsqueue_python/.setup_local_venv.sh`
-maturin develop # or `maturin develop -r` to run in release mode.
-# Now, you can use python or ipython or whatever and access
-# the `opsqueue_producer` resp. `opsqueue_consumer` module.
-ipython
-```
 Changes to the Python code will immediately be picked up.
-But note that the `maturin develop` step needs to be repeated **after making any changes to the Rust code**.
+But note that the `just build-python` / `maturin develop` step needs to be repeated **after making any changes to the Rust code**.
 
-For full/final builds, just use Nix (with the `./build.py` commands above) which will call `maturin build -r` internally.
 
 [Maturin usage guide](https://www.maturin.rs/tutorial).
 
@@ -160,13 +186,15 @@ See the `./libs/opsqueue_python/examples` directory for a bunch of examples of u
 ## Running Python integration tests
 
 You can run (only) the Python integration tests using
-`./build.py test integration`
+```bash
+just test-integration`
+```
 
 This will set up the required steps below automatically.
-The command accepts extra arguments after a `--` and passes those on to `pytest` unchanged, e.g.:
+Any arguments passsed are passed on to `pytest`, e.g.:
 
 ```bash
-./build.py test integration -- -vvvvvv -s -k
+just test-integration -vvvvvv -s -k
 ```
 
 Directly invoking Pytest is possible, **but be sure you use the Pytest from inside the special maturin virtual env**. Specifically:

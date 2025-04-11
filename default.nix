@@ -7,7 +7,6 @@ let
   pythonEnv = pkgs.pythonChannable.withPackages (
     p: with p; [
       click
-      build_util
       mypy
       uv
       pytest
@@ -25,6 +24,9 @@ let
   defaultEnv = pkgs.buildEnv {
     name = "opsqueue-env-default";
     paths = with pkgs; [
+      # Command runner
+      just
+
       # For linting and formatting
       pre-commit
       pre-commit-env
@@ -41,9 +43,6 @@ let
       cargo-edit
       cargo-nextest
       maturin
-
-      # Tool to locally inspect opentelemetry traces
-      jaeger
     ];
   };
   environments = {
