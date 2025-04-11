@@ -70,7 +70,7 @@ lint: lint-light lint-heavy
 # Run only the fast per-file linters; these might opt to only look at the changed files. Args are passed to pre-commit
 [group('lint')]
 lint-light *ARGS:
-  pre-commit {{ARGS}}
+  pre-commit run {{ARGS}}
 
 # Run the slow linters/static analysers that need to look at everything
 [group('lint')]
