@@ -29,12 +29,10 @@ class OpsqueueProcess:
 @functools.cache
 def opsqueue_bin_location() -> Path:
     if os.environ.get("OPSQUEUE_VIA_NIX"):
-        from build_util import nix
-
-        deriv_path = nix.build(
-            "../../../nix/nixpkgs-pinned.nix", version=None, attribute="opsqueue"
+        deriv_path = (
+            subprocess.check_output(["just", "nix-build-bin"]).decode("utf-8").strip()
         )
-        return deriv_path / "bin" / "opsqueue"
+        return Path(deriv_path) / "bin" / "opsqueue"
     else:
         subprocess.run(["cargo", "build", "--quiet", "--bin", "opsqueue"])
         return Path(".", "target", "debug", "opsqueue")
