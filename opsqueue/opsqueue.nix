@@ -1,4 +1,5 @@
 {
+  fileFilter,
   pkgs,
   rustPlatform,
   # Building options
@@ -19,7 +20,7 @@ rustPlatform.buildRustPackage {
     useNextest
     ;
 
-  src = pkgs.channalib.fileFilter {
+  src = fileFilter {
     name = "opsqueue";
     src = ./.;
 

@@ -7,7 +7,6 @@ let
   pythonEnv = pkgs.pythonChannable.withPackages (
     p: with p; [
       click
-      build_util
       mypy
       uv
       pytest
@@ -44,9 +43,6 @@ let
       cargo-edit
       cargo-nextest
       maturin
-
-      # Tool to locally inspect opentelemetry traces
-      jaeger
     ];
   };
   environments = {
