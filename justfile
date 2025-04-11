@@ -25,7 +25,6 @@ build-python *ARGS:
   source "./.setup_local_venv.sh"
 
   maturin develop {{ARGS}}
-  maturin build {{ARGS}}
 
 [group('build')]
 clean:
@@ -38,7 +37,7 @@ test: test-unit test-integration
 # Rust unit test suite
 [group('test')]
 test-unit *TEST_ARGS:
-  cargo test {{TEST_ARGS}}
+  cargo nextest run {{TEST_ARGS}}
 
 # Python integration test suite. Args are forwarded to pytest
 [group('test')]
