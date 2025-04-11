@@ -10,12 +10,8 @@
   perl,
   git,
 }:
-let
-  projectGit = fetchGit ./..;
-in
 rustPlatform.buildRustPackage {
   name = "opsqueue";
-  version = projectGit.shortRev;
   inherit
     buildType
     checkType
@@ -53,7 +49,6 @@ rustPlatform.buildRustPackage {
 
   env = {
     DATABASE_URL = "sqlite:///build/opsqueue/opsqueue_example_database_schema.db";
-    GIT_REV_REPORTED_BY_NIX = projectGit.rev;
   };
 
   nativeBuildInputs = [
