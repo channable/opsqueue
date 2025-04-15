@@ -8,8 +8,6 @@ members = [
     "libs/opsqueue_python",
 ]
 
-[workspace.package]
-version = "0.23.0"
 
 [workspace.lints.clippy]
 cargo =  { level = "warn", priority = -1 }

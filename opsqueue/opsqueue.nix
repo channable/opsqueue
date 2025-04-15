@@ -43,13 +43,8 @@ rustPlatform.buildRustPackage {
     ];
   };
 
-  # We have to copy the Cargo.toml and Cargo.lock from the main workspace
-  # to ensure they can be found.
   postUnpack = ''
     cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
-    cp "${../Cargo.toml}" "/build/Cargo.toml"
-    mkdir -p "/build/libs/opsqueue_python"
-    cp "${../build/libs/opsqueue_python/Cargo.toml}" "/build/libs/opsqueue_python/Cargo.toml"
     chmod +w /build/opsqueue/Cargo.lock
   '';
 
