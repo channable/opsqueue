@@ -1,0 +1,27 @@
+name: Continuous Integration
+on: [push]
+jobs:
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: moonrepo/setup-rust@v1
+        with:
+            bins: cargo-nextest, cargo-insta@1.28.0
+      - run: just test-unit
+  test-integration:
+    name: Integration test (& build all in dev-mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix-direnv-rust
+      - run: just test-integration
+  lint:
+    name: Lint & Style Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix-direnv-rust
+      - run: just lint

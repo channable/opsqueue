@@ -1,6 +1,6 @@
 # Opsqueue
 
-Making the big work horizontally scalable.
+Making big work horizontally scalable.
 
 Opsqueue does this by being:
 
@@ -80,7 +80,7 @@ For example, to build in release mode:
 ```bash
 just build-bin --profile release # Args passed to `cargo`
 
-just build-python --release # Args passed to `maturin develop` and `maturin build`
+just build-python --release # Args passed to `maturin develop`
 ```
 
 ### Building release builds with Nix

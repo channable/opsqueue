@@ -11,18 +11,6 @@
         "url": "https://github.com/NixOS/nixpkgs/archive/d19cf9dfc633816a437204555afeb9e722386b76.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
-    "nixpkgs-mozilla": {
-        "branch": "master",
-        "description": "Mozilla overlay for Nixpkgs.",
-        "homepage": "",
-        "owner": "mozilla",
-        "repo": "nixpkgs-mozilla",
-        "rev": "e35b0e071cae97469d80222be988fdd972b22c3b",
-        "sha256": "0akciq7jbn3z6zg7czj0bcxsb27snljm3w3kpdyhl90qf9xvmdi3",
-        "type": "tarball",
-        "url": "https://github.com/mozilla/nixpkgs-mozilla/archive/e35b0e071cae97469d80222be988fdd972b22c3b.tar.gz",
-        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
-    },
     "rust-overlay": {
         "branch": "master",
         "description": "Rust overlay",
