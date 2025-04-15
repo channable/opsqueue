@@ -39,7 +39,7 @@ def decode_chunk(
     chunk: bytes, serialization_format: SerializationFormat
 ) -> Sequence[Any]:
     res = serialization_format.loads(chunk)
-    assert isinstance(
-        res, Sequence
-    ), f"Decoding a chunk should always return a sequence, got unexpected type {type(res)}"
+    assert isinstance(res, Sequence), (
+        f"Decoding a chunk should always return a sequence, got unexpected type {type(res)}"
+    )
     return res
