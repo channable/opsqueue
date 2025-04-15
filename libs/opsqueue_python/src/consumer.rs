@@ -170,82 +170,24 @@ impl ConsumerClient {
         fun.py().allow_threads(|| {
             let mut done_count: usize = 0;
             loop {
-                #[allow(clippy::type_complexity)]
-                let chunk_outcome: CPyResult<(), E![FatalPythonException, ChunkStorageError, ChunkRetrievalError, InternalConsumerClientError, IncorrectUsage<LimitIsZero>]> = (|| {
-                    let chunks = self.reserve_chunks_gilless(1, strategy.into()).map_err(|e| match e {
-                        CError(L(e)) => CError(L(e)),
-                        CError(R(L(e))) => CError(R(R(L(e)))),
-                        CError(R(R(e))) => CError(R(R(R(e)))),
-                    })?;
-                    log::debug!("Reserved {} chunks", chunks.len());
-                    for chunk in chunks {
-                        let submission_id = chunk.submission_id;
-                        let submission_prefix = chunk.submission_prefix.clone();
-                        let chunk_index = chunk.chunk_index;
-                        log::debug!("Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
-                        let res = Python::with_gil(|py| {
-                            let res = unbound_fun.bind(py).call1((chunk,))?;
-                            res.extract()
-                        });
-                        match res {
-                            Ok(res) => {
-                                log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
-                                self.complete_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, res).map_err(|e| match e {
-                                    CError(L(e)) => CError(L(e)),
-                                    CError(R(L(e))) => CError(R(L(e))),
-                                    CError(R(R(e))) => CError(R(R(R(L(e)))))
-                                })?;
-                                log::debug!("Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
-                            },
-                            Err(failure) => {
-                                let failure_str = crate::common::format_pyerr(&failure);
-                                log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
-                                self.fail_chunk_gilless(submission_id, submission_prefix.clone(), chunk_index, failure_str).map_err(|e|
-                                    match e {
-                                        CError(L(py_err)) => CError(L(py_err)),
-                                        CError(R(e)) => CError(R(R(R(L(e))))),
-                                    }
-
-                                )?;
-                                log::warn!("Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
-
-                                // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
-                                if !Python::with_gil(|py| {failure.is_instance_of::<PyException>(py)}) {
-                                    return Err(failure.into())
-                                }
-
-                                // Exit also on SystemError
-                                // as this might be thrown when someone tries to Ctrl-C
-                                // while some native code (ex: OpenTelemetry integration)
-                                // is executing.
-                                if Python::with_gil(|py| {failure.is_instance_of::<PySystemError>(py)}) {
-                                    return Err(failure.into())
-                                }
-
-                                // otherwise, continue with next chunk
-                            }
-                        }
-
-                        done_count = done_count.saturating_add(1);
-                        if done_count % 50 == 0 {
-                            log::info!("Processed {} chunks", done_count);
-                        }
-                    }
-                    Ok(())
-                })();
-
+                let chunk_outcome = self.compute_chunk_outcome(strategy, unbound_fun, done_count);
                 // NOTE: We currently only quit on KeyboardInterrupt.
                 // Any other error (like e.g. connection errors)
                 // results in looping, which will re-establish the client connection.
                 match chunk_outcome {
-                    Ok(()) => {}
+                    Ok(done) => {
+                        done_count = done_count.saturating_add(done);
+                    }
                     // In essence we 'catch `Exception` (but _not_ `BaseException` here)
                     Err(CError(L(e))) => {
                         log::info!("Opsqueue consumer closing because of exception: {e:?}");
-                        return CError(L(e))
+                        return CError(L(e));
                     }
                     Err(CError(R(err))) => {
-                        log::warn!("Opsqueue consumer encountered a Rust error, but will continue: {}", err);
+                        log::warn!(
+                            "Opsqueue consumer encountered a Rust error, but will continue: {}",
+                            err
+                        );
                     }
                 }
             }
@@ -379,5 +321,109 @@ impl ConsumerClient {
             .try_collect()
             .await
             .map_err(L)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn compute_chunk_outcome(
+        &self,
+        strategy: &Strategy,
+        unbound_fun: &Py<PyAny>,
+        mut done_count: usize,
+    ) -> CPyResult<
+        usize,
+        E![
+            FatalPythonException,
+            ChunkStorageError,
+            ChunkRetrievalError,
+            InternalConsumerClientError,
+            IncorrectUsage<LimitIsZero>
+        ],
+    > {
+        let chunks = self
+            .reserve_chunks_gilless(1, strategy.into())
+            .map_err(|e| match e {
+                CError(L(e)) => CError(L(e)),
+                CError(R(L(e))) => CError(R(R(L(e)))),
+                CError(R(R(e))) => CError(R(R(R(e)))),
+            })?;
+        log::debug!("Reserved {} chunks", chunks.len());
+        for chunk in chunks {
+            let submission_id = chunk.submission_id;
+            let submission_prefix = chunk.submission_prefix.clone();
+            let chunk_index = chunk.chunk_index;
+            log::debug!(
+            "Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+            submission_id,
+            chunk_index,
+            &submission_prefix
+        );
+            let res = Python::with_gil(|py| {
+                let res = unbound_fun.bind(py).call1((chunk,))?;
+                res.extract()
+            });
+            match res {
+                Ok(res) => {
+                    log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
+                    self.complete_chunk_gilless(
+                        submission_id,
+                        submission_prefix.clone(),
+                        chunk_index,
+                        res,
+                    )
+                    .map_err(|e| match e {
+                        CError(L(e)) => CError(L(e)),
+                        CError(R(L(e))) => CError(R(L(e))),
+                        CError(R(R(e))) => CError(R(R(R(L(e))))),
+                    })?;
+                    log::debug!(
+                    "Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                    submission_id,
+                    chunk_index,
+                    &submission_prefix
+                );
+                }
+                Err(failure) => {
+                    let failure_str = crate::common::format_pyerr(&failure);
+                    log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
+                    self.fail_chunk_gilless(
+                        submission_id,
+                        submission_prefix.clone(),
+                        chunk_index,
+                        failure_str,
+                    )
+                    .map_err(|e| match e {
+                        CError(L(py_err)) => CError(L(py_err)),
+                        CError(R(e)) => CError(R(R(R(L(e))))),
+                    })?;
+                    log::warn!(
+                    "Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                    submission_id,
+                    chunk_index,
+                    &submission_prefix
+                );
+
+                    // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
+                    if !Python::with_gil(|py| failure.is_instance_of::<PyException>(py)) {
+                        return Err(failure.into());
+                    }
+
+                    // Exit also on SystemError
+                    // as this might be thrown when someone tries to Ctrl-C
+                    // while some native code (ex: OpenTelemetry integration)
+                    // is executing.
+                    if Python::with_gil(|py| failure.is_instance_of::<PySystemError>(py)) {
+                        return Err(failure.into());
+                    }
+
+                    // otherwise, continue with next chunk
+                }
+            }
+
+            done_count = done_count.saturating_add(1);
+            if done_count % 50 == 0 {
+                log::info!("Processed {} chunks", done_count);
+            }
+        }
+        Ok(done_count)
     }
 }
