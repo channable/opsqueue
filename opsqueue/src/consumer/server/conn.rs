@@ -60,9 +60,12 @@ impl ConsumerConn {
         let consumer_state = ConsumerState::new(server_state);
         let cancellation_token = server_state.cancellation_token.clone();
         let notify_on_insert = server_state.notify_on_insert.clone();
+        let id = uuid::Uuid::now_v7();
+
+        tracing::debug!("Creating consumer connection with id {id}");
 
         Self {
-            id: uuid::Uuid::now_v7(),
+            id,
             consumer_state,
             ws_stream,
             notify_on_insert,
@@ -127,45 +130,48 @@ impl ConsumerConn {
         }
     }
 
+    #[tracing::instrument(fields(conn = %self.id), skip(self))]
     async fn initialize(&mut self) -> Result<(), ConsumerConnError> {
+        tracing::debug!("Sending initialization message");
         // Send the initialization message. The consumer client is waiting for this one before it enters its main loop.
         let init_msg = ServerToClientMessage::Init(ConsumerConfig {
             max_missable_heartbeats: self.max_missable_heartbeats,
             heartbeat_interval: self.heartbeat_interval.period(),
             version_info: crate::version_info(),
+            conn_id: self.id,
         })
         .into();
         self.ws_stream.send(init_msg).await?;
+        tracing::info!("Initialization message sent");
         Ok(())
     }
 
     // Manages heartbeating:
     // Sends the next heartbeat, or exits with an error if too many were already missed.
+    #[tracing::instrument(fields(conn = %self.id), skip(self))]
     async fn beat_heart(&mut self) -> Result<(), ConsumerConnError> {
         tracing::debug!("Sending heartbeat");
         if self.heartbeats_missed > self.max_missable_heartbeats {
             tracing::warn!("Too many heartbeat misses, closing connection.");
             Err(ConsumerConnError::HeartbeatFailure)
         } else {
+            tracing::debug!("Pinging");
             let _ = self.ws_stream.send(Message::Ping("💓".into())).await;
             self.heartbeats_missed += 1;
             Ok(())
         }
     }
 
+    #[tracing::instrument(fields(conn = %self.id), skip(self, msg))]
     async fn handle_incoming_msg(&mut self, msg: Message) -> Result<(), ConsumerConnError> {
         // Any message means the other side is still alive:
         self.heartbeat_interval.reset();
         self.heartbeats_missed = 0;
 
         match msg {
-            Message::Ping(_) => {
-                tracing::trace!("Received heartbeat");
-                // NOTE: Not manually sending 'pong', this is done automatically.
-            }
-            Message::Pong(_) => {
-                tracing::trace!("Received pong reply to earlier heartbeat, nice.");
-            }
+            // NOTE: Not manually sending 'pong', this is done automatically.
+            Message::Ping(_) => tracing::trace!("Received heartbeat"),
+            Message::Pong(_) => tracing::trace!("Received pong reply to earlier heartbeat, nice."),
             Message::Binary(_) => {
                 self.handle_incoming_client_message(msg.try_into()?).await?;
             }
@@ -179,7 +185,6 @@ impl ConsumerConn {
         Ok(())
     }
 
-    #[tracing::instrument(, fields(client_id = self.id.to_string()), skip(self, msg))]
     async fn handle_incoming_client_message(
         &mut self,
         msg: Envelope<ClientToServerMessage>,

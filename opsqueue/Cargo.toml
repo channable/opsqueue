@@ -23,6 +23,7 @@ tokio = { version = "1.38.0", features = ["macros", "signal", "rt-multi-thread"]
 uuid = {version = "1.11.0", features = [
         "v7",                # Timestamp-sortable UUIDs with random component
         "fast-rng",          # Use a faster (but still sufficiently random) RNG
+        "serde",
     ]}
 # Error handling:
 anyhow = "1.0.86"

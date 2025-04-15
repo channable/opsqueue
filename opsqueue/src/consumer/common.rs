@@ -43,8 +43,6 @@ pub enum ServerToClientMessage {
 pub enum SyncServerToClientResponse {
     #[allow(clippy::type_complexity)]
     ChunksReserved(Result<Vec<(Chunk, Submission)>, IncorrectUsage<LimitIsZero>>),
-    // ChunkCompleted,
-    // ChunkFailed,
 }
 
 /// Messages the server sends on its own
@@ -76,6 +74,10 @@ pub struct ConsumerConfig {
     /// which is mainly used for logging in the client
     /// to facilitate recognizing incorrect/potentially incompatible versions
     pub version_info: String,
+    /// The connection ID. Every time that a new websocket is created from the `/consumer`
+    /// endpoint, a fresh connection id is made. This is sent to the client to aid in
+    /// debugging.
+    pub conn_id: uuid::Uuid,
 }
 
 #[cfg(feature = "server-logic")]

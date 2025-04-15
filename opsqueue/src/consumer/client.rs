@@ -183,15 +183,23 @@ impl Client {
         let Some(initial_message) = ws_stream.next().await else {
             anyhow::bail!("Websocket closed upon arrival")
         };
+        log::info!("Received initial message");
+
         let ServerToClientMessage::Init(config) = initial_message?.try_into()? else {
             anyhow::bail!("Expected first message to be client initialization")
         };
         log::info!(
-            "Consumer client connection established with Opsqueue server {}",
-            config.version_info
+            "Consumer client connection (id={}) established with Opsqueue server {}",
+            config.conn_id,
+            config.version_info,
         );
+
         if config.version_info != crate::version_info() {
-            log::warn!("Careful! Consumer and Server use different Opsqueue library versions! Client is version {} whereas Server is version {}.", crate::version_info(), config.version_info)
+            log::warn!(
+                "Careful! Consumer and Server use different Opsqueue library versions! Client is version {} whereas Server is version {}.",
+                crate::version_info(),
+                config.version_info,
+            )
         }
 
         let healthy = Arc::new(AtomicBool::new(true));
@@ -233,7 +241,7 @@ impl Client {
                 _ = cancellation_token.cancelled() => break,
                 _ = heartbeat_interval.tick() => {
                     if heartbeats_missed > config.max_missable_heartbeats {
-                        log::warn!("Too many missed heartbeats! Closing connection and marking client as unhealthy.");
+                        log::warn!("We missed too many heartbeats! Closing connection and marking client as unhealthy.");
                         // Mark ourselves as unhealthy:
                         healthy.store(false, std::sync::atomic::Ordering::Relaxed);
                         // For good measure, let's close the WebSocket connection early:
@@ -243,8 +251,6 @@ impl Client {
                     } else {
                         // NOTE: We don't need to send a heartbeat as client; only the server needs to.
                         // We only need to track missed heartbeats.
-                        // log::debug!("Sending heartbeat");
-                        // let _ = ws_sink.lock().await.send(Message::Ping("heartbeat".into())).await;
                         heartbeats_missed += 1;
                     }
                 },
