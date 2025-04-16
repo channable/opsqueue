@@ -399,10 +399,11 @@ impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> 
 mod tests {
     use std::time::Duration;
 
+    use chunk::ChunkSize;
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
-    use crate::db;
+    use crate::{common::StrategicMetadataMap, db};
 
     use super::*;
 
@@ -426,7 +427,8 @@ mod tests {
             None,
             input_chunks.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await

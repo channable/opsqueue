@@ -126,7 +126,6 @@ async fn ws_accept_handler(
     })
 }
 
-#[derive(Debug)]
 pub enum CompleterMessage {
     Complete {
         id: ChunkId,
@@ -138,6 +137,31 @@ pub enum CompleterMessage {
         failure: String,
         reservations: Arc<Mutex<HashSet<ChunkId>>>,
     },
+}
+
+impl std::fmt::Debug for CompleterMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Complete {
+                id,
+                output_content,
+                reservations: _,
+            } => f
+                .debug_struct("Complete")
+                .field("id", id)
+                .field("output_content", output_content)
+                .finish_non_exhaustive(),
+            Self::Fail {
+                id,
+                failure,
+                reservations: _,
+            } => f
+                .debug_struct("Fail")
+                .field("id", id)
+                .field("failure", failure)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 #[derive(Debug)]

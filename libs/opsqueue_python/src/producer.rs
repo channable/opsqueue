@@ -163,12 +163,13 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
+        chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         // TODO
@@ -176,6 +177,7 @@ impl ProducerClient {
 
         py.allow_threads(|| {
             let submission = opsqueue::producer::common::InsertSubmission {
+                chunk_size: chunk_size.map(|n| chunk::ChunkSize(n as i64)),
                 chunk_contents: ChunkContents::Direct {
                     contents: chunk_contents,
                 },
@@ -192,7 +194,7 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn insert_submission_chunks(
         &self,
@@ -200,6 +202,7 @@ impl ProducerClient {
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
         strategic_metadata: Option<StrategicMetadataMap>,
+        chunk_size: Option<i64>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         SubmissionId,
@@ -232,6 +235,7 @@ impl ProducerClient {
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
+                    chunk_size: chunk_size.map(chunk::ChunkSize),
                     chunk_contents: ChunkContents::SeeObjectStorage {
                         prefix: prefix.clone(),
                         count: chunk_count,
@@ -280,7 +284,7 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
@@ -288,6 +292,7 @@ impl ProducerClient {
         chunk_contents: Py<PyIterator>,
         metadata: Option<submission::Metadata>,
         strategic_metadata: Option<StrategicMetadataMap>,
+        chunk_size: Option<i64>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         PyChunksIter,
@@ -305,6 +310,7 @@ impl ProducerClient {
                 chunk_contents,
                 metadata,
                 strategic_metadata,
+                chunk_size,
                 otel_trace_carrier,
             )
             .map_err(|CError(e)| {

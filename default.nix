@@ -33,6 +33,7 @@ let
 
       # For compiling the Rust parts
       rust-with-lsp
+      sqlx-cli
 
       # Manage nix pins
       niv

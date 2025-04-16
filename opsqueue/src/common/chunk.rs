@@ -24,6 +24,34 @@ impl std::fmt::Debug for ChunkIndex {
 /// that there are [0..chunk_count) (note the half-open range) chunks to select from.
 pub type ChunkCount = ChunkIndex;
 
+/// The count of entries in each chunk.
+///
+/// Defaults to 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChunkSize(pub i64);
+
+impl Default for ChunkSize {
+    fn default() -> Self {
+        ChunkSize(1)
+    }
+}
+
+#[cfg(feature = "server-logic")]
+impl sqlx::Decode<'_, sqlx::Sqlite> for ChunkSize {
+    fn decode(
+        value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'_>,
+    ) -> Result<Self, sqlx::error::BoxDynError> {
+        let inner = <Option<i64> as sqlx::Decode<'_, sqlx::Sqlite>>::decode(value)?;
+        Ok(inner.map(ChunkSize).unwrap_or_default())
+    }
+}
+
+impl From<Option<ChunkSize>> for ChunkSize {
+    fn from(value: Option<ChunkSize>) -> Self {
+        value.unwrap_or_default()
+    }
+}
+
 impl ChunkIndex {
     pub fn new<T>(index: T) -> Result<Self, TryFromIntError>
     where
@@ -98,7 +126,7 @@ impl TryFrom<usize> for ChunkIndex {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 #[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
 pub struct ChunkId {
@@ -118,6 +146,15 @@ impl From<(SubmissionId, ChunkIndex)> for ChunkId {
 impl From<ChunkId> for (SubmissionId, ChunkIndex) {
     fn from(value: ChunkId) -> Self {
         (value.submission_id, value.chunk_index)
+    }
+}
+
+impl std::fmt::Debug for ChunkId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkId")
+            .field("submission_id", &u64::from(self.submission_id))
+            .field("chunk_index", &u64::from(self.chunk_index.0))
+            .finish()
     }
 }
 
@@ -257,10 +294,11 @@ pub mod db {
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-        let res = conn
+        let res: Result<ChunkSize, E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
-                    complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
+                    let completed_work =
+                        complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
                     crate::common::submission::db::maybe_complete_submission(
                         chunk_id.submission_id,
                         &mut tx,
@@ -270,7 +308,7 @@ pub mod db {
                         E::L(e) => E::L(e),
                         E::R(e) => E::R(E::L(e)),
                     })?;
-                    Ok(())
+                    Ok(completed_work.unwrap_or_default())
                 })
             })
             .await;
@@ -278,7 +316,10 @@ pub mod db {
         counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
 
-        res
+        let ChunkSize(completed_work) = res?;
+        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE).decrement(completed_work as f64);
+
+        Ok(())
     }
 
     /// This function MUST be called inside a transaction.
@@ -287,7 +328,7 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut tx: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<()> {
+    ) -> sqlx::Result<Option<ChunkSize>> {
         let now = chrono::prelude::Utc::now();
         query!(
             "
@@ -319,15 +360,13 @@ pub mod db {
         // (Not doing that resulted in a hard-to-track-down bug in the past.
         // https://github.com/channable/opsqueue/issues/76
         // )
-        query!(
-            "
-        UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1;
-        ",
+        sqlx::query_scalar!(
+            "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
             chunk_id.submission_id,
         )
-        .execute(tx.get_inner())
-        .await?;
-        Ok(())
+        .fetch_one(tx.get_inner())
+        .await
+        .map(|opt| opt.map(ChunkSize))
     }
 
     #[tracing::instrument(skip(conn))]
@@ -594,6 +633,8 @@ pub mod db {
 
         counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(query_res.rows_affected() as f64);
+        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE)
+            .decrement(query_res.rows_affected() as f64);
         Ok(())
     }
 
@@ -630,6 +671,7 @@ pub mod db {
 pub mod test {
     use crate::common::submission::db::insert_submission_raw;
     use crate::common::submission::{Submission, SubmissionStatus};
+    use crate::common::StrategicMetadataMap;
     use crate::db::{Connection as _, WriterPool};
 
     use super::db::*;
@@ -718,7 +760,8 @@ pub mod test {
             None,
             vec![Some("first".into())],
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await

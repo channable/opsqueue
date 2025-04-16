@@ -7,6 +7,7 @@ pub struct InsertSubmission {
     pub chunk_contents: ChunkContents,
     pub metadata: Option<Metadata>,
     pub strategic_metadata: StrategicMetadataMap,
+    pub chunk_size: Option<chunk::ChunkSize>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

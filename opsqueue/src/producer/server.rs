@@ -105,6 +105,7 @@ async fn lookup_submission_id_by_prefix(
     Ok(Json(submission_id))
 }
 
+#[tracing::instrument(level = "debug", skip(state))]
 async fn insert_submission(
     State(state): State<ServerState>,
     Json(request): Json<InsertSubmission>,
@@ -122,6 +123,7 @@ async fn insert_submission(
         chunk_contents,
         request.metadata,
         request.strategic_metadata,
+        request.chunk_size.unwrap_or_default(),
         &mut conn,
     )
     .await?;

@@ -103,6 +103,7 @@ class ProducerClient:
                 _chunk_iterator(ops, chunk_size, serialization_format),
                 metadata=metadata,
                 strategic_metadata=strategic_metadata,
+                chunk_size=chunk_size,
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
@@ -144,7 +145,9 @@ class ProducerClient:
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.insert_submission_chunks(
-            _chunk_iterator(ops, chunk_size, serialization_format), metadata=metadata
+            _chunk_iterator(ops, chunk_size, serialization_format),
+            metadata=metadata,
+            chunk_size=chunk_size,
         )
 
     def blocking_stream_completed_submission(
@@ -192,6 +195,7 @@ class ProducerClient:
         *,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, str | int] = None,
+        chunk_size: None | int = None,
     ) -> Iterator[bytes]:
         """
         Inserts an already-chunked submission into the queue, and blocks until it is completed.
@@ -205,7 +209,10 @@ class ProducerClient:
         - TODO special exception for when the submission fails.
         """
         submission_id = self.insert_submission_chunks(
-            chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata
+            chunk_contents,
+            metadata=metadata,
+            strategic_metadata=strategic_metadata,
+            chunk_size=chunk_size,
         )
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
@@ -215,10 +222,14 @@ class ProducerClient:
         *,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, str | int] = None,
+        chunk_size: None | int = None,
     ) -> AsyncIterator[bytes]:
         # TODO: the insertion is not async yet.
         submission_id = self.insert_submission_chunks(
-            chunk_contents, metadata=metadata, strategic_metadata=strategic_metadata
+            chunk_contents,
+            metadata=metadata,
+            strategic_metadata=strategic_metadata,
+            chunk_size=chunk_size,
         )
 
         return await self.async_stream_completed_submission_chunks(submission_id)
@@ -229,6 +240,7 @@ class ProducerClient:
         *,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, str | int] = None,
+        chunk_size: None | int = None,
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
@@ -244,6 +256,7 @@ class ProducerClient:
             iter(chunk_contents),
             metadata=metadata,
             strategic_metadata=strategic_metadata,
+            chunk_size=chunk_size,
             otel_trace_carrier=otel_trace_carrier,
         )
 

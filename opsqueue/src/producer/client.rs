@@ -168,7 +168,11 @@ impl InternalProducerClientError {
 #[cfg(feature = "server-logic")]
 mod tests {
     use crate::{
-        common::submission::{self, SubmissionStatus},
+        common::{
+            chunk::ChunkSize,
+            submission::{self, SubmissionStatus},
+            StrategicMetadataMap,
+        },
         db::{DBPools, WriterPool},
         producer::common::ChunkContents,
     };
@@ -199,7 +203,8 @@ mod tests {
             None,
             vec![None, None, None],
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -228,6 +233,7 @@ mod tests {
             },
             metadata: None,
             strategic_metadata: Default::default(),
+            chunk_size: None,
         };
         client
             .insert_submission(&submission, &Default::default())
@@ -270,6 +276,7 @@ mod tests {
             },
             metadata: None,
             strategic_metadata: Default::default(),
+            chunk_size: None,
         };
         let submission_id = client
             .insert_submission(&submission, &Default::default())
