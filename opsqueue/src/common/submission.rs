@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ux_serde::u63;
 
-use super::chunk::{self, Chunk, ChunkFailed};
+use super::chunk::{self, Chunk, ChunkFailed, ChunkSize};
 use super::chunk::{ChunkCount, ChunkIndex};
 
 pub type Metadata = Vec<u8>;
@@ -94,6 +94,7 @@ pub struct Submission {
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
+    pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     pub otel_trace_carrier: String,
 }
@@ -103,6 +104,7 @@ pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
+    pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     pub completed_at: DateTime<Utc>,
     pub otel_trace_carrier: String,
@@ -113,6 +115,7 @@ pub struct SubmissionFailed {
     pub id: SubmissionId,
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
+    pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: ChunkIndex,
@@ -140,6 +143,7 @@ impl Submission {
             prefix: None,
             chunks_total: ChunkCount::zero(),
             chunks_done: ChunkCount::zero(),
+            chunk_size: ChunkSize::default(),
             metadata: None,
             otel_trace_carrier,
         }
@@ -153,6 +157,7 @@ impl Submission {
     pub fn from_vec(
         chunks: Vec<chunk::Content>,
         metadata: Option<Metadata>,
+        chunk_size: ChunkSize,
     ) -> Option<(Submission, Vec<Chunk>)> {
         let submission_id = Self::generate_id();
         let len = ChunkCount::new(u64::try_from(chunks.len()).ok()?).ok()?;
@@ -162,6 +167,7 @@ impl Submission {
             prefix: None,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
+            chunk_size,
             metadata,
             otel_trace_carrier,
         };
@@ -187,6 +193,7 @@ pub mod db {
         },
         db::{Connection, True, WriterConnection, WriterPool},
     };
+    use chunk::ChunkSize;
     use sqlx::{query, query_as, Sqlite};
     use tracing::{info, warn};
 
@@ -239,15 +246,16 @@ pub mod db {
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
-        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ",
             submission.id,
             submission.prefix,
             submission.chunks_total,
             submission.chunks_done,
             submission.metadata,
-            submission.otel_trace_carrier
+            submission.otel_trace_carrier,
+            submission.chunk_size.0,
         )
         .execute(conn.get_inner())
         .await?;
@@ -292,6 +300,7 @@ pub mod db {
         use futures::FutureExt as _;
 
         let chunks_total = submission.chunks_total.into();
+        let ChunkSize(chunk_size) = submission.chunk_size;
         tracing::debug!("Inserting submission {}", submission.id);
 
         let res = conn
@@ -316,6 +325,8 @@ pub mod db {
         counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
         counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(chunks_total as f64);
+        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE)
+            .increment((chunks_total.saturating_mul(chunk_size as u64)) as f64);
         res
     }
 
@@ -328,6 +339,7 @@ pub mod db {
         chunks_contents: Vec<chunk::Content>,
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
+        chunk_size: ChunkSize,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = Submission::generate_id();
@@ -338,6 +350,7 @@ pub mod db {
             prefix,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
+            chunk_size,
             metadata,
             otel_trace_carrier,
         };
@@ -380,6 +393,7 @@ pub mod db {
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , otel_trace_carrier
             FROM submissions WHERE id = $1
@@ -454,6 +468,7 @@ pub mod db {
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , otel_trace_carrier
         FROM submissions WHERE id = $1
@@ -473,6 +488,7 @@ pub mod db {
             id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
+            , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , completed_at AS "completed_at: DateTime<Utc>"
             , otel_trace_carrier
@@ -493,6 +509,7 @@ pub mod db {
               id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
+            , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , failed_at AS "failed_at: DateTime<Utc>"
             , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
@@ -755,6 +772,7 @@ pub mod test {
 
     use assert_matches::*;
     use chrono::Utc;
+    use chunk::ChunkSize;
 
     use crate::common::StrategicMetadataMap;
     use crate::db::{Connection as _, WriterPool};
@@ -772,6 +790,7 @@ pub mod test {
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
+            ChunkSize::default(),
         )
         .unwrap();
         insert_submission(submission, chunks, Default::default(), &mut conn)
@@ -788,6 +807,7 @@ pub mod test {
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
+            ChunkSize(1),
         )
         .unwrap();
         insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
@@ -813,6 +833,7 @@ pub mod test {
             chunks,
             None,
             strategic_metadata.clone(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -848,6 +869,7 @@ pub mod test {
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
+            ChunkSize::default(),
         )
         .unwrap();
         insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
@@ -872,6 +894,7 @@ pub mod test {
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
+            ChunkSize::default(),
         )
         .unwrap();
         insert_submission(submission.clone(), chunks, Default::default(), &mut conn)
@@ -901,7 +924,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -910,7 +934,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -919,7 +944,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -928,7 +954,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -959,7 +986,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -968,7 +996,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -977,7 +1006,8 @@ pub mod test {
             None,
             chunks_contents.clone(),
             None,
-            Default::default(),
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
             &mut conn,
         )
         .await
@@ -1024,7 +1054,9 @@ pub mod test {
             // metadata
             None,
             // strategic_metadata
-            Default::default(),
+            StrategicMetadataMap::default(),
+            // chunk size
+            ChunkSize::default(),
             &mut conn,
         )
         .await

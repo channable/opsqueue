@@ -33,6 +33,8 @@ pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str =
 pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
 pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_fail_chunk_duration_seconds";
 
+pub const OPERATIONS_BACKLOG_GAUGE: &str = "operations_in_backlog_count";
+
 pub fn describe_metrics() {
     describe_counter!(SUBMISSIONS_TOTAL_COUNTER, Unit::Count, "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system");
     describe_counter!(
@@ -92,6 +94,12 @@ pub fn describe_metrics() {
         CONSUMER_FAIL_CHUNK_DURATION,
         Unit::Seconds,
         "Time spent by Opsqueue to mark a given chunk as failed"
+    );
+
+    describe_gauge!(
+        OPERATIONS_BACKLOG_GAUGE,
+        Unit::Count,
+        "Slight overestimation of the number of operations in the backlog (chunk_size * chunk_count for each submission). For simplicity, we always consider the last chunk full. This is a gauge reflecting the rough current DB state."
     );
 }
 
