@@ -122,6 +122,7 @@ class ProducerClient:
                 _chunk_iterator(ops, chunk_size, serialization_format),
                 metadata=metadata,
                 strategic_metadata=strategic_metadata,
+                chunk_size=chunk_size,
             )
             return _async_unchunk_iterator(results_iter, serialization_format)
 
