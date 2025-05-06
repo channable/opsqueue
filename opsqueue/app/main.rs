@@ -1,5 +1,5 @@
 use clap::Parser;
-use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config};
+use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
@@ -37,10 +37,6 @@ pub async fn async_main() {
     let db_pool =
         opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
 
-    opsqueue::prometheus::prefill_special_metrics(&db_pool)
-        .await
-        .expect("Failed to initialize basic metrics from current contents of the DB");
-
     moro_local::async_scope!(|scope| {
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
             config,
@@ -54,6 +50,11 @@ pub async fn async_main() {
 
         let max_age = Duration::from_secs(60 * 60);
         scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
+
+        scope.spawn(prometheus::periodically_calculate_scaling_metrics(
+            &db_pool,
+            &cancellation_token,
+        ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
         scope.spawn(opsqueue::server::app_watchdog(

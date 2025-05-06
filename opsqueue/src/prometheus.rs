@@ -4,6 +4,7 @@ use axum_prometheus::{
     utils::SECONDS_DURATION_BUCKETS,
     GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::db::DBPools;
 
@@ -130,24 +131,43 @@ pub fn setup_prometheus() -> (
     (metric_layer, metric_handle)
 }
 
-/// Initializes certain metrics that depend on the contents of the DB at app startup
-///
-/// Instead of asking the DB for a count very frequently, we only fetch the count at startup
-/// and keep it up-to-date over the lifespan of the application
-pub async fn prefill_special_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
-    let mut conn = db_pool.reader_conn().await?;
-    let chunk_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
-        .await?
-        .into();
-    gauge!(CHUNKS_BACKLOG_GAUGE).set(chunk_count as f64);
-
-    Ok(())
-}
-
 /// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
 ///
 /// Adapted from https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
     (td.num_seconds() as f64) + (td.subsec_nanos() as f64) / NANOS_PER_SEC
+}
+
+/// Calculates the backlog-size metrics used for autoscaling.
+pub async fn calculate_scaling_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
+    let mut conn = db_pool.reader_conn().await?;
+    let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
+        .await?
+        .into();
+    gauge!(CHUNKS_BACKLOG_GAUGE).set(chunks_backlog_count as f64);
+    let ops_backlog_count: f64 =
+        crate::common::chunk::db::count_ops_in_backlog_estimate(&mut conn).await?;
+    gauge!(OPERATIONS_BACKLOG_GAUGE).set(ops_backlog_count);
+
+    Ok(())
+}
+
+/// Calculate the backlog-size metrics used for autoscaling periodically;
+/// currently every 5 seconds.
+pub async fn periodically_calculate_scaling_metrics(
+    db_pool: &DBPools,
+    cancellation_token: &CancellationToken,
+) {
+    const METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+    loop {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => break,
+            _ = tokio::time::sleep(METRICS_INTERVAL) => {
+                if let Err(e) = calculate_scaling_metrics(db_pool).await {
+                    tracing::error!("Error calculating scaling metrics: {}", e);
+                }
+            }
+        }
+    }
 }

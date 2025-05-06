@@ -294,8 +294,8 @@ pub mod db {
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-        let res: Result<ChunkSize, E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> = conn
-            .transaction(move |mut tx| {
+        let _chunk_size: Result<ChunkSize, E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> =
+            conn.transaction(move |mut tx| {
                 Box::pin(async move {
                     let completed_work =
                         complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
@@ -314,11 +314,6 @@ pub mod db {
             .await;
 
         counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
-        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
-
-        let ChunkSize(completed_work) = res?;
-        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE).decrement(completed_work as f64);
-
         Ok(())
     }
 
@@ -632,9 +627,6 @@ pub mod db {
     ).execute(conn.get_inner()).await?;
 
         counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
-        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(query_res.rows_affected() as f64);
-        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE)
-            .decrement(query_res.rows_affected() as f64);
         Ok(())
     }
 
@@ -662,6 +654,16 @@ pub mod db {
             .fetch_one(db.get_inner())
             .await?;
         let count = u63::new(count.count as u64);
+        Ok(count)
+    }
+
+    /// Looks up the number of operations in the backlog.
+    ///
+    /// An estimation that returns a slightly too high number,
+    /// since we just count the number of chunks times their chunk size,
+    /// meaning that we over-estimate the size of any 'final' chunk that is not full.
+    pub async fn count_ops_in_backlog_estimate(mut db: impl Connection) -> sqlx::Result<f64> {
+        let count = sqlx::query!("SELECT COALESCE(SUM(chunk_size * 1.0), 0.0) as count FROM chunks INNER JOIN submissions ON chunks.submission_id = submissions.id").fetch_one(db.get_inner()).await?.count;
         Ok(count)
     }
 }
