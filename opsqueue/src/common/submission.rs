@@ -296,11 +296,10 @@ pub mod db {
         strategic_metadata: StrategicMetadataMap,
         mut conn: impl WriterConnection,
     ) -> Result<(), DatabaseError> {
-        use axum_prometheus::metrics::{counter, gauge};
+        use axum_prometheus::metrics::counter;
         use futures::FutureExt as _;
 
         let chunks_total = submission.chunks_total.into();
-        let ChunkSize(chunk_size) = submission.chunk_size;
         tracing::debug!("Inserting submission {}", submission.id);
 
         let res = conn
@@ -324,9 +323,6 @@ pub mod db {
 
         counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
         counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
-        gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(chunks_total as f64);
-        gauge!(crate::prometheus::OPERATIONS_BACKLOG_GAUGE)
-            .increment((chunks_total.saturating_mul(chunk_size as u64)) as f64);
         res
     }
 
