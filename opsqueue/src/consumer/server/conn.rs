@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use axum::extract::ws::{Message, WebSocket};
 use tokio::{
@@ -34,7 +40,7 @@ pub struct RetryReservation {
 }
 
 pub struct ConsumerConn {
-    id: uuid::Uuid,
+    id: ConsumerConnectionId,
     consumer_state: ConsumerState,
     cancellation_token: CancellationToken,
     ws_stream: WebSocket,
@@ -60,7 +66,14 @@ impl ConsumerConn {
         let consumer_state = ConsumerState::new(server_state);
         let cancellation_token = server_state.cancellation_token.clone();
         let notify_on_insert = server_state.notify_on_insert.clone();
-        let id = uuid::Uuid::now_v7();
+
+        // Environment variable determines whether to assign color names for new connection IDs.
+        // If set, colors are used for the first 24 connections.
+        let id = if std::env::var("OPSQUEUE_DEBUG_CONNECTIONS").is_ok() {
+            ConsumerConnectionId::color()
+        } else {
+            ConsumerConnectionId::uuid()
+        };
 
         tracing::debug!("Creating consumer connection with id {id}");
 
@@ -138,7 +151,7 @@ impl ConsumerConn {
             max_missable_heartbeats: self.max_missable_heartbeats,
             heartbeat_interval: self.heartbeat_interval.period(),
             version_info: crate::version_info(),
-            conn_id: self.id,
+            conn_id: self.id.to_string(),
         })
         .into();
         self.ws_stream.send(init_msg).await?;
@@ -299,5 +312,64 @@ impl From<ciborium::de::Error<std::io::Error>> for ConsumerConnError {
 impl From<ciborium::ser::Error<std::io::Error>> for ConsumerConnError {
     fn from(err: ciborium::ser::Error<std::io::Error>) -> Self {
         ConsumerConnError::UnparsableServerToClientMessage(err)
+    }
+}
+
+/// A unique ID for a consumer connection.
+#[derive(Debug, Clone)]
+pub struct ConsumerConnectionId(String);
+
+impl ConsumerConnectionId {
+    /// Generate the consumer id from a UUID.
+    pub fn uuid() -> ConsumerConnectionId {
+        ConsumerConnectionId(uuid::Uuid::now_v7().to_string())
+    }
+    /// Use a color for an ID. This is more readable for debugging, but doesn't exactly
+    /// scale. Uses a global list of colors that are dealt out in the same order every
+    /// time. The colors list runs out after 24, and after that it'll fall back to UUIDs.
+    pub fn color() -> ConsumerConnectionId {
+        static mut INDEX: AtomicUsize = AtomicUsize::new(0);
+        const COLORS: [&'static str; 24] = [
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "purple",
+            "orange",
+            "cyan",
+            "white",
+            "black",
+            "pink",
+            "turquoise",
+            "teal",
+            "chartreuse",
+            "brown",
+            "amber",
+            "violet",
+            "magenta",
+            "indigo",
+            "lime",
+            "gold",
+            "aqua",
+            "tangerine",
+            "maroon",
+            "fuchsia",
+        ];
+
+        // Safety: i think this is ok because we're doing it ✨ atomically ✨
+        #[allow(static_mut_refs)]
+        let i = unsafe { INDEX.fetch_add(1, Ordering::SeqCst) };
+
+        COLORS
+            .get(i)
+            .map(|c| String::from(*c))
+            .map(ConsumerConnectionId)
+            .unwrap_or_else(|| Self::uuid())
+    }
+}
+
+impl std::fmt::Display for ConsumerConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }

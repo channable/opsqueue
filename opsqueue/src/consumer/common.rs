@@ -77,7 +77,7 @@ pub struct ConsumerConfig {
     /// The connection ID. Every time that a new websocket is created from the `/consumer`
     /// endpoint, a fresh connection id is made. This is sent to the client to aid in
     /// debugging.
-    pub conn_id: uuid::Uuid,
+    pub conn_id: String,
 }
 
 #[cfg(feature = "server-logic")]
