@@ -6,7 +6,7 @@ use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
-use pyo3::exceptions::{PyBaseException, PyException};
+use pyo3::exceptions::PyBaseException;
 use pyo3::{import_exception, Bound, PyErr, Python};
 
 use crate::common::{ChunkIndex, SubmissionId};
@@ -169,14 +169,6 @@ impl From<CError<ChunkNotFound>> for PyErr {
 impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::NewObjectStoreClientError>) -> Self {
         NewObjectStoreClientError::new_err(value.0.to_string())
-    }
-}
-
-// TODO: Only temporary. We want to get rid of all usage of anyhow
-// in the boundary to PyO3
-impl From<CError<anyhow::Error>> for PyErr {
-    fn from(value: CError<anyhow::Error>) -> Self {
-        PyException::new_err(value.0.to_string())
     }
 }
 
