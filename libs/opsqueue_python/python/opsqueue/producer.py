@@ -142,7 +142,6 @@ class ProducerClient:
 
         Raises:
         - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.insert_submission_chunks(
@@ -205,7 +204,6 @@ class ProducerClient:
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
 
         Raises:
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         - TODO special exception for when the submission fails.
         """
@@ -248,7 +246,6 @@ class ProducerClient:
         returning an ID you can use to track the submission's progress afterwards.
 
         Raises:
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         otel_trace_carrier = tracing.current_opentelemetry_tracecontext_to_carrier()

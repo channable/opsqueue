@@ -9,19 +9,16 @@ use pyo3::{
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
+    common::errors::E::{self, L, R},
+    object_store::{ChunksStorageError, NewObjectStoreClientError},
+    producer::client::{Client as ActualClient, InternalProducerClientError},
+};
+use opsqueue::{
     common::{chunk, submission, StrategicMetadataMap},
     object_store::{ChunkRetrievalError, ChunkType},
     producer::common::ChunkContents,
     tracing::CarrierMap,
     E,
-};
-use opsqueue::{
-    common::{
-        errors::E::{self, L, R},
-        NonZeroIsZero,
-    },
-    object_store::{ChunksStorageError, NewObjectStoreClientError},
-    producer::client::{Client as ActualClient, InternalProducerClientError},
 };
 use ux_serde::u63;
 
@@ -208,7 +205,6 @@ impl ProducerClient {
         SubmissionId,
         E![
             FatalPythonException,
-            NonZeroIsZero<chunk::ChunkIndex>,
             ChunksStorageError,
             InternalProducerClientError,
         ],
@@ -227,7 +223,7 @@ impl ProducerClient {
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
-                        .map_err(|e| CError(R(R(L(e)))))
+                        .map_err(|e| CError(R(L(e))))
                 })
             })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
@@ -250,7 +246,7 @@ impl ProducerClient {
                         tracing::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
                         submission_id.into()
                     })
-                    .map_err(|e| R(R(R(e))).into())
+                    .map_err(|e| R(R(e)).into())
             })
         })
     }
@@ -299,7 +295,6 @@ impl ProducerClient {
         E![
             FatalPythonException,
             errors::SubmissionFailed,
-            NonZeroIsZero<chunk::ChunkIndex>,
             ChunksStorageError,
             InternalProducerClientError,
         ],
@@ -325,7 +320,7 @@ impl ProducerClient {
                 CError(match e {
                     L(e) => L(e),
                     R(L(e)) => R(L(e)),
-                    R(R(e)) => R(R(R(R(e)))),
+                    R(R(e)) => R(R(R(e))),
                 })
             })?;
         Ok(res)

@@ -47,6 +47,26 @@ def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -
         assert res == sum(range(1, 101))
 
 
+def test_empty_submission(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy
+) -> None:
+    """
+    Empty submissions ought to be supported without problems.
+    Opsqueue should immediately consider these 'completed'
+    and no errors should be thrown.
+    """
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_empty_submission"
+    )
+
+    input_iter = []
+    output_iter: Iterator[int] = producer_client.run_submission(
+        input_iter, chunk_size=20
+    )
+    res = sum(output_iter)
+    assert res == 0
+
+
 def test_roundtrip_explicit_serialization_format(
     opsqueue: OpsqueueProcess,
     any_consumer_strategy: Strategy,
