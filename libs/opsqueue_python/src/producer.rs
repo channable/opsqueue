@@ -267,7 +267,6 @@ impl ProducerClient {
             InternalProducerClientError,
         ],
     > {
-        // TODO: Use CPyResult instead
         py.allow_threads(|| {
             self.block_unless_interrupted(async move {
                 match self

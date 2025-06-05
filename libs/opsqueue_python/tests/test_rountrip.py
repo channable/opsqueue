@@ -59,7 +59,7 @@ def test_empty_submission(
         f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_empty_submission"
     )
 
-    input_iter = []
+    input_iter: list[int] = []
     output_iter: Iterator[int] = producer_client.run_submission(
         input_iter, chunk_size=20
     )
