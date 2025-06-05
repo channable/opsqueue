@@ -223,7 +223,10 @@ class ProducerClient:
         strategic_metadata: None | dict[str, str | int] = None,
         chunk_size: None | int = None,
     ) -> AsyncIterator[bytes]:
-        # TODO: the insertion is not async yet.
+        # NOTE: the insertion is not currently async.
+        # Why? Simplicity. This is unlikely to be the bottleneck
+        # for most async apps.
+        # If it does cause a problem in the future this can be revitisted
         submission_id = self.insert_submission_chunks(
             chunk_contents,
             metadata=metadata,
