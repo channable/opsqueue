@@ -61,7 +61,7 @@ impl ConsumerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
-        log::info!(
+        tracing::info!(
             "Initializing Opsqueue ConsumerClient (Opsqueue version: {})",
             opsqueue::version_info()
         );
@@ -69,7 +69,7 @@ impl ConsumerClient {
         let client = ActualConsumerClient::new(address);
         let object_store_client =
             ObjectStoreClient::new(object_store_url, object_store_options).map_err(CError)?;
-        log::info!("Opsqueue ConsumerClient initialized");
+        tracing::info!("Opsqueue ConsumerClient initialized");
 
         Ok(ConsumerClient {
             client,
@@ -180,11 +180,11 @@ impl ConsumerClient {
                     }
                     // In essence we 'catch `Exception` (but _not_ `BaseException` here)
                     Err(CError(L(e))) => {
-                        log::info!("Opsqueue consumer closing because of exception: {e:?}");
+                        tracing::info!("Opsqueue consumer closing because of exception: {e:?}");
                         return CError(L(e));
                     }
                     Err(CError(R(err))) => {
-                        log::warn!(
+                        tracing::warn!(
                             "Opsqueue consumer encountered a Rust error, but will continue: {}",
                             err
                         );
@@ -346,12 +346,12 @@ impl ConsumerClient {
                 CError(R(L(e))) => CError(R(R(L(e)))),
                 CError(R(R(e))) => CError(R(R(R(e)))),
             })?;
-        log::debug!("Reserved {} chunks", chunks.len());
+        tracing::debug!("Reserved {} chunks", chunks.len());
         for chunk in chunks {
             let submission_id = chunk.submission_id;
             let submission_prefix = chunk.submission_prefix.clone();
             let chunk_index = chunk.chunk_index;
-            log::debug!(
+            tracing::debug!(
             "Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
             submission_id,
             chunk_index,
@@ -363,7 +363,7 @@ impl ConsumerClient {
             });
             match res {
                 Ok(res) => {
-                    log::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
+                    tracing::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
                     self.complete_chunk_gilless(
                         submission_id,
                         submission_prefix.clone(),
@@ -375,7 +375,7 @@ impl ConsumerClient {
                         CError(R(L(e))) => CError(R(L(e))),
                         CError(R(R(e))) => CError(R(R(R(L(e))))),
                     })?;
-                    log::debug!(
+                    tracing::debug!(
                     "Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
                     submission_id,
                     chunk_index,
@@ -384,7 +384,7 @@ impl ConsumerClient {
                 }
                 Err(failure) => {
                     let failure_str = crate::common::format_pyerr(&failure);
-                    log::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
+                    tracing::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
                     self.fail_chunk_gilless(
                         submission_id,
                         submission_prefix.clone(),
@@ -395,7 +395,7 @@ impl ConsumerClient {
                         CError(L(py_err)) => CError(L(py_err)),
                         CError(R(e)) => CError(R(R(R(L(e))))),
                     })?;
-                    log::warn!(
+                    tracing::warn!(
                     "Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
                     submission_id,
                     chunk_index,
@@ -421,7 +421,7 @@ impl ConsumerClient {
 
             done_count = done_count.saturating_add(1);
             if done_count % 50 == 0 {
-                log::info!("Processed {} chunks", done_count);
+                tracing::info!("Processed {} chunks", done_count);
             }
         }
         Ok(done_count)

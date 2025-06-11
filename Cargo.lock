@@ -1652,9 +1652,6 @@ name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "loom"
@@ -2090,7 +2087,6 @@ dependencies = [
  "humantime",
  "insta",
  "itertools 0.14.0",
- "log",
  "moka",
  "moro-local",
  "object_store",
@@ -2129,13 +2125,13 @@ dependencies = [
  "anyhow",
  "chrono",
  "futures",
- "log",
  "opsqueue",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-log",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "uuid",
  "ux_serde",
 ]

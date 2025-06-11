@@ -157,11 +157,11 @@ fn setup_tracing() -> OtelGuard {
 fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) {
     use opentelemetry::global::Error;
     match err.into() {
-        Error::Trace(err) => log::debug!("OpenTelemetry trace error occurred. {}", err),
+        Error::Trace(err) => tracing::debug!("OpenTelemetry trace error occurred. {}", err),
         Error::Propagation(err) => {
-            log::debug!("OpenTelemetry propagation error occurred. {}", err)
+            tracing::debug!("OpenTelemetry propagation error occurred. {}", err)
         }
-        other => log::debug!("OpenTelemetry error occurred. {}", other),
+        other => tracing::debug!("OpenTelemetry error occurred. {}", other),
     }
 }
 

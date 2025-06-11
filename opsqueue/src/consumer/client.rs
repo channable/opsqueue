@@ -134,10 +134,10 @@ impl OuterClient {
     }
 
     async fn initialize(&self) -> Client {
-        log::info!("Initializing (or re-initializing) consumer client connection...");
+        tracing::info!("Initializing (or re-initializing) consumer client connection...");
         (|| Client::new(&self.1))
         .retry(retry_policy())
-        .notify(|err, duration| { log::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
+        .notify(|err, duration| { tracing::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
         .await
         .expect("Infinite retries should never return Err")
     }
@@ -171,7 +171,7 @@ impl Client {
             format!("ws://{url}/consumer")
         };
         let endpoint_uri = Uri::from_str(&endpoint_url)?;
-        log::debug!("Connecting to: {}", endpoint_uri);
+        tracing::debug!("Connecting to: {}", endpoint_uri);
 
         let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
 
@@ -183,19 +183,19 @@ impl Client {
         let Some(initial_message) = ws_stream.next().await else {
             anyhow::bail!("Websocket closed upon arrival")
         };
-        log::info!("Received initial message");
+        tracing::info!("Received initial message");
 
         let ServerToClientMessage::Init(config) = initial_message?.try_into()? else {
             anyhow::bail!("Expected first message to be client initialization")
         };
-        log::info!(
+        tracing::info!(
             "Consumer client connection (id={}) established with Opsqueue server {}",
             config.conn_id,
             config.version_info,
         );
 
         if config.version_info != crate::version_info() {
-            log::warn!(
+            tracing::warn!(
                 "Careful! Consumer and Server use different Opsqueue library versions! Client is version {} whereas Server is version {}.",
                 crate::version_info(),
                 config.version_info,
@@ -241,7 +241,7 @@ impl Client {
                 _ = cancellation_token.cancelled() => break,
                 _ = heartbeat_interval.tick() => {
                     if heartbeats_missed > config.max_missable_heartbeats {
-                        log::warn!("We missed too many heartbeats! Closing connection and marking client as unhealthy.");
+                        tracing::warn!("We missed too many heartbeats! Closing connection and marking client as unhealthy.");
                         // Mark ourselves as unhealthy:
                         healthy.store(false, std::sync::atomic::Ordering::Relaxed);
                         // For good measure, let's close the WebSocket connection early:
@@ -259,22 +259,22 @@ impl Client {
                     heartbeats_missed = 0;
                     match msg {
                         None => {
-                            log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
+                            tracing::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
                             break;
                         }
                         Some(Err(e)) => {
-                            log::error!("Opsqueue consumer client background task closing, reason: {e}");
+                            tracing::error!("Opsqueue consumer client background task closing, reason: {e}");
                             break;
                         },
                         Some(Ok(msg)) => {
                             if msg.is_close() {
-                                log::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
+                                tracing::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
                                 break
                             } else if msg.is_ping() {
-                                log::debug!("Received Heartbeat, expect auto-pong");
+                                tracing::debug!("Received Heartbeat, expect auto-pong");
                                 // let _ = ws_sink.lock().await.send(Message::pong("heartbeat")).await;
                             } else if msg.is_pong() {
-                                log::debug!("Received Pong reply to heartbeat, nice!");
+                                tracing::debug!("Received Pong reply to heartbeat, nice!");
                             } else if msg.is_binary() {
                                 let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
                                 match msg {
@@ -289,11 +289,11 @@ impl Client {
                                         // Handle a message from the server that was not associated with an earlier request
                                         match msg {
                                             AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                                log::error!("TODO: Client should cancel execution of current work if possible");
+                                                tracing::error!("TODO: Client should cancel execution of current work if possible");
                                             },
                                         }
                                     }
-                                    ServerToClientMessage::Init(_) => log::error!("Initialization message received after client loop start! Ignoring.")
+                                    ServerToClientMessage::Init(_) => tracing::error!("Initialization message received after client loop start! Ignoring.")
                                 }
                             }
                         },

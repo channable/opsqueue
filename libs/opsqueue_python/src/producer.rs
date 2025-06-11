@@ -62,7 +62,7 @@ impl ProducerClient {
         object_store_url: &str,
         object_store_options: Vec<(String, String)>,
     ) -> CPyResult<Self, NewObjectStoreClientError> {
-        log::info!(
+        tracing::info!(
             "Initializing Opsqueue ProducerClient (Opsqueue version: {})",
             opsqueue::version_info()
         );
@@ -71,7 +71,7 @@ impl ProducerClient {
         let object_store_client =
             opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
 
-        log::info!("Opsqueue ProducerClient initialized");
+        tracing::info!("Opsqueue ProducerClient initialized");
 
         Ok(ProducerClient {
             producer_client,
@@ -218,7 +218,7 @@ impl ProducerClient {
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
         py.allow_threads(|| {
             let prefix = uuid::Uuid::now_v7().to_string();
-            log::debug!("Uploading submission chunks to object store subfolder {prefix}...");
+            tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = Python::with_gil(|py| {
                 self.block_unless_interrupted(async {
                     let chunk_contents = chunk_contents.bind(py);
@@ -231,7 +231,7 @@ impl ProducerClient {
                 })
             })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
-            log::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
+            tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::common::InsertSubmission {
@@ -247,7 +247,7 @@ impl ProducerClient {
                     .insert_submission(&submission, &otel_trace_carrier)
                     .await
                     .map(|submission_id| {
-                        log::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
+                        tracing::debug!("Submitting finished; Submission ID {submission_id} assigned to subfolder {prefix}");
                         submission_id.into()
                     })
                     .map_err(|e| R(R(R(e))).into())
@@ -413,7 +413,7 @@ impl ProducerClient {
             {
                 return Ok(py_stream);
             }
-            log::info!(
+            tracing::info!(
                 "Submission {} not completed yet. Sleeping for {interval:?}...",
                 submission_id.id
             );
@@ -439,7 +439,7 @@ impl ProducerClient {
             .map_err(R)?
         {
             Some(submission::SubmissionStatus::Completed(submission)) => {
-                log::debug!(
+                tracing::debug!(
                     "Submission {} completed! Streaming result-chunks from object store",
                     id.id
                 );

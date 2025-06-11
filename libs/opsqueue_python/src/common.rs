@@ -206,12 +206,12 @@ impl Chunk {
             Some(bytes) => (bytes, None),
             None => {
                 let prefix = s.prefix.unwrap();
-                log::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
+                tracing::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
                 let res = object_store_client
                     .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
                     .await?
                     .to_vec();
-                log::debug!("Fetched chunk content: {res:?}");
+                tracing::debug!("Fetched chunk content: {res:?}");
                 (res, Some(prefix))
             }
         };

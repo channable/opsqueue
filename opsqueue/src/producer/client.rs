@@ -49,7 +49,7 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
         })
         .await
     }
@@ -75,7 +75,7 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
         })
         .await
     }
@@ -98,7 +98,7 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
         })
         .await
     }
@@ -123,7 +123,7 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            log::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
         })
         .await
     }

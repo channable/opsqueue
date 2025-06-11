@@ -35,4 +35,4 @@ pyo3-async-runtimes = { version = "0.23.0", features = ["tokio-runtime", "unstab
 
 # Logging/tracing:
 pyo3-log = "0.12.1"
-log = {version = "0.4.22", features = ["std"] }
+tracing = { version = "0.1.41", features = ["log"] }
