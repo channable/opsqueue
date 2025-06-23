@@ -96,7 +96,6 @@ impl TryFrom<ws::Message> for ServerToClientMessage {
     }
 }
 
-// TODO: property test ensuring serialization never panics
 #[cfg(feature = "server-logic")]
 impl From<ServerToClientMessage> for ws::Message {
     fn from(val: ServerToClientMessage) -> Self {
@@ -108,7 +107,6 @@ impl From<ServerToClientMessage> for ws::Message {
     }
 }
 
-// TODO: property test ensuring serialization never panics
 #[cfg(feature = "server-logic")]
 impl From<Envelope<ClientToServerMessage>> for ws::Message {
     fn from(val: Envelope<ClientToServerMessage>) -> Self {
@@ -141,7 +139,6 @@ impl TryFrom<tokio_tungstenite::tungstenite::Message> for ServerToClientMessage 
     }
 }
 
-// TODO: property test ensuring serialization never panics
 #[cfg(feature = "client-logic")]
 impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
     fn from(val: ServerToClientMessage) -> Self {
@@ -153,7 +150,6 @@ impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
     }
 }
 
-// TODO: property test ensuring serialization never panics
 #[cfg(feature = "client-logic")]
 impl From<Envelope<ClientToServerMessage>> for tokio_tungstenite::tungstenite::Message {
     fn from(val: Envelope<ClientToServerMessage>) -> Self {
