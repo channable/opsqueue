@@ -178,8 +178,6 @@ impl Completer {
         dispatcher: &Dispatcher,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
-        // TODO: Maybe give the completer just a single connection that does not need to be re-acquired,
-        // or give it a singleton pool?
         let pool = pool.clone();
         let me = Self {
             mailbox: rx,

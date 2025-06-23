@@ -230,8 +230,6 @@ impl ConsumerClient {
             E<ChunkRetrievalError, E<InternalConsumerClientError, IncorrectUsage<LimitIsZero>>>,
         >,
     > {
-        // TODO: Currently we do short-polling here if there are no chunks available.
-        // This is quite suboptimal; long-polling would be much nicer.
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
         loop {
             let res = self.block_unless_interrupted(async {

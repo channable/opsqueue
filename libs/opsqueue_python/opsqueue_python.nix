@@ -19,30 +19,9 @@ buildPythonPackage rec {
     name = "opsqueue_python";
     src = ../../.;
 
-    # TODO: I couldn't get it to work with the filter enabled.
-    # We're now copying slightly too much to the Nix store.
-    # Re-enable properly.
-
-    # srcWhitelist = [
-    #   "Cargo.toml"
-    #   "Cargo.lock"
-    #   "libs/opsqueue_python"
-    #   "libs/opsqueue_python/Cargo.toml"
-    #   "libs/opsqueue_python/pyproject.toml"
-    #   "libs/opsqueue_python/src(/.*)?"
-    #   "libs/opsqueue_python/python(/.*)?"
-
-    #   # Opsqueue is a dependency, so that needs to be included too
-    #   "opsqueue"
-    #   "opsqueue/Cargo.toml"
-    #   "opsqueue/.cargo(/.*)?"
-    #   "opsqueue/build\.rs"
-    #   "opsqueue/opsqueue_example_database_schema\.db"
-    #   # "opsqueue/app(/.*)?"
-    #   "opsqueue/migrations(/.*)?"
-    #   "opsqueue/src(/.*)?"
-    # ];
-
+    # We're copying slightly too much to the Nix store here,
+    # but using the more granular file filter was very error-prone.
+    # This is one thing that could be improved a little in the future.
     srcGlobalWhitelist = [
       ".py"
       ".pyi"

@@ -181,15 +181,16 @@ mod tests {
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         let db_pools = DBPools::from_test_pool(pool);
-
+        // We spawn the separate server
+        // and immediately yield.
+        // This to ensure that the new server task has a chance to run
+        // before continuing on the single-threaded tokio test runtime
         tokio::spawn(super::super::server::serve_for_tests(db_pools, url.into()));
-        // TODO: Nicer would be a HTTP client retry loop here. Or maybe Axum has a builtin 'server has started' thing for this?
-        tokio::task::yield_now().await; // Make sure that server task has a chance to run before continuing on the single-threaded tokio test runtime
+        tokio::task::yield_now().await;
     }
 
     #[sqlx::test]
     async fn test_count_submissions(pool: sqlx::SqlitePool) {
-        // TODO: Instead of hard-coded ports, it would be nice if the server could run on a Unix domain socket when testing
         let url = "0.0.0.0:4002";
         start_server_in_background(&pool, url).await;
         let client = Client::new(url);

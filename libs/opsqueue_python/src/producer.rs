@@ -162,7 +162,7 @@ impl ProducerClient {
 
     /// Directly inserts a submission without sending the chunks to GCS
     /// (but immediately embedding them in the DB).
-    /// TODO: This does not support StrategicMetadata currently
+    /// NOTE: This does not support StrategicMetadata currently
     #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,

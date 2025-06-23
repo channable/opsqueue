@@ -163,7 +163,8 @@ class ProducerClient:
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         return _unchunk_iterator(
             self.blocking_stream_completed_submission_chunks(submission_id),
@@ -205,7 +206,8 @@ class ProducerClient:
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         submission_id = self.insert_submission_chunks(
             chunk_contents,
@@ -270,7 +272,8 @@ class ProducerClient:
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
