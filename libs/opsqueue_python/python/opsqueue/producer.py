@@ -228,7 +228,7 @@ class ProducerClient:
         # NOTE: the insertion is not currently async.
         # Why? Simplicity. This is unlikely to be the bottleneck
         # for most async apps.
-        # If it does cause a problem in the future this can be revitisted
+        # If it does cause a problem in the future this can be revisited
         submission_id = self.insert_submission_chunks(
             chunk_contents,
             metadata=metadata,
