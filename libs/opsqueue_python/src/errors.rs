@@ -6,8 +6,7 @@ use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
-use opsqueue::common::NonZeroIsZero;
-use pyo3::exceptions::{PyBaseException, PyException};
+use pyo3::exceptions::PyBaseException;
 use pyo3::{import_exception, Bound, PyErr, Python};
 
 use crate::common::{ChunkIndex, SubmissionId};
@@ -20,7 +19,6 @@ import_exception!(opsqueue.exceptions, IncorrectUsageError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
-import_exception!(opsqueue.exceptions, ChunkCountIsZeroError);
 import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
 import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
@@ -119,12 +117,6 @@ impl From<CError<opsqueue::object_store::ChunkStorageError>> for PyErr {
     }
 }
 
-impl From<CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>> for PyErr {
-    fn from(value: CError<NonZeroIsZero<opsqueue::common::chunk::ChunkIndex>>) -> Self {
-        ChunkCountIsZeroError::new_err(value.0.to_string())
-    }
-}
-
 impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
     fn from(value: CError<IncorrectUsage<T>>) -> Self {
         IncorrectUsageError::new_err(value.0.to_string())
@@ -177,14 +169,6 @@ impl From<CError<ChunkNotFound>> for PyErr {
 impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
     fn from(value: CError<opsqueue::object_store::NewObjectStoreClientError>) -> Self {
         NewObjectStoreClientError::new_err(value.0.to_string())
-    }
-}
-
-// TODO: Only temporary. We want to get rid of all usage of anyhow
-// in the boundary to PyO3
-impl From<CError<anyhow::Error>> for PyErr {
-    fn from(value: CError<anyhow::Error>) -> Self {
-        PyException::new_err(value.0.to_string())
     }
 }
 

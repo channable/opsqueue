@@ -14,9 +14,6 @@ class SubmissionFailedError(Exception):
 
     This means that part of the submission is missing and therefore
     it can never be 'completed' anymore.
-
-    TODO include chunk error in error message,
-    and get at info about failed chunk.
     """
 
     def __init__(
@@ -86,7 +83,7 @@ class ChunkCountIsZeroError(IncorrectUsageError):
     """
     Raised when making an empty submission.
 
-    TODO it is likely that empty submissoins should not be a user error
+    TODO it is likely that empty submissions should not be a user error
     but rather be handled transparently by Opsqueue.
     """
 

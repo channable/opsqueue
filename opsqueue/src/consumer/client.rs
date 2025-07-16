@@ -79,7 +79,6 @@ impl OuterClient {
             .reserve_chunks(max, strategy)
             .await;
         if res.is_err() {
-            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -99,7 +98,6 @@ impl OuterClient {
             .complete_chunk(id, output_content)
             .await;
         if res.is_err() {
-            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -119,7 +117,6 @@ impl OuterClient {
             .fail_chunk(id, failure)
             .await;
         if res.is_err() {
-            // TODO: Only throw away inner client on connection failure style errors
             self.0.store(None);
         }
         res
@@ -289,7 +286,7 @@ impl Client {
                                         // Handle a message from the server that was not associated with an earlier request
                                         match msg {
                                             AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                                tracing::error!("TODO: Client should cancel execution of current work if possible");
+                                                tracing::error!("Client could cancel execution of current work, but this is not implemented yet.");
                                             },
                                         }
                                     }

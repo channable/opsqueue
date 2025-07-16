@@ -5,7 +5,6 @@ use ux_serde::u63;
 
 use super::errors::TryFromIntError;
 use super::submission::SubmissionId;
-use super::MayBeZero;
 
 /// Index of this particular chunk in a submission.
 #[derive(
@@ -61,12 +60,6 @@ impl ChunkIndex {
     }
     pub fn zero() -> Self {
         Self(u63::new(0))
-    }
-}
-
-impl MayBeZero for ChunkIndex {
-    fn is_zero(&self) -> bool {
-        self.0 == u63::new(0)
     }
 }
 

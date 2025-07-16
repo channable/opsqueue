@@ -142,7 +142,6 @@ class ProducerClient:
 
         Raises:
         - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.insert_submission_chunks(
@@ -164,7 +163,8 @@ class ProducerClient:
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         return _unchunk_iterator(
             self.blocking_stream_completed_submission_chunks(submission_id),
@@ -205,9 +205,9 @@ class ProducerClient:
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
 
         Raises:
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         submission_id = self.insert_submission_chunks(
             chunk_contents,
@@ -225,7 +225,10 @@ class ProducerClient:
         strategic_metadata: None | dict[str, str | int] = None,
         chunk_size: None | int = None,
     ) -> AsyncIterator[bytes]:
-        # TODO: the insertion is not async yet.
+        # NOTE: the insertion is not currently async.
+        # Why? Simplicity. This is unlikely to be the bottleneck
+        # for most async apps.
+        # If it does cause a problem in the future this can be revisited
         submission_id = self.insert_submission_chunks(
             chunk_contents,
             metadata=metadata,
@@ -248,7 +251,6 @@ class ProducerClient:
         returning an ID you can use to track the submission's progress afterwards.
 
         Raises:
-        - `ChunkCountIsZeroError` if passing an empty list of operations;
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         otel_trace_carrier = tracing.current_opentelemetry_tracecontext_to_carrier()
@@ -270,7 +272,8 @@ class ProducerClient:
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
-        - TODO special exception for when the submission fails.
+        - `SubmissionFailedError` if the submission failed permanently
+          (after retrying a consumer kept failing on one of the chunks)
         """
         return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
 
