@@ -31,7 +31,6 @@ The Python library used by the `Consumer` and `Producer` can be built from sourc
 
 ```python
 import logging
-import re
 from opsqueue.producer import ProducerClient
 from collections.abc import Iterable
 
@@ -44,7 +43,7 @@ def file_to_words(filename: str) -> Iterable[str]:
     """
     with open(filename) as input_file:
         for line in input_file:
-            for word in re.split("\\b", line):
+            for word in line.split():
                 yield word
 
 def print_words(words: Iterable[str]) -> None:
@@ -57,9 +56,9 @@ def print_words(words: Iterable[str]) -> None:
 
 def main() -> None:
     client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
-    words_iter = file_to_words("lipsum.txt")
-    capitalized_words = client.run_submission(words_iter, chunk_size=4000)
-    print_words(capitalized_words)
+    stream_of_words = file_to_words("lipsum.txt")
+    stream_of_capitalized_words = client.run_submission(stream_of_words, chunk_size=4000)
+    print_words(stream_of_capitalized_words)
 
 if __name__ == "__main__":
     main()
