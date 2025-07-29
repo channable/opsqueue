@@ -2,6 +2,9 @@
 name = "opsqueue"
 version = "0.30.0"
 edition = "2021"
+description = "lightweight batch processing queue for heavy loads"
+repository = "https://github.com/channable/opsqueue"
+license = "MIT"
 
 [lib]
 name="opsqueue"
