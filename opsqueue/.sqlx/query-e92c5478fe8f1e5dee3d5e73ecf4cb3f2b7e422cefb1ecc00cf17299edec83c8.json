@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\n    SAVEPOINT move_chunk_to_failed_chunks;\n\n    INSERT INTO chunks_failed\n    (submission_id, chunk_index, input_content, failure, failed_at)\n    SELECT submission_id, chunk_index, input_content, $1, julianday($2) FROM chunks WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;\n\n    DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6 RETURNING *;\n\n    RELEASE SAVEPOINT move_chunk_to_failed_chunks;\n    ",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "input_content",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "retries",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "random_order",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [false, false, true, false, false]
+  },
+  "hash": "e92c5478fe8f1e5dee3d5e73ecf4cb3f2b7e422cefb1ecc00cf17299edec83c8"
+}

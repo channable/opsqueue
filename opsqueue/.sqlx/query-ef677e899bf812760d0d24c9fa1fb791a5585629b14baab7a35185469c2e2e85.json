@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM chunks_metadata;",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_key",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_value",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "random_order",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [false, false, false, false, true]
+  },
+  "hash": "ef677e899bf812760d0d24c9fa1fb791a5585629b14baab7a35185469c2e2e85"
+}

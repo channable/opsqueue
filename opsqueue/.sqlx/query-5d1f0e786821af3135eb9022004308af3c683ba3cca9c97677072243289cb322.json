@@ -1,0 +1,18 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(1) as count FROM chunks;",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [false]
+  },
+  "hash": "5d1f0e786821af3135eb9022004308af3c683ba3cca9c97677072243289cb322"
+}

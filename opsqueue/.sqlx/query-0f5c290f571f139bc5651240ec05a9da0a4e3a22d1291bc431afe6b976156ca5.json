@@ -1,0 +1,48 @@
+{
+  "db_name": "SQLite",
+  "query": "\n    INSERT INTO submissions_failed\n    (id, chunks_total, prefix, metadata, failed_at, failed_chunk_id)\n    SELECT id, chunks_total, prefix, metadata, julianday($1), $2 FROM submissions WHERE id = $3;\n\n    DELETE FROM submissions WHERE id = $4 RETURNING *;\n    ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "prefix",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "chunks_total",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunks_done",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata",
+        "ordinal": 4,
+        "type_info": "Blob"
+      },
+      {
+        "name": "otel_trace_carrier",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "chunk_size",
+        "ordinal": 6,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [false, true, false, false, true, false, true]
+  },
+  "hash": "0f5c290f571f139bc5651240ec05a9da0a4e3a22d1291bc431afe6b976156ca5"
+}

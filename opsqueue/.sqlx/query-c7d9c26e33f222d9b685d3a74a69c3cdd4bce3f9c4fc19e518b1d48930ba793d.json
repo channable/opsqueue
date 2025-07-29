@@ -1,0 +1,53 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n              id AS \"id: SubmissionId\"\n            , prefix\n            , chunks_total AS \"chunks_total: ChunkCount\"\n            , chunk_size AS \"chunk_size: ChunkSize\"\n            , metadata\n            , failed_at AS \"failed_at: DateTime<Utc>\"\n            , failed_chunk_id AS \"failed_chunk_id: ChunkIndex\"\n            , otel_trace_carrier\n        FROM submissions_failed WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: SubmissionId",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "prefix",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "chunks_total: ChunkCount",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_size: ChunkSize",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata",
+        "ordinal": 4,
+        "type_info": "Blob"
+      },
+      {
+        "name": "failed_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "failed_chunk_id: ChunkIndex",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "otel_trace_carrier",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [false, true, false, true, true, false, false, false]
+  },
+  "hash": "c7d9c26e33f222d9b685d3a74a69c3cdd4bce3f9c4fc19e518b1d48930ba793d"
+}
