@@ -6,6 +6,7 @@ edition = "2021"
 [lib]
 name="opsqueue"
 path="src/lib.rs"
+include=["opsqueue_example_database_schema.db"]
 
 [[bin]]
 name="opsqueue"
