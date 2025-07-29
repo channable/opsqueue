@@ -1,3 +1,4 @@
+//! Defines the HTTP endpoints that are used by both the `producer` and `consumer` APIs
 use std::{
     any::Any,
     sync::{atomic::AtomicBool, Arc},

@@ -1,3 +1,4 @@
+//! Common datatypes and errors shared across all parts of Opsqueue
 use rustc_hash::FxHashMap;
 
 pub mod chunk;
