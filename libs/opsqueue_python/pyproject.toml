@@ -4,6 +4,12 @@ build-backend="maturin"
 
 [project]
 name = "opsqueue"
+readme="README.md"
+description = "Python client library for Opsqueue, the lightweight batch processing queue for heavy loads"
+license="MIT"
+keywords=["queue", "processing", "paralellism", "distributed", "batch", "producer", "consumer"]
+
+
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
@@ -19,6 +25,10 @@ dependencies = [
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
 ]
+
+[project.urls]
+Repository="https://github.com/channable/opsqueue"
+Issues="https://github.com/channable/opsqueue/issues"
 
 
 [tool.maturin]
