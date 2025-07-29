@@ -1,3 +1,9 @@
+//! Define common metrics exposed via a Prometheus endpoint
+//!
+//! This allows inspection of how well the queue is performing under production load.
+//!
+//! Note that we explicitly have a separate endpoint to check the queue health,
+//! which is more fine-grained than Prometheus' way to check whether a service is 'up'.
 use axum_prometheus::{
     metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit},
     metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},

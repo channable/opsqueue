@@ -1,3 +1,4 @@
+//! Dealing with `Submission`s: Collections of (`Chunks`s of) operations.
 use std::fmt::Display;
 use std::time::Duration;
 
