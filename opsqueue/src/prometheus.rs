@@ -133,7 +133,7 @@ pub fn setup_prometheus() -> (
 
 /// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
 ///
-/// Adapted from https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64
+/// Adapted from <https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64>
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
     (td.num_seconds() as f64) + (td.subsec_nanos() as f64) / NANOS_PER_SEC
