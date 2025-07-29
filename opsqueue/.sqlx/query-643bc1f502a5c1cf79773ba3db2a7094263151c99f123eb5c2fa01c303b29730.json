@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO submissions_metadata\n                ( submission_id\n                , metadata_key\n                , metadata_value\n                )\n                VALUES ($1, $2, $3)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "643bc1f502a5c1cf79773ba3db2a7094263151c99f123eb5c2fa01c303b29730"
+}

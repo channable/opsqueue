@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            submission_id AS \"submission_id: SubmissionId\"\n            , chunk_index AS \"chunk_index: ChunkIndex\"\n            , input_content\n            , failure AS \"failure: String\"\n            , failed_at AS \"failed_at: DateTime<Utc>\"\n        FROM chunks_failed WHERE submission_id = $1 AND chunk_index = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id: SubmissionId",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index: ChunkIndex",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "input_content",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "failure: String",
+        "ordinal": 3,
+        "type_info": "Blob"
+      },
+      {
+        "name": "failed_at: DateTime<Utc>",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [false, false, true, false, false]
+  },
+  "hash": "e282079ded2d608817a2b2d27917f097eb0ec213e5a9a4027563c44f4a05bca3"
+}

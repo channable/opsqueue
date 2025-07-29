@@ -1,0 +1,18 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(SUM(chunk_size * 1.0), 0.0) as count FROM chunks INNER JOIN submissions ON chunks.submission_id = submissions.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [false]
+  },
+  "hash": "91d3b5ff8e68c788d3209b4f1234a519eba5773d88c91635f5ffb01b1b5302fa"
+}

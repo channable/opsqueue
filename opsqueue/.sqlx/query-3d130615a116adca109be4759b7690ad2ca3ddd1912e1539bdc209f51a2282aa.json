@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3d130615a116adca109be4759b7690ad2ca3ddd1912e1539bdc209f51a2282aa"
+}

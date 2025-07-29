@@ -1,0 +1,23 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT metadata_key, metadata_value FROM submissions_metadata\n        WHERE submission_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "metadata_key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_value",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [false, false]
+  },
+  "hash": "eda8781445cef23e17446ca9007955f377d4059478a2bda4e5bd39ecd836e838"
+}
