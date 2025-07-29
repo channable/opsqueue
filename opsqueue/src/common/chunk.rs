@@ -1,3 +1,8 @@
+//! Dealing with `Chunk``s, the most fine-grained datatype the queue itself works with.
+//!
+//! While the smallest datatype is the 'Operation', the Opsqueue queue binary itself
+//! only deals with _chunks_ of them. The operations inside of them are hidden and only read/written
+//! from/to object store all the way in the client.
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};

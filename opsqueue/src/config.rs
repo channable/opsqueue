@@ -1,3 +1,7 @@
+//! Defines the source of truth for configuring the Opsqueue queue
+//!
+//! We make use of the excellent `clap` crate to make customizing the configuration
+//! with command-line args easier.
 use std::num::NonZero;
 
 use clap::Parser;
