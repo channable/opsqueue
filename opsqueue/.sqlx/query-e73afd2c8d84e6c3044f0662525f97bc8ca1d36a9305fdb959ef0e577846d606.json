@@ -1,0 +1,18 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT id AS \"id: SubmissionId\" FROM submissions WHERE prefix = $1\n            UNION ALL\n            SELECT id AS \"id: SubmissionId\" FROM submissions_completed WHERE prefix = $2\n            UNION ALL\n            SELECT id AS \"id: SubmissionId\" FROM submissions_failed WHERE prefix = $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id: SubmissionId",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [false]
+  },
+  "hash": "e73afd2c8d84e6c3044f0662525f97bc8ca1d36a9305fdb959ef0e577846d606"
+}

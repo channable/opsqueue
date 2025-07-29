@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "47aa7f2a4838460952bb215bef9a036c487350a9886f9747ff0890849637070f"
+}

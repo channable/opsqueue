@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            submission_id AS \"submission_id: SubmissionId\"\n            , chunk_index AS \"chunk_index: ChunkIndex\"\n            , output_content\n            , completed_at AS \"completed_at: DateTime<Utc>\"\n        FROM chunks_completed WHERE submission_id = $1 AND chunk_index = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id: SubmissionId",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index: ChunkIndex",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "output_content",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "completed_at: DateTime<Utc>",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [false, false, true, false]
+  },
+  "hash": "207eb97fe104f49008ebe798860f6340f180a1afde82dd1c08dc4b2b650fbfe2"
+}

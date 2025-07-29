@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size)\n        VALUES ($1, $2, $3, $4, $5, $6, $7)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "3f33fea7cc44678f448d8cf3c0aeb59f155dd89f019f7c66c9609083f3a3dc6f"
+}

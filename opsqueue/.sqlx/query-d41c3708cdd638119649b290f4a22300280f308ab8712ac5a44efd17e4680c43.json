@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO chunks (submission_id, chunk_index, input_content) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d41c3708cdd638119649b290f4a22300280f308ab8712ac5a44efd17e4680c43"
+}
