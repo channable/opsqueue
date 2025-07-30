@@ -276,7 +276,7 @@ impl WriterPool {
     ///
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
-    /// [`DBPools`]: super::DBPools
+    /// [`DBPools`]: DBPools
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.acquire().await
     }
@@ -287,7 +287,7 @@ impl ReaderPool {
     ///
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
-    /// [`DBPools`]: super::DBPools
+    /// [`DBPools`]: DBPools
     pub async fn reader_conn(&self) -> sqlx::Result<Reader<NoTransaction>> {
         self.acquire().await
     }

@@ -1,3 +1,11 @@
+//! Common error types
+//!
+//! You might notice in many places in Opsqueue that we use very fine-grained error types,
+//! and combine them together using the `E` helper.
+//!
+//! This is a conscious choice: While it makes some function signatures more complex,
+//! it allows us to be super precise in what kind of errors can and cannot occur
+//! in certain API calls.
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

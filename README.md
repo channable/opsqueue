@@ -1,22 +1,104 @@
-# Opsqueue
-
-A lightweight batch processing queue for the heaviest loads.
-
-Opsqueue does this by being:
-
-* Dead simple
-* Super lightweight
-* Highly scalable
-* Very Flexible
+# Opsqueue - A lightweight batch processing queue for the heaviest loads.
+[![Crates.io Version](https://img.shields.io/crates/v/opsqueue?label=opsqueue%20(binary))](https://crates.io/crates/opsqueue) [![PyPI - Version](https://img.shields.io/pypi/v/opsqueue?label=Python%20client%20library)](https://pypi.org/project/opsqueue/)
 
 ## Why opsqueue?
 
 The specific advantages of opsqueue are:
 
-* Small codebase that we fully understand
-* Full control to do exactly what you want
-* One standardized queuing system that can be reused again and again
-* A single way to implement monitoring, alerting, and debugging workflows
+- Lightweight: small codebase, written in Rust, minimal dependencies
+- Optimized for batch processing: we prioritize throughput over latency
+- Built to scale to billions of operations
+- Built with reliable building blocks: Rust, SQLite, Object Storage (such as S3 or GCS)
+- Operationally simple: single binary, embedded database, minimal configuration
+- Scales horizontally: you can have many consumers processing work in parallel
+- Very flexible: you have full control over how you produce and consume operations. We use a novel prioritization approach where decisions can be made in the middle of ongoing work.
+
+`opsqueue` is a good choice if you have a use case where you first generate a few million operations (an "operation" is any task that can be executed within a few seconds) and then later execute those operations.
+
+## Getting Started:
+
+### 1.  Grab the `opsqueue` binary and the Python client library
+
+1. Install the Opsqueue binary, using `cargo install opsqueue` (if you do not have Cargo/Rust installed yet, follow the instructions at https://rustup.rs/ first) ([Rust crate page](https://crates.io/crates/opsqueue))
+2. Install the Python client using `pip install opsqueue`, `uv install opsqueue` or similar. ([Pypi package page](https://pypi.org/project/opsqueue/))
+
+### 2. Create a `Producer`
+
+```python
+import logging
+from opsqueue.producer import ProducerClient
+from collections.abc import Iterable
+
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+
+def file_to_words(filename: str) -> Iterable[str]:
+    """
+    Iterates over each word and inter-word whitespace strings in a file
+    while keeping at most one line in memory at a time.
+    """
+    with open(filename) as input_file:
+        for line in input_file:
+            for word in line.split():
+                yield word
+
+def print_words(words: Iterable[str]) -> None:
+    """
+    Prints all words and inter-word whitespace tokens
+    without first loading the full string into memory
+    """
+    for word in words:
+        print(word, end="")
+
+def main() -> None:
+    client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
+    stream_of_words = file_to_words("lipsum.txt")
+    stream_of_capitalized_words = client.run_submission(stream_of_words, chunk_size=4000)
+    print_words(stream_of_capitalized_words)
+
+if __name__ == "__main__":
+    main()
+```
+
+### 3. Create a `Consumer`
+
+```python
+import logging
+from opsqueue.consumer import ConsumerClient, Strategy
+
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+
+def capitalize_word(word: str) -> str:
+    output = word.capitalize()
+    # print(f"Capitalized word: {word} -> {output}")
+    return output
+
+def main() -> None:
+    client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
+    client.run_each_op(capitalize_word, strategy=Strategy.Random())
+
+if __name__ == "__main__":
+    main()
+```
+
+
+4. Run the Producer, queue and Consumer
+
+- Run `opsqueue`.
+- Run `python3 capitalize_text_consumer.py` to run a consumer. Feel free to start multiple instances of this program to try out consumer concurrency.
+- Run `python3 capitalize_text_producer.py` to run a producer.
+
+The order you start these in does not matter; systems will reconnect and continue after any kind of failure or disconnect.
+
+By default the queue will listen on `http://localhost:3999`. The exact port can of course be changed.
+Producer and Consumer need to share the same object store location to store the content of their submission chunks.
+In development, this can be a local folder as shown in the code above.
+In production, you probably want to use Google's GCS, Amazon's S3 or Microsoft's Azure buckets.
+
+Please tinker with above code!
+If you want more logging to look under the hood, run `RUST_LOG=debug opsqueue` to enable extra logging for the queue.
+The Producer/Consumer will use whatever log level is configured in Python.
+
+More examples can be found in `./libs/opsqueue_python/examples/`
 
 ## Project structure
 
@@ -29,9 +111,9 @@ There are four main components:
   * Producer Client (used to generate and send work to Opsqueue, and optionally receive results)
   * Consuumer Client (used to execute chunks of work that was sent to Opsqueue)
 
-## For users: Including Opsqueue in other repos
+## For Nix users: Including Opsqueue via Nix
 
-Opsqueue's client libraries are available through `niv`.
+Opsqueue's client libraries and binary itself are also available through `niv`.
 
 1. Add opsqueue to your `nix/sources.json`, possibly by using `niv add https://github.com/channable/opsqueue`
 2. Package the now available `opsqueue` library as part of your overlay, using e.g.
@@ -39,8 +121,6 @@ Opsqueue's client libraries are available through `niv`.
 ```nix
 opsqueue = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/opsqueue_python.nix") { };
 ```
-
-An example to the changes required to your repo's nix overlay [can be found here](https://github.com/channable/ai/pull/763/files).
 
 ## For devs modifying Opsqueue: Building, running, testing
 

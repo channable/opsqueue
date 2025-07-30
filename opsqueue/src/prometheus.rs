@@ -1,3 +1,9 @@
+//! Define common metrics exposed via a Prometheus endpoint
+//!
+//! This allows inspection of how well the queue is performing under production load.
+//!
+//! Note that we explicitly have a separate endpoint to check the queue health,
+//! which is more fine-grained than Prometheus' way to check whether a service is 'up'.
 use axum_prometheus::{
     metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit},
     metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
@@ -133,7 +139,7 @@ pub fn setup_prometheus() -> (
 
 /// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
 ///
-/// Adapted from https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64
+/// Adapted from <https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64>
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
     (td.num_seconds() as f64) + (td.subsec_nanos() as f64) / NANOS_PER_SEC

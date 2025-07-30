@@ -1,0 +1,23 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO chunks_completed\n        (submission_id, chunk_index, output_content, completed_at)\n        SELECT submission_id, chunk_index, $1, julianday($2) FROM chunks\n        WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;\n\n        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6\n        RETURNING submission_id, chunk_index;\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [false, false]
+  },
+  "hash": "c4fc111b75ae4036c16042be654600dd598dddd4ee9412522b22127e5bceedc1"
+}
