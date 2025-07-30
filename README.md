@@ -1,6 +1,6 @@
 # Opsqueue
 
-Making big work horizontally scalable.
+A lightweight batch processing queue for the heaviest loads.
 
 Opsqueue does this by being:
 
@@ -11,7 +11,7 @@ Opsqueue does this by being:
 
 ## Why opsqueue?
 
-The specific advantages for opsqueue are:
+The specific advantages of opsqueue are:
 
 * Small codebase that we fully understand
 * Full control to do exactly what you want
