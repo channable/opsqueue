@@ -1,13 +1,6 @@
-# Opsqueue
+# Opsqueue - A lightweight batch processing queue for the heaviest loads.
 
-A lightweight batch processing queue for the heaviest loads.
-
-Opsqueue does this by being:
-
-* Dead simple
-* Super lightweight
-* Highly scalable
-* Very Flexible
+[![Crates.io Version](https://img.shields.io/crates/v/opsqueue?label=opsqueue%20(binary))](https://crates.io/crates/opsqueue) [![PyPI - Version](https://img.shields.io/pypi/v/opsqueue?label=Python%20client%20library)](https://pypi.org/project/opsqueue/)
 
 ## Why opsqueue?
 
