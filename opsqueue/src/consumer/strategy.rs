@@ -119,6 +119,9 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
+    use crate::common::chunk::ChunkSize;
+    use crate::common::StrategicMetadataMap;
+
     use super::*;
     use itertools::Itertools;
     use sqlx::Row;
@@ -394,5 +397,52 @@ pub mod test {
         630, 620, LIST SUBQUERY 9
         632, 630, SCAN json_each VIRTUAL TABLE INDEX 0:
         ");
+    }
+
+    use crate::db::Connection;
+    use futures::stream::TryStreamExt as _;
+
+    #[sqlx::test]
+    /// Tests whether the 'cutting the deck' technique is working
+    ///
+    /// We do this by checking whether two selects in a huge amount of available chunks
+    /// give a different result.
+    /// (There is a super tiny chance of this test flaking).
+    pub async fn test_random_strategy_is_random(pool: sqlx::SqlitePool) {
+        let db_pools = crate::db::DBPools::from_test_pool(&pool);
+
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        let input_chunks: Vec<_> = (0..10_000).map(|x| Some(format!("{x}").into())).collect();
+        crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            input_chunks.clone(),
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+
+        let mut conn = db_pools.reader_conn().await.unwrap();
+        let mut query_builder = QueryBuilder::default();
+        let vals1: Vec<Chunk> = Strategy::Random
+            .build_query(&mut query_builder, &Default::default())
+            .build_query_as()
+            .fetch(conn.get_inner())
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut query_builder = QueryBuilder::default();
+        let vals2: Vec<Chunk> = Strategy::Random
+            .build_query(&mut query_builder, &Default::default())
+            .build_query_as()
+            .fetch(conn.get_inner())
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert!(vals1 != vals2)
     }
 }
