@@ -99,7 +99,12 @@ impl Strategy {
         match self {
             Oldest => qb.push("\nORDER BY submission_id ASC"),
             Newest => qb.push("\nORDER BY submission_id DESC"),
-            Random => qb.push("\nORDER BY random_order ASC"),
+            Random => {
+                // It is **very** important that we do not apply extra sorting here.
+                // For the implementation of the 'cutting the deck' technique
+                // we rely on the order being 'whatever comes out of the UNION ALL'
+                qb
+            }
             PreferDistinct { .. } => {
                 // **no** change in sort order. PreferDistinct passes the sort order on to the inner strategies that it unions.
                 qb
