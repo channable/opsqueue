@@ -6,6 +6,11 @@ ALTER TABLE chunks DROP COLUMN random_order;
 ALTER TABLE chunks_metadata DROP COLUMN random_order;
 
 -- 2. Recreate the column with its new, proper definition
+--
+-- Compared to the OG definition, we ensure that the top 42 bits of `submission_id`
+-- which contain the timestamp part of the snowflake,
+-- always participate in the `random_order`,
+-- since the lower 22 bits are likely to be `0` except when under peak load.
 ALTER TABLE chunks ADD COLUMN random_order INTEGER NOT NULL GENERATED ALWAYS AS (
     (((submission_id + (submission_id >> 22) + chunk_index) % 65536) * 40503) % 65536
     ) VIRTUAL;
