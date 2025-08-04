@@ -17,7 +17,7 @@ use super::{magic::*, Connection};
 /// You can get a `WriterPool` from [`DBPools::writer_pool`], and a [`ReaderPool`] from
 /// [`DBPools::reader_pool`].
 ///
-/// [`Pool`]: super::pool::Pool
+/// [`Pool`]: super::Pool
 /// [`ReaderPool`]: super::ReaderPool
 /// [`WriterPool`]: super::WriterPool
 /// [`DBPools::reader_pool`]: super::DBPools::reader_pool

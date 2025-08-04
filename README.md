@@ -1,31 +1,26 @@
-# Opsqueue
-
-Making big work horizontally scalable.
-
-Opsqueue does this by being:
-
-* Dead simple
-* Super lightweight
-* Highly scalable
-* Very Flexible
+# Opsqueue - A lightweight batch processing queue for the heaviest loads.
+[![Crates.io Version](https://img.shields.io/crates/v/opsqueue?label=opsqueue%20(binary))](https://crates.io/crates/opsqueue) [![PyPI - Version](https://img.shields.io/pypi/v/opsqueue?label=Python%20client%20library)](https://pypi.org/project/opsqueue/)
 
 ## Why opsqueue?
 
-The specific advantages for opsqueue are:
+The specific advantages of opsqueue are:
 
-* Small codebase that we fully understand
-* Full control to do exactly what you want
-* One standardized queuing system that can be reused again and again
-* A single way to implement monitoring, alerting, and debugging workflows
+- Lightweight: small codebase, written in Rust, minimal dependencies
+- Optimized for batch processing: we prioritize throughput over latency
+- Built to scale to billions of operations
+- Built with reliable building blocks: Rust, SQLite, Object Storage (such as S3 or GCS)
+- Operationally simple: single binary, embedded database, minimal configuration
+- Scales horizontally: you can have many consumers processing work in parallel
+- Very flexible: you have full control over how you produce and consume operations. We use a novel prioritization approach where decisions can be made in the middle of ongoing work.
+
+`opsqueue` is a good choice if you have a use case where you first generate a few million operations (an "operation" is any task that can be executed within a few seconds) and then later execute those operations.
 
 ## Getting Started:
 
 ### 1.  Grab the `opsqueue` binary and the Python client library
 
-The binary can be installed from this repo, or build it from source by cloning the repo using `just build` or `cargo build`.
-This is a self-contained program, you can run it on a server on its own, include it in a tiny container, etc.
-
-The Python library used by the `Consumer` and `Producer` can be built from source, or (soon) simply be installed from pypi. (`pip install opsqueue`,`uv install opsqueue` etc.)
+1. Install the Opsqueue binary, using `cargo install opsqueue` (if you do not have Cargo/Rust installed yet, follow the instructions at https://rustup.rs/ first) ([Rust crate page](https://crates.io/crates/opsqueue))
+2. Install the Python client using `pip install opsqueue`, `uv install opsqueue` or similar. ([Pypi package page](https://pypi.org/project/opsqueue/))
 
 ### 2. Create a `Producer`
 
@@ -116,9 +111,9 @@ There are four main components:
   * Producer Client (used to generate and send work to Opsqueue, and optionally receive results)
   * Consuumer Client (used to execute chunks of work that was sent to Opsqueue)
 
-## For users: Including Opsqueue in other repos
+## For Nix users: Including Opsqueue via Nix
 
-Opsqueue's client libraries are available through `niv`.
+Opsqueue's client libraries and binary itself are also available through `niv`.
 
 1. Add opsqueue to your `nix/sources.json`, possibly by using `niv add https://github.com/channable/opsqueue`
 2. Package the now available `opsqueue` library as part of your overlay, using e.g.
@@ -126,8 +121,6 @@ Opsqueue's client libraries are available through `niv`.
 ```nix
 opsqueue = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/opsqueue_python.nix") { };
 ```
-
-An example to the changes required to your repo's nix overlay [can be found here](https://github.com/channable/ai/pull/763/files).
 
 ## For devs modifying Opsqueue: Building, running, testing
 

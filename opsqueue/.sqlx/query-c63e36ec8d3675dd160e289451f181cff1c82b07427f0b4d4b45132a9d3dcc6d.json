@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n    SAVEPOINT skip_remaining_chunks;\n\n    INSERT INTO chunks_failed\n    (submission_id, chunk_index, input_content, failure, skipped, failed_at)\n    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks WHERE chunks.submission_id = $2;\n\n    DELETE FROM chunks WHERE chunks.submission_id = $3;\n\n    RELEASE SAVEPOINT skip_remaining_chunks;\n    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c63e36ec8d3675dd160e289451f181cff1c82b07427f0b4d4b45132a9d3dcc6d"
+}

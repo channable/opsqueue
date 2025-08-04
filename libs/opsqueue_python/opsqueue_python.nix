@@ -30,6 +30,7 @@ buildPythonPackage rec {
       ".toml"
       ".lock"
       ".db"
+      ".md"
     ];
   };
 

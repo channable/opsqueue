@@ -1,3 +1,4 @@
+//! The Consumer side: Interface to reserve, work on, and complete/fail individual Chunks
 pub mod common;
 pub mod strategy;
 

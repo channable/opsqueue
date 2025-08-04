@@ -1,0 +1,18 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE chunks SET retries = retries + 1\n        WHERE submission_id = $1 AND chunk_index = $2\n        RETURNING retries;\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "retries",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [false]
+  },
+  "hash": "833bc5d955f1c2455e06e9762dec84c4c24fe58c21165e6a80d0a5bfae1a3cd7"
+}

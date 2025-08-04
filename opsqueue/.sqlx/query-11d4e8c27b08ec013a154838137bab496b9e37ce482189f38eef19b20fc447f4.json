@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT\n            submission_id AS \"submission_id: SubmissionId\"\n            , chunk_index AS \"chunk_index: ChunkIndex\"\n            , input_content\n            , retries\n        FROM chunks WHERE submission_id = $1 AND chunk_index = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "submission_id: SubmissionId",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chunk_index: ChunkIndex",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "input_content",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "retries",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [false, false, true, false]
+  },
+  "hash": "11d4e8c27b08ec013a154838137bab496b9e37ce482189f38eef19b20fc447f4"
+}

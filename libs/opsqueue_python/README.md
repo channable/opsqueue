@@ -1,22 +1,93 @@
-# How to run
+The Python client library for the Opsqueue lightweight batch processing queue system.
 
-1. Move to the `opsqueue_consumer` subdirectory. With `direnv`, the extra `.envrc` in those directories will load an (essentially empty) Python virtual environment. This is necessary to make the next step work.
+Find the full README with examples at https://github.com/channable/opsqueue
 
-2. Any time you change any Rust code, run [maturin](https://github.com/PyO3/maturin), specifically `maturin develop` to update the Rust<->Python library bindings:
-```bash
-maturin develop
+## Getting Started:
+
+### 1.  Grab the `opsqueue` binary and the Python client library
+
+1. Install the Opsqueue binary, using `cargo install opsqueue` (if you do not have Cargo/Rust installed yet, follow the instructions at https://rustup.rs/ first)
+2. Install the Python client using `pip install opsqueue`, `uv install opsqueue` or similar.
+
+### 2. Create a `Producer`
+
+```python
+import logging
+from opsqueue.producer import ProducerClient
+from collections.abc import Iterable
+
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+
+def file_to_words(filename: str) -> Iterable[str]:
+    """
+    Iterates over each word and inter-word whitespace strings in a file
+    while keeping at most one line in memory at a time.
+    """
+    with open(filename) as input_file:
+        for line in input_file:
+            for word in line.split():
+                yield word
+
+def print_words(words: Iterable[str]) -> None:
+    """
+    Prints all words and inter-word whitespace tokens
+    without first loading the full string into memory
+    """
+    for word in words:
+        print(word, end="")
+
+def main() -> None:
+    client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
+    stream_of_words = file_to_words("lipsum.txt")
+    stream_of_capitalized_words = client.run_submission(stream_of_words, chunk_size=4000)
+    print_words(stream_of_capitalized_words)
+
+if __name__ == "__main__":
+    main()
 ```
 
-3. Now, just run a Python shell which now (courtesy of the virtual env) has access to the `opsqueue_consumer` module using:
-```bash
-python
+### 3. Create a `Consumer`
+
+```python
+import logging
+from opsqueue.consumer import ConsumerClient, Strategy
+
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+
+def capitalize_word(word: str) -> str:
+    output = word.capitalize()
+    # print(f"Capitalized word: {word} -> {output}")
+    return output
+
+def main() -> None:
+    client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
+    client.run_each_op(capitalize_word, strategy=Strategy.Random())
+
+if __name__ == "__main__":
+    main()
 ```
 
-# Structure
 
-All logic happens inside the main `opsqueue` crate.
-Only the Python-specific parts live inside this library.
+4. Run the Producer, queue and Consumer
 
-You will notice that some structs/enums are defined which seem to be 1:1 copies of definitions inside the main crate.
-This is because we cannot add PyO3-specific code, macro calls, conversions, etc. inside the main crate.
-And note that this duplication is _fake_ duplication: In cases where we want the Python interface to diverge slightly (or significantly) from the Rust crate's to make it more Python-idiomatic, the types will stop being identical.
+- Run `opsqueue`.
+- Run `python3 capitalize_text_consumer.py` to run a consumer. Feel free to start multiple instances of this program to try out consumer concurrency.
+- Run `python3 capitalize_text_producer.py` to run a producer.
+
+The order you start these in does not matter; systems will reconnect and continue after any kind of failure or disconnect.
+
+By default the queue will listen on `http://localhost:3999`. The exact port can of course be changed.
+Producer and Consumer need to share the same object store location to store the content of their submission chunks.
+In development, this can be a local folder as shown in the code above.
+In production, you probably want to use Google's GCS, Amazon's S3 or Microsoft's Azure buckets.
+
+Please tinker with above code!
+If you want more logging to look under the hood, run `RUST_LOG=debug opsqueue` to enable extra logging for the queue.
+The Producer/Consumer will use whatever log level is configured in Python.
+
+More examples can be found in `./libs/opsqueue_python/examples/`
+
+
+## More Info
+
+Find the full README with examples at https://github.com/channable/opsqueue
