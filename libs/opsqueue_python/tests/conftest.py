@@ -19,6 +19,7 @@ from opsqueue.consumer import Strategy
 #     print("A")
 #     multiprocessing.set_start_method('forkserver')
 
+PROJECT_ROOT = Path(__file__).parents[3]
 
 @dataclass
 class OpsqueueProcess:
@@ -34,8 +35,8 @@ def opsqueue_bin_location() -> Path:
         )
         return Path(deriv_path) / "bin" / "opsqueue"
     else:
-        subprocess.run(["cargo", "build", "--quiet", "--bin", "opsqueue"])
-        return Path(".", "target", "debug", "opsqueue")
+        subprocess.run(["cargo", "build", "--quiet", "--bin", "opsqueue"], cwd=PROJECT_ROOT, check=True)
+        return PROJECT_ROOT / Path("target", "debug", "opsqueue")
 
 
 @pytest.fixture
@@ -62,12 +63,11 @@ def opsqueue_service(
         "--database-filename",
         temp_dbname,
     ]
-    cwd = "../../"
     env = os.environ.copy()  # We copy the env so e.g. RUST_LOG and other env vars are propagated from outside of the invocation of pytest
     if env.get("RUST_LOG") is None:
         env["RUST_LOG"] = "off"
 
-    with subprocess.Popen(command, cwd=cwd, env=env) as process:
+    with subprocess.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
         try:
             wrapper = OpsqueueProcess(port=port, process=process)
             yield wrapper

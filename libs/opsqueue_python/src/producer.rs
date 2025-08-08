@@ -217,17 +217,19 @@ impl ProducerClient {
         py.allow_threads(|| {
             let prefix = uuid::Uuid::now_v7().to_string();
             tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
-            let chunk_count = Python::with_gil(|py| {
-                self.block_unless_interrupted(async {
-                    let chunk_contents = chunk_contents.bind(py);
-                    let stream = futures::stream::iter(chunk_contents)
-                        .map(|item| item.and_then(|item| item.extract()).map_err(Into::into));
+            let chunk_count = self.block_unless_interrupted(async {
+                    let chunk_contents = std::iter::from_fn(move || {
+                        Python::with_gil(|py|
+                            chunk_contents.bind(py).clone().next()
+                                .map(|item| item.and_then(
+                                    |item| item.extract()).map_err(Into::into)))
+                    });
+                    let stream = futures::stream::iter(chunk_contents);
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
                         .map_err(|e| CError(R(L(e))))
-                })
-            })?;
+                })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
             tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
