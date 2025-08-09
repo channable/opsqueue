@@ -98,7 +98,6 @@ impl From<u63> for ChunkIndex {
 }
 
 #[pyclass(frozen, eq)]
-#[derive(Debug)]
 pub enum Strategy {
     #[pyo3(constructor=())]
     Oldest(),
@@ -111,6 +110,12 @@ pub enum Strategy {
         meta_key: String,
         underlying: Py<Strategy>,
     },
+}
+
+impl std::fmt::Debug for Strategy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        strategy::Strategy::from(self).fmt(formatter)
+    }
 }
 
 impl From<strategy::Strategy> for Strategy {
@@ -415,9 +420,12 @@ pub async fn run_unless_interrupted<T, E>(
 where
     E: From<FatalPythonException>,
 {
+    // let sleep = tokio::time::sleep(Duration::from_secs(10));
+
     tokio::select! {
         res = future => res,
         py_err = check_signals_in_background() => Err(py_err)?,
+        // _ = sleep => { Err(FatalPythonException(pyo3::exceptions::PyRuntimeError::new_err("Timeout triggered. Deadlock?")).into())},
     }
 }
 

@@ -20,6 +20,7 @@ use opsqueue::{
     tracing::CarrierMap,
     E,
 };
+use pyo3_async_runtimes::TaskLocals;
 use ux_serde::u63;
 
 use crate::{
@@ -361,7 +362,7 @@ impl ProducerClient {
         submission_id: SubmissionId,
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
-        let _tokio_active_runtime_guard = me.runtime.enter();
+        // let _tokio_active_runtime_guard = me.runtime.enter();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             match me.stream_completed_submission_chunks(submission_id).await {
                 Ok(iter) => {
@@ -464,7 +465,7 @@ pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalErro
 
 #[pyclass]
 pub struct PyChunksIter {
-    stream: tokio::sync::Mutex<ChunksStream>,
+    stream: Arc<tokio::sync::Mutex<ChunksStream>>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -477,7 +478,7 @@ impl PyChunksIter {
             .map_err(CError)
             .boxed();
         Self {
-            stream: tokio::sync::Mutex::new(stream),
+            stream: Arc::new(tokio::sync::Mutex::new(stream)),
             runtime: client.runtime.clone(),
         }
     }
@@ -490,10 +491,18 @@ impl PyChunksIter {
     }
 
     fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
+        let py = slf.py();
         let me = &mut *slf;
         let runtime = &mut me.runtime;
-        let stream = &mut me.stream;
-        runtime.block_on(async { stream.lock().await.next().await })
+        let stream = me.stream.clone();
+        tracing::warn!("Grabbing another element from PyChunksIter");
+        py.allow_threads(move || {
+            runtime.block_on(async {
+                tokio::task::spawn(async move { stream.lock().await.next().await })
+                    .await
+                    .unwrap()
+            })
+        })
     }
 
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -510,7 +519,7 @@ pub struct PyChunksAsyncIter {
 impl From<PyChunksIter> for PyChunksAsyncIter {
     fn from(iter: PyChunksIter) -> Self {
         Self {
-            stream: Arc::new(iter.stream),
+            stream: iter.stream,
             runtime: iter.runtime,
         }
     }
@@ -523,15 +532,135 @@ impl PyChunksAsyncIter {
     }
 
     fn __anext__(slf: PyRef<'_, Self>) -> PyResult<Bound<'_, PyAny>> {
-        let _tokio_active_runtime_guard = slf.runtime.enter();
+        println!("A");
+
+        println!("B");
         let stream = slf.stream.clone();
-        pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
-            let res = stream.lock().await.next().await;
-            match res {
-                None => Err(PyStopAsyncIteration::new_err(())),
-                Some(Ok(val)) => Ok(Some(val)),
-                Some(Err(e)) => Err(e.into()),
-            }
+        println!("C");
+
+        let _tokio_active_runtime_guard = slf.runtime.enter();
+        pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(
+            slf.py(),
+            async move {
+                let res = stream.lock().await.next().await;
+
+                match res {
+                    None => Err(PyStopAsyncIteration::new_err(())),
+                    Some(Ok(val)) => Ok(Some(val)),
+                    Some(Err(e)) => Err(e.into()),
+                }
+            },
+        )
+        // pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(slf.py(), async move {
+        //     println!("D");
+        //     tokio::task::yield_now().await;
+
+        //     let res = Python::with_gil(|py| py.allow_threads(async || {
+        //         tokio::task::yield_now().await;
+        //         stream.lock().await.next().await
+        //     })).await;
+        //     match res {
+        //         None => Err(PyStopAsyncIteration::new_err(())),
+        //         Some(Ok(val)) => Ok(Some(val)),
+        //         Some(Err(e)) => Err(e.into()),
+        //     }
+        // })
+        // let stream = slf.stream.clone();
+        // let runtime = slf.runtime.clone();
+        // let py = slf.py();
+        // // future_into_py eats the `py` token but does not by itself release the GIL
+        // // Therefore, we immediately 'reacquire' the GIL (a no-op) to explicitly call `py.allow_threads`.
+        // pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        //     // let res =
+        //     let res = Python::with_gil(|py| {
+        //         py.allow_threads(|| {
+        //            runtime.spawn(async move {stream.lock().await.next().await})
+        //             // stream.lock().await.next().await
+        //         })
+        //     })
+        //     .await.expect("Top-level spawn should not be canceled");
+        //     ;
+
+        //     match res {
+        //         None => Err(PyStopAsyncIteration::new_err(())),
+        //         Some(Ok(val)) => Ok(Some(val)),
+        //         Some(Err(e)) => Err(e.into()),
+        //     }
+        // })
+
+        // // Based on https://github.com/awestlake87/pyo3-asyncio/issues/59#issuecomment-1007680179
+        // pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
+        //     tokio::task::yield_now().await;
+
+        //     // We run this on a separate thread, to reduce the chance of deadlocks.
+        //     let result = Python::with_gil(|py| py.allow_threads(move ||
+        //         tokio::task::spawn_blocking(move || {
+        //         tracing::warn!("Grabbing another element from PyChunksAsyncIter");
+        //         let res = tokio::task::LocalSet::new().block_on(&runtime, async move {
+        //             tokio::task::yield_now().await;
+        //             stream.lock().await.next().await
+        //         });
+        //         match res {
+        //             None => Err(PyStopAsyncIteration::new_err(())),
+        //             Some(Ok(val)) => Ok(Some(val)),
+        //             Some(Err(e)) => Err(e.into()),
+        //         }
+        //     })));
+        //     result.await.expect("JoinHandle should always succeed")
+        // })
+    }
+}
+
+struct TokioRuntimeThatIsInScope();
+
+use once_cell::unsync::OnceCell as UnsyncOnceCell;
+
+tokio::task_local! {
+    static TASK_LOCALS: UnsyncOnceCell<TaskLocals>;
+}
+
+impl pyo3_async_runtimes::generic::Runtime for TokioRuntimeThatIsInScope {
+    type JoinError = tokio::task::JoinError;
+    type JoinHandle = tokio::task::JoinHandle<()>;
+
+    fn spawn<F>(fut: F) -> Self::JoinHandle
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        println!("About to spawn");
+        // Python::with_gil(|py| {
+        //     println!("reacquired GIL");
+        //     py.allow_threads(|| {
+        // println!("Allowing threads");
+        tokio::task::spawn(async move {
+            println!("Inside spawn");
+            fut.await;
         })
+        //     })
+        // })
+    }
+}
+
+impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
+    fn scope<F, R>(
+        locals: TaskLocals,
+        fut: F,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
+    where
+        F: std::future::Future<Output = R> + Send + 'static,
+    {
+        let cell = UnsyncOnceCell::new();
+        cell.set(locals).unwrap();
+
+        Box::pin(TASK_LOCALS.scope(cell, fut))
+    }
+
+    fn get_task_locals() -> Option<TaskLocals> {
+        TASK_LOCALS
+            .try_with(|c| {
+                c.get()
+                    .map(|locals| Python::with_gil(|py| locals.clone_ref(py)))
+            })
+            .unwrap_or_default()
     }
 }
