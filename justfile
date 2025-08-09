@@ -40,6 +40,7 @@ test-unit *TEST_ARGS:
   cargo nextest run {{TEST_ARGS}}
 
 # Python integration test suite. Args are forwarded to pytest
+# We run the command with 'timeout 10' to kill pytest if a deadlock were to happen
 [group('test')]
 test-integration *TEST_ARGS: build-bin build-python
   #!/usr/bin/env bash
@@ -47,7 +48,7 @@ test-integration *TEST_ARGS: build-bin build-python
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  pytest --color=yes {{TEST_ARGS}}
+  timeout 30 pytest --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
