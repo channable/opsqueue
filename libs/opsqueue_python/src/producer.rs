@@ -20,7 +20,7 @@ use opsqueue::{
     tracing::CarrierMap,
     E,
 };
-use pyo3_async_runtimes::TaskLocals;
+// use pyo3_async_runtimes::TaskLocals;
 use ux_serde::u63;
 
 use crate::{
@@ -356,22 +356,28 @@ impl ProducerClient {
         })
     }
 
-    pub fn async_stream_completed_submission_chunks<'p>(
+    pub async fn async_stream_completed_submission_chunks<'p>(
         &self,
-        py: Python<'p>,
+        // py: Python<'p>,
         submission_id: SubmissionId,
-    ) -> PyResult<Bound<'p, PyAny>> {
+    ) -> PyResult<PyChunksAsyncIter> {
         let me = self.clone();
         // let _tokio_active_runtime_guard = me.runtime.enter();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            match me.stream_completed_submission_chunks(submission_id).await {
-                Ok(iter) => {
-                    let async_iter = PyChunksAsyncIter::from(iter);
-                    Ok(async_iter)
-                }
-                Err(e) => PyResult::Err(e.into()),
+        // pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        match AsyncAllowThreads(
+            self.runtime
+                .spawn(async move { me.stream_completed_submission_chunks(submission_id).await }),
+        )
+        .await
+        .expect("Top-level spawn to succeed")
+        {
+            Ok(iter) => {
+                let async_iter = PyChunksAsyncIter::from(iter);
+                Ok(async_iter)
             }
-        })
+            Err(e) => PyResult::Err(e.into()),
+        }
+        // })
     }
 }
 
@@ -531,26 +537,34 @@ impl PyChunksAsyncIter {
         slf
     }
 
-    fn __anext__(slf: PyRef<'_, Self>) -> PyResult<Bound<'_, PyAny>> {
-        println!("A");
+    // async fn __anext__(slf: PyRef<'_, Self>) -> PyResult<usize> {
+    // async fn __anext__(mut _pyself: PyRefMut<'_, Self>) -> PyResult<i32> {
+    fn __anext__(&self) -> Option<usize> {
+        todo!()
+        // println!("A");
 
-        println!("B");
-        let stream = slf.stream.clone();
-        println!("C");
+        // println!("B");
+        // let stream = self.stream.clone();
+        // println!("C");
 
-        let _tokio_active_runtime_guard = slf.runtime.enter();
-        pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(
-            slf.py(),
-            async move {
-                let res = stream.lock().await.next().await;
+        // let res = AsyncAllowThreads(self.runtime.spawn(async move { stream.lock().await.next().await})).await.expect("Top level spawn to succeed");
+        // match res {
+        //     None => Ok(None),
+        //     Some(Ok(val)) => Ok(Some(val)),
+        //     Some(Err(e)) => Err(e.into()),
+        // }
+        // pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(
+        //     slf.py(),
+        //     async move {
+        //         let res = stream.lock().await.next().await;
 
-                match res {
-                    None => Err(PyStopAsyncIteration::new_err(())),
-                    Some(Ok(val)) => Ok(Some(val)),
-                    Some(Err(e)) => Err(e.into()),
-                }
-            },
-        )
+        //         match res {
+        //             None => Err(PyStopAsyncIteration::new_err(())),
+        //             Some(Ok(val)) => Ok(Some(val)),
+        //             Some(Err(e)) => Err(e.into()),
+        //         }
+        //     },
+        // )
         // pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(slf.py(), async move {
         //     println!("D");
         //     tokio::task::yield_now().await;
@@ -611,56 +625,82 @@ impl PyChunksAsyncIter {
     }
 }
 
-struct TokioRuntimeThatIsInScope();
+// struct TokioRuntimeThatIsInScope();
 
-use once_cell::unsync::OnceCell as UnsyncOnceCell;
+// use once_cell::unsync::OnceCell as UnsyncOnceCell;
 
-tokio::task_local! {
-    static TASK_LOCALS: UnsyncOnceCell<TaskLocals>;
-}
+// tokio::task_local! {
+//     static TASK_LOCALS: UnsyncOnceCell<TaskLocals>;
+// }
 
-impl pyo3_async_runtimes::generic::Runtime for TokioRuntimeThatIsInScope {
-    type JoinError = tokio::task::JoinError;
-    type JoinHandle = tokio::task::JoinHandle<()>;
+// impl pyo3_async_runtimes::generic::Runtime for TokioRuntimeThatIsInScope {
+//     type JoinError = tokio::task::JoinError;
+//     type JoinHandle = tokio::task::JoinHandle<()>;
 
-    fn spawn<F>(fut: F) -> Self::JoinHandle
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        println!("About to spawn");
-        // Python::with_gil(|py| {
-        //     println!("reacquired GIL");
-        //     py.allow_threads(|| {
-        // println!("Allowing threads");
-        tokio::task::spawn(async move {
-            println!("Inside spawn");
-            fut.await;
+//     fn spawn<F>(fut: F) -> Self::JoinHandle
+//     where
+//         F: std::future::Future<Output = ()> + Send + 'static,
+//     {
+//         println!("About to spawn");
+//         // Python::with_gil(|py| {
+//         //     println!("reacquired GIL");
+//         //     py.allow_threads(|| {
+//         // println!("Allowing threads");
+//         tokio::task::spawn(async move {
+//             println!("Inside spawn");
+//             fut.await;
+//         })
+//         //     })
+//         // })
+//     }
+// }
+
+// impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
+//     fn scope<F, R>(
+//         locals: TaskLocals,
+//         fut: F,
+//     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
+//     where
+//         F: std::future::Future<Output = R> + Send + 'static,
+//     {
+//         let cell = UnsyncOnceCell::new();
+//         cell.set(locals).unwrap();
+
+//         Box::pin(TASK_LOCALS.scope(cell, fut))
+//     }
+
+//     fn get_task_locals() -> Option<TaskLocals> {
+//         TASK_LOCALS
+//             .try_with(|c| {
+//                 c.get()
+//                     .map(|locals| Python::with_gil(|py| locals.clone_ref(py)))
+//             })
+//             .unwrap_or_default()
+//     }
+// }
+
+use std::{
+    future::Future,
+    pin::{pin, Pin},
+    task::{Context, Poll},
+};
+
+/// Unlocks the GIL across `.await` points
+///
+/// Based on https://pyo3.rs/v0.25.1/async-await.html#release-the-gil-across-await
+struct AsyncAllowThreads<F>(F);
+
+impl<F> Future for AsyncAllowThreads<F>
+where
+    F: Future + Unpin + Send,
+    F::Output: Send,
+{
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let waker = cx.waker();
+        Python::with_gil(|py| {
+            py.allow_threads(|| pin!(&mut self.0).poll(&mut Context::from_waker(waker)))
         })
-        //     })
-        // })
-    }
-}
-
-impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
-    fn scope<F, R>(
-        locals: TaskLocals,
-        fut: F,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>>
-    where
-        F: std::future::Future<Output = R> + Send + 'static,
-    {
-        let cell = UnsyncOnceCell::new();
-        cell.set(locals).unwrap();
-
-        Box::pin(TASK_LOCALS.scope(cell, fut))
-    }
-
-    fn get_task_locals() -> Option<TaskLocals> {
-        TASK_LOCALS
-            .try_with(|c| {
-                c.get()
-                    .map(|locals| Python::with_gil(|py| locals.clone_ref(py)))
-            })
-            .unwrap_or_default()
     }
 }
