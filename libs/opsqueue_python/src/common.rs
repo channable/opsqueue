@@ -443,10 +443,24 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 
 /// Sets up a Tokio runtime to use for a client.
 ///
-/// Rather than the current-thread scheduler,
-/// we use a (single extra!) background thread,
-/// allowing us to keep (GIL-less) tasks alive in the background
-/// even when returning back to Python
+/// Note that we very intentionally use the multi-threaded scheduler
+/// but with a single thread.
+///
+/// We **cannot** use the current_thread scheduler,
+/// since that would result in the Python task scheduler (e.g. `asyncio`)
+/// and the Rust task scheduler (`Tokio`) to run on the same thread.
+/// This seems to work fine, until you end up with a Python future
+/// that depends on a Rust future completing or vice-versa:
+/// Since the task schedulers each have their own task queues,
+/// work co-operatively, and know nothing of each-other,
+/// they will not (nor can they) yield to the other.
+/// The result: deadlocks!
+///
+/// Therefore, we run the Tokio scheduler on a separate thread.
+/// Since switching between the 'Python scheduler thread' and the
+/// 'Tokio scheduler thread' is preemptive,
+/// the same problem now no longer occurs:
+/// Both schedulers are able to make forward progress (even on a 1-CPU machine).
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
