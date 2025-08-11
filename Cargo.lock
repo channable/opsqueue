@@ -2125,6 +2125,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "futures",
+ "once_cell",
  "opsqueue",
  "pyo3",
  "pyo3-async-runtimes",
