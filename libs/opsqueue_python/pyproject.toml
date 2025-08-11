@@ -52,6 +52,7 @@ test = [
     "pytest==8.3.3",
     "pytest-random-order==1.1.1",
     "pytest-parallel==0.1.1",
+    "pytest-timeout==2.4.0",
     "py==1.11.0", # Needs to be manually specified because of this issue: https://github.com/kevlened/pytest-parallel/issues/118
 ]
 
@@ -59,3 +60,7 @@ test = [
 # We ensure tests never rely on global state,
 # by running them in a random order, and in parallel:
 addopts = "--random-order --workers=auto"
+# Individual tests should be very fast. They should never take multiple seconds
+# If after 20sec (accomodating for a toaster-like PC) there is no progress,
+# assume a deadlock
+timeout=20
