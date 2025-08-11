@@ -2106,6 +2106,7 @@ dependencies = [
  "once_cell",
  "opsqueue",
  "pyo3",
+ "pyo3-async-runtimes",
  "pyo3-log",
  "thiserror 1.0.69",
  "tokio",
@@ -2320,6 +2321,19 @@ dependencies = [
  "pyo3-ffi",
  "pyo3-macros",
  "unindent",
+]
+
+[[package]]
+name = "pyo3-async-runtimes"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d73cc6b1b7d8b3cef02101d37390dbdfe7e450dfea14921cae80a9534ba59ef2"
+dependencies = [
+ "futures",
+ "once_cell",
+ "pin-project-lite",
+ "pyo3",
+ "tokio",
 ]
 
 [[package]]

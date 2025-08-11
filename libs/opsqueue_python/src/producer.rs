@@ -539,20 +539,30 @@ impl PyChunksAsyncIter {
 
     // async fn __anext__(slf: PyRef<'_, Self>) -> PyResult<usize> {
     // async fn __anext__(mut _pyself: PyRefMut<'_, Self>) -> PyResult<i32> {
-    fn __anext__(&self) -> Option<usize> {
-        todo!()
+    // fn __anext__(&self) -> Option<usize> {
+    fn __anext__<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         // println!("A");
 
         // println!("B");
         // let stream = self.stream.clone();
         // println!("C");
-
-        // let res = AsyncAllowThreads(self.runtime.spawn(async move { stream.lock().await.next().await})).await.expect("Top level spawn to succeed");
-        // match res {
-        //     None => Ok(None),
-        //     Some(Ok(val)) => Ok(Some(val)),
-        //     Some(Err(e)) => Err(e.into()),
-        // }
+        let stream = self.stream.clone();
+        let runtime = self.runtime.clone();
+        pyo3_async_runtimes::tokio::future_into_py(
+            py,
+            AsyncAllowThreads(Box::pin(async move {
+                todo!();
+                let res = runtime
+                    .spawn(async move { stream.lock().await.next().await })
+                    .await
+                    .expect("Top level spawn to succeed");
+                match res {
+                    None => Err(PyStopAsyncIteration::new_err(())),
+                    Some(Ok(val)) => Ok(Some(val)),
+                    Some(Err(e)) => Err(e.into()),
+                }
+            })),
+        )
         // pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, _, _>(
         //     slf.py(),
         //     async move {

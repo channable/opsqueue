@@ -456,7 +456,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 /// allowing us to keep (GIL-less) tasks alive in the background
 /// even when returning back to Python
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .worker_threads(1)
         .enable_all()
         .build()

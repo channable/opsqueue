@@ -31,7 +31,7 @@ thiserror = "1.0.65"
 
 # Python FFI:
 pyo3 = { version = "0.25.1", features = ["chrono", "experimental-async"] }
-# pyo3-async-runtimes = { version = "0.23.0", features = ["tokio-runtime", "unstable-streams"] }
+pyo3-async-runtimes = { version = "0.25.0", features = ["tokio-runtime"] }
 
 # Logging/tracing:
 pyo3-log = "0.12.1"
