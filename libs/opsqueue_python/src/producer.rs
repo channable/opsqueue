@@ -362,15 +362,18 @@ impl ProducerClient {
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
         let _tokio_active_runtime_guard = me.runtime.enter();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            match me.stream_completed_submission_chunks(submission_id).await {
-                Ok(iter) => {
-                    let async_iter = PyChunksAsyncIter::from(iter);
-                    Ok(async_iter)
+        crate::async_util::future_into_py(
+            py,
+            crate::async_util::async_allow_threads(Box::pin(async move {
+                match me.stream_completed_submission_chunks(submission_id).await {
+                    Ok(iter) => {
+                        let async_iter = PyChunksAsyncIter::from(iter);
+                        Ok(async_iter)
+                    }
+                    Err(e) => PyResult::Err(e.into()),
                 }
-                Err(e) => PyResult::Err(e.into()),
-            }
-        })
+            })),
+        )
     }
 }
 
