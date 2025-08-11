@@ -21,6 +21,7 @@ from opsqueue.consumer import Strategy
 
 PROJECT_ROOT = Path(__file__).parents[3]
 
+
 @dataclass
 class OpsqueueProcess:
     port: int
@@ -35,7 +36,11 @@ def opsqueue_bin_location() -> Path:
         )
         return Path(deriv_path) / "bin" / "opsqueue"
     else:
-        subprocess.run(["cargo", "build", "--quiet", "--bin", "opsqueue"], cwd=PROJECT_ROOT, check=True)
+        subprocess.run(
+            ["cargo", "build", "--quiet", "--bin", "opsqueue"],
+            cwd=PROJECT_ROOT,
+            check=True,
+        )
         return PROJECT_ROOT / Path("target", "debug", "opsqueue")
 
 
