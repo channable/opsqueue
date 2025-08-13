@@ -23,6 +23,7 @@ use opsqueue::{
 use ux_serde::u63;
 
 use crate::{
+    async_util,
     common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus},
     errors::{self, CError, CPyResult, FatalPythonException},
 };
@@ -217,17 +218,19 @@ impl ProducerClient {
         py.allow_threads(|| {
             let prefix = uuid::Uuid::now_v7().to_string();
             tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
-            let chunk_count = Python::with_gil(|py| {
-                self.block_unless_interrupted(async {
-                    let chunk_contents = chunk_contents.bind(py);
-                    let stream = futures::stream::iter(chunk_contents)
-                        .map(|item| item.and_then(|item| item.extract()).map_err(Into::into));
+            let chunk_count = self.block_unless_interrupted(async {
+                    let chunk_contents = std::iter::from_fn(move || {
+                        Python::with_gil(|py|
+                            chunk_contents.bind(py).clone().next()
+                                .map(|item| item.and_then(
+                                    |item| item.extract()).map_err(Into::into)))
+                    });
+                    let stream = futures::stream::iter(chunk_contents);
                     self.object_store_client
                         .store_chunks(&prefix, ChunkType::Input, stream)
                         .await
                         .map_err(|e| CError(R(L(e))))
-                })
-            })?;
+                })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
             tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
@@ -360,15 +363,18 @@ impl ProducerClient {
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
         let _tokio_active_runtime_guard = me.runtime.enter();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            match me.stream_completed_submission_chunks(submission_id).await {
-                Ok(iter) => {
-                    let async_iter = PyChunksAsyncIter::from(iter);
-                    Ok(async_iter)
+        async_util::future_into_py(
+            py,
+            async_util::async_allow_threads(Box::pin(async move {
+                match me.stream_completed_submission_chunks(submission_id).await {
+                    Ok(iter) => {
+                        let async_iter = PyChunksAsyncIter::from(iter);
+                        Ok(async_iter)
+                    }
+                    Err(e) => PyResult::Err(e.into()),
                 }
-                Err(e) => PyResult::Err(e.into()),
-            }
-        })
+            })),
+        )
     }
 }
 
@@ -462,7 +468,7 @@ pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalErro
 
 #[pyclass]
 pub struct PyChunksIter {
-    stream: tokio::sync::Mutex<ChunksStream>,
+    stream: Arc<tokio::sync::Mutex<ChunksStream>>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -475,7 +481,7 @@ impl PyChunksIter {
             .map_err(CError)
             .boxed();
         Self {
-            stream: tokio::sync::Mutex::new(stream),
+            stream: Arc::new(tokio::sync::Mutex::new(stream)),
             runtime: client.runtime.clone(),
         }
     }
@@ -487,11 +493,21 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
-        let me = &mut *slf;
-        let runtime = &mut me.runtime;
-        let stream = &mut me.stream;
-        runtime.block_on(async { stream.lock().await.next().await })
+    fn __next__(&self, py: Python<'_>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
+        // The only time we need the GIL is when turning the result back.
+        // By unlocking here, we reduce the chance of deadlocks.
+        py.allow_threads(move || {
+            let runtime = self.runtime.clone();
+            let stream = self.stream.clone();
+            runtime.block_on(async {
+                // We lock the stream in a separate Tokio task
+                // that explicitly runs on the runtime thread rather than on the main Python thread.
+                // This reduces the possibility for deadlocks even further.
+                tokio::task::spawn(async move { stream.lock().await.next().await })
+                    .await
+                    .expect("Top-level spawn to succeed")
+            })
+        })
     }
 
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -508,7 +524,7 @@ pub struct PyChunksAsyncIter {
 impl From<PyChunksIter> for PyChunksAsyncIter {
     fn from(iter: PyChunksIter) -> Self {
         Self {
-            stream: Arc::new(iter.stream),
+            stream: iter.stream,
             runtime: iter.runtime,
         }
     }
@@ -520,16 +536,27 @@ impl PyChunksAsyncIter {
         slf
     }
 
-    fn __anext__(slf: PyRef<'_, Self>) -> PyResult<Bound<'_, PyAny>> {
-        let _tokio_active_runtime_guard = slf.runtime.enter();
-        let stream = slf.stream.clone();
-        pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
-            let res = stream.lock().await.next().await;
-            match res {
-                None => Err(PyStopAsyncIteration::new_err(())),
-                Some(Ok(val)) => Ok(Some(val)),
-                Some(Err(e)) => Err(e.into()),
-            }
-        })
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let stream = self.stream.clone();
+        let _tokio_active_runtime_guard = self.runtime.enter();
+
+        async_util::future_into_py(
+            py,
+            // The only time we need the GIL is when turning the result into Python datatypes.
+            // By unlocking here, we reduce the chance of deadlocks.
+            async_util::async_allow_threads(Box::pin(async move {
+                // We lock the stream in a separate Tokio task
+                // that explicitly runs on the runtime thread rather than on the main Python thread.
+                // This reduces the possibility for deadlocks even further.
+                let res = tokio::task::spawn(async move { stream.lock().await.next().await })
+                    .await
+                    .expect("Top-level spawn to succeed");
+                match res {
+                    None => Err(PyStopAsyncIteration::new_err(())),
+                    Some(Ok(val)) => Ok(Some(val)),
+                    Some(Err(e)) => Err(e.into()),
+                }
+            })),
+        )
     }
 }
