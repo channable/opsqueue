@@ -1,3 +1,4 @@
+mod async_util;
 pub mod common;
 pub mod consumer;
 pub mod errors;
