@@ -339,6 +339,7 @@ Under the hood, the producer and the queue talk with each other using a JSON-RES
 The communication between the consumer and the queue on the other hand is done in COBR over a persistent WebSocket connection. A heartbeating protocol is used to ensure that a closed or broken connection is detected early. The goal is that the system will recognize and recover from network problems or crashed consumers within seconds.
 Similarly, as a user no detailed understanding of this should be necessary as it is abstracted away inside the client library.
 
+
 ### Consumer <-> Opsqueue Heartbeating
 
 For heartbeating between the queue and the consumer, the following approach is used:
