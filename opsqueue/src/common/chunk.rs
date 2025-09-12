@@ -546,7 +546,6 @@ pub mod db {
     ) -> sqlx::Result<()> {
         const ROWS_PER_QUERY: usize = 1000;
 
-        // let start = std::time::Instant::now();
         let mut iter = chunks.iter().peekable();
         while iter.peek().is_some() {
             let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);

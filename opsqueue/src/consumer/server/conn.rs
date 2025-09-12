@@ -244,7 +244,6 @@ impl ConsumerConn {
             }
             CompleteChunk { id, output_content } => {
                 self.consumer_state.complete_chunk(id, output_content).await;
-                // .map_err(anyhow::Error::from)?;
                 None
             }
             FailChunk { id, failure } => {

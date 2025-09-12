@@ -268,8 +268,7 @@ impl Client {
                                 tracing::debug!("Opsqueue consumer client background task closing as WebSocket connection closed");
                                 break
                             } else if msg.is_ping() {
-                                tracing::debug!("Received Heartbeat, expect auto-pong");
-                                // let _ = ws_sink.lock().await.send(Message::pong("heartbeat")).await;
+                                tracing::debug!("Received Heartbeat, expecting auto-pong");
                             } else if msg.is_pong() {
                                 tracing::debug!("Received Pong reply to heartbeat, nice!");
                             } else if msg.is_binary() {

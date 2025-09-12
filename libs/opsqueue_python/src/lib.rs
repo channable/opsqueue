@@ -37,6 +37,5 @@ fn opsqueue_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
 
     // Top-level functions
-    // m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
     Ok(())
 }

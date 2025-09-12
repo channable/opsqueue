@@ -130,7 +130,7 @@ impl ObjectStoreClient {
                 )
                 .await?;
                 tracing::debug!(
-                    "Upladed chunk {}",
+                    "Uploaded chunk {}",
                     self.chunk_path(submission_prefix, chunk_index.into(), chunk_type)
                 );
                 Ok(chunk_index + u63::new(1))
@@ -238,31 +238,3 @@ impl ObjectStoreClient {
         &self.0.url
     }
 }
-
-// #[must_use("Streams do nothig unless polled")]
-// struct MyStream {
-//     object_store_client: ObjectStoreClient,
-//     submission_prefix: String,
-//     range: std::ops::Range<u63>,
-//     chunk_type: ChunkType,
-// }
-
-// impl futures::Stream for MyStream {
-//     type Item = Result<Vec<u8>, ChunkRetrievalError>;
-
-//     fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-//         let next_elem = self.range.start.into();
-//         let fut = self.object_store_client.retrieve_chunk(&self.submission_prefix, next_elem, self.chunk_type);
-//         tokio::pin!(fut);
-//         match fut.poll_unpin() {
-//             Poll::Pending => Poll::Pending,
-//             Poll::Ready(res) => Poll::Ready(Some(res)),
-//         }
-//     }
-
-//     fn size_hint(&self) -> (usize, Option<usize>) {
-//         let start: u64 = self.range.start.into();
-//         let end: u64 = self.range.end.into();
-//         (start as usize, Some(end as usize))
-//     }
-// }

@@ -136,7 +136,6 @@ fn setup_tracing() -> OtelGuard {
                 .with_thread_ids(true)
                 .with_target(true),
         )
-        // .with(MetricsLayer::new(meter_provider.clone()))
         .with(tracing_opentelemetry::OpenTelemetryLayer::new(otel_tracer()))
         // While we don´t forward traces to Sentry, we do want info and above spans to show up as breadcrumbs
         // and error spans to show up as errors

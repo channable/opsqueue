@@ -12,7 +12,6 @@ impl MetaState {
     }
 
     pub fn increment(&self, key: &str, val: &MetaStateVal) {
-        // tracing::warn!("Incrementing {key}, {val:?}, me before: {self:?}");
         match self.0.get(key) {
             Some(meta_state_field) => meta_state_field.increment(val),
             None => self.0.entry(key.to_string()).or_default().increment(val),
@@ -20,7 +19,6 @@ impl MetaState {
     }
 
     pub fn decrement(&self, key: &str, val: &MetaStateVal) {
-        // tracing::warn!("Decrementing {key}, {val:?}, me before: {self:?}");
         let ripe_for_removal = {
             let meta_state_field = self
                 .0
