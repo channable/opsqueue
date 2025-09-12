@@ -13,7 +13,7 @@ use ux_serde::u63;
 /// and then re-use it in the producer/consumer for all communication going forward from there.
 ///
 /// It is Arc-wrapped, allowing for cheap cloning
-/// (which is especially necessary for `ObjectStoreClient::retrieve_chunks`)
+/// (which is especially necessary for [`ObjectStoreClient::retrieve_chunks`])
 #[derive(Debug, Clone)]
 pub struct ObjectStoreClient(Arc<ObjectStoreClientInner>);
 
@@ -98,7 +98,7 @@ pub enum NewObjectStoreClientError {
 impl ObjectStoreClient {
     /// Creates a new client for interacting with an object store.
     ///
-    /// The given `object_store_url` recognizes the formats detailed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
+    /// The given `object_store_url` recognizes the formats detailed [here](https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse).
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
     pub fn new(
         object_store_url: &str,

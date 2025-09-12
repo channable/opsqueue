@@ -50,9 +50,9 @@ impl ProducerClient {
     /// :param object_store_url: The URL used to upload/download objects from e.g. GCS.
     ///   use `file:///tmp/my/local/path` to use a local file when running small examples in development.
     ///   use `gs://bucket-name/path/inside/bucket` to connect to GCS in production.
-    ///   Supports the formats listed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
+    ///   Supports the formats listed here: <https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse>
     /// :param object_store_options: A list of key-value strings as extra options for the chosen object store.
-    ///        For example, for GCS, see https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants
+    ///        For example, for GCS, see <https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants>
     #[new]
     #[pyo3(signature = (address, object_store_url, object_store_options=vec![]))]
     pub fn new(

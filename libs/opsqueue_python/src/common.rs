@@ -476,7 +476,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 ///
 /// Internally acquires the GIL!
 ///
-/// c.f. https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods
+/// c.f. <https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods>
 pub fn format_pyerr(err: &PyErr) -> String {
     Python::with_gil(|py| {
         let msg: Option<String> = (|| {
