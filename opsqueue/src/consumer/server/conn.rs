@@ -328,7 +328,7 @@ impl ConsumerConnectionId {
     /// time. The colors list runs out after 24, and after that it'll fall back to UUIDs.
     pub fn color() -> ConsumerConnectionId {
         static mut INDEX: AtomicUsize = AtomicUsize::new(0);
-        const COLORS: [&'static str; 24] = [
+        const COLORS: [&str; 24] = [
             "red",
             "green",
             "blue",
@@ -363,7 +363,7 @@ impl ConsumerConnectionId {
             .get(i)
             .map(|c| String::from(*c))
             .map(ConsumerConnectionId)
-            .unwrap_or_else(|| Self::uuid())
+            .unwrap_or_else(Self::uuid)
     }
 }
 

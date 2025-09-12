@@ -140,7 +140,7 @@ pub mod test {
                 let id = row.get::<i64, &str>("id");
                 let parent = row.get::<i64, &str>("parent");
                 let detail = row.get::<String, &str>("detail");
-                format!("{}, {}, {}", id, parent, detail)
+                format!("{id}, {parent}, {detail}")
             })
             .join("\n")
     }

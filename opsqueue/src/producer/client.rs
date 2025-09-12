@@ -292,8 +292,7 @@ mod tests {
         match status {
             SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_, _) => {
                 panic!(
-                    "Expected a SubmissionStatus that is still Inprogress, got: {:?}",
-                    status
+                    "Expected a SubmissionStatus that is still Inprogress, got: {status:?}"
                 );
             }
             SubmissionStatus::InProgress(submission) => {

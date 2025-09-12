@@ -232,7 +232,7 @@ impl Chunk {
 #[pymethods]
 impl Chunk {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("{self:?}")
     }
 }
 
@@ -261,14 +261,14 @@ impl ChunkFailed {
 #[pymethods]
 impl ChunkFailed {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("{self:?}")
     }
 }
 
 #[pymethods]
 impl Strategy {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("{self:?}")
     }
 }
 
@@ -365,7 +365,7 @@ impl Submission {
 #[pymethods]
 impl SubmissionStatus {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("{self:?}")
     }
 }
 
@@ -484,9 +484,9 @@ pub fn format_pyerr(err: &PyErr) -> String {
             let traceback_str = traceback
                 .format()
                 .expect("Tracebacks are always formattable");
-            let str = format!("{}{}", traceback_str, err);
+            let str = format!("{traceback_str}{err}");
             Some(str)
         })();
-        msg.unwrap_or_else(|| format!("{}", err))
+        msg.unwrap_or_else(|| format!("{err}"))
     })
 }
