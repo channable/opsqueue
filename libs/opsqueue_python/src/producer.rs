@@ -16,7 +16,7 @@ use opsqueue::{
 use opsqueue::{
     common::{chunk, submission, StrategicMetadataMap},
     object_store::{ChunkRetrievalError, ChunkType},
-    producer::common::ChunkContents,
+    producer::ChunkContents,
     tracing::CarrierMap,
     E,
 };
@@ -81,7 +81,7 @@ impl ProducerClient {
     pub fn __repr__(&self) -> String {
         format!(
             "<opsqueue_producer.ProducerClient(address={:?}, object_store_url={:?})>",
-            self.producer_client.endpoint_url,
+            self.producer_client.base_url(),
             self.object_store_client.url()
         )
     }
@@ -176,7 +176,7 @@ impl ProducerClient {
         let strategic_metadata = Default::default();
 
         py.allow_threads(|| {
-            let submission = opsqueue::producer::common::InsertSubmission {
+            let submission = opsqueue::producer::InsertSubmission {
                 chunk_size: chunk_size.map(|n| chunk::ChunkSize(n as i64)),
                 chunk_contents: ChunkContents::Direct {
                     contents: chunk_contents,
@@ -235,7 +235,7 @@ impl ProducerClient {
             tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
             self.block_unless_interrupted(async move {
-                let submission = opsqueue::producer::common::InsertSubmission {
+                let submission = opsqueue::producer::InsertSubmission {
                     chunk_size: chunk_size.map(chunk::ChunkSize),
                     chunk_contents: ChunkContents::SeeObjectStorage {
                         prefix: prefix.clone(),

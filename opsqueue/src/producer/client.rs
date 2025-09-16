@@ -17,28 +17,44 @@ fn retry_policy() -> impl BackoffBuilder {
         .with_max_times(100)
 }
 
+/// A producer's interface to the server.
+///
+/// This client sends HTTP requests to the opsqueue server, and retries on errors where
+/// it makes sense to retry them, such as when the request times out.
 #[derive(Debug, Clone)]
 pub struct Client {
-    pub endpoint_url: Box<str>,
+    base_url: Box<str>,
     http_client: reqwest::Client,
 }
 
 impl Client {
-    pub fn new(endpoint_url: &str) -> Self {
+    /// Construct a new producer client.
+    ///
+    /// `host` is where the `/producer/...` endpoints can be reached over http.
+    /// Don't include the scheme or the `/producer` part.
+    ///
+    /// Examples: `0.0.0.0:1312`, `my.opsueue.instance.example.com`, `services.example.com/opsqueue`
+    pub fn new(host: &str) -> Self {
         let http_client = reqwest::Client::new();
-        let endpoint_url = format!("{endpoint_url}/producer").into_boxed_str();
+        let base_url = format!("http://{host}/producer").into_boxed_str();
         Client {
-            endpoint_url,
+            base_url,
             http_client,
         }
     }
-
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+    /// Get the total number of non-failed, non-completed submissionsi currently
+    /// known to the server.
+    ///
+    /// This uses the `/producer/submissions/count` endpoint.
     pub async fn count_submissions(&self) -> Result<u32, InternalProducerClientError> {
         (|| async {
-            let endpoint_url = &self.endpoint_url;
+            let base_url = &self.base_url;
             let resp = self
                 .http_client
-                .get(format!("http://{endpoint_url}/submissions/count"))
+                .get(format!("{base_url}/submissions/count"))
                 .send()
                 .await?;
             let bytes = resp.bytes().await?;
@@ -49,21 +65,24 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
         .await
     }
 
+    /// Create a new submission for consumers to pick up.
+    ///
+    /// This uses the POST `/producer/submissions` endpoint.
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
         otel_trace_carrier: &CarrierMap,
     ) -> Result<SubmissionId, InternalProducerClientError> {
         (|| async {
-            let endpoint_url = &self.endpoint_url;
+            let base_url = &self.base_url;
             let resp = self
                 .http_client
-                .post(format!("http://{endpoint_url}/submissions"))
+                .post(format!("{base_url}/submissions"))
                 .headers(otel_trace_carrier.try_into().unwrap_or_default())
                 .json(submission)
                 .send()
@@ -75,20 +94,23 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
         .await
     }
 
+    /// Get the status of an existing submission identified by its `submission_id`.
+    ///
+    /// This uses the GET `/producer/submissions` endpoint.
     pub async fn get_submission(
         &self,
         submission_id: SubmissionId,
     ) -> Result<Option<SubmissionStatus>, InternalProducerClientError> {
         (|| async {
-            let endpoint_url = &self.endpoint_url;
+            let base_url = &self.base_url;
             let resp = self
                 .http_client
-                .get(format!("http://{endpoint_url}/submissions/{submission_id}"))
+                .get(format!("{base_url}/submissions/{submission_id}"))
                 .send()
                 .await?;
             let bytes = resp.bytes().await?;
@@ -98,7 +120,7 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
         .await
     }
@@ -108,11 +130,11 @@ impl Client {
         prefix: &str,
     ) -> Result<Option<SubmissionId>, InternalProducerClientError> {
         (|| async {
-            let endpoint_url = &self.endpoint_url;
+            let base_url = &self.base_url;
             let resp = self
                 .http_client
                 .get(format!(
-                    "http://{endpoint_url}/submissions/lookup_id_by_prefix/{prefix}"
+                    "{base_url}/submissions/lookup_id_by_prefix/{prefix}"
                 ))
                 .send()
                 .await?;
@@ -123,16 +145,20 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {:?} with sleeping {:?}", err, dur);
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
         .await
     }
 
+    /// Get the server's version from the `/version` endpoint.
+    ///
+    /// The result will be the value of [`VERSION_CARGO_SEMVER`][crate::VERSION_CARGO_SEMVER]
+    /// prefixed with a "v", for example `v0.30.5`.
     pub async fn server_version(&self) -> Result<String, InternalProducerClientError> {
-        let endpoint_url = &self.endpoint_url;
+        let base_url = &self.base_url;
         let resp = self
             .http_client
-            .get(format!("http://{endpoint_url}/version"))
+            .get(format!("{base_url}/version"))
             .send()
             .await?;
         let text = resp.text().await?;
@@ -291,9 +317,7 @@ mod tests {
             .expect("Should be Some");
         match status {
             SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_, _) => {
-                panic!(
-                    "Expected a SubmissionStatus that is still Inprogress, got: {status:?}"
-                );
+                panic!("Expected a SubmissionStatus that is still Inprogress, got: {status:?}");
             }
             SubmissionStatus::InProgress(submission) => {
                 assert_eq!(submission.chunks_done, 0);

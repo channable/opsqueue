@@ -12,10 +12,44 @@ pub type Metadata = Vec<u8>;
 
 static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
+/// Uniquely identifies a [`Submission`].
+///
+/// Submission IDs are snowflakes. These are 64-bit identifiers that includes
+/// creation time information and are sortable on that timestamp.
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct SubmissionId(u63);
+
+impl Default for SubmissionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SubmissionId {
+    /// Generate a new [`SubmissionId`].
+    pub fn new() -> SubmissionId {
+        let inner: u64 = ID_GENERATOR.generate();
+        SubmissionId(u63::new(inner))
+    }
+    /// Access the [`std::time::SystemTime`] at which the ID was generated.
+    pub fn system_time(self) -> std::time::SystemTime {
+        use snowflaked::Snowflake;
+        let inner: u64 = self.0.into();
+
+        let unix_timestamp_ms = inner.timestamp();
+        let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
+        ID_GENERATOR
+            .epoch()
+            .checked_add(unix_timestamp)
+            .expect("Invalid timestamp extracted from snowflake ID")
+    }
+    /// Get the time at which the submission ID was generated as a [`chrono::DateTime`].
+    pub fn timestamp(self) -> chrono::DateTime<Utc> {
+        self.system_time().into()
+    }
+}
 
 impl Display for SubmissionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,24 +105,12 @@ impl From<&SubmissionId> for std::time::SystemTime {
     }
 }
 
-impl SubmissionId {
-    pub fn system_time(self) -> std::time::SystemTime {
-        use snowflaked::Snowflake;
-        let inner: u64 = self.0.into();
-
-        let unix_timestamp_ms = inner.timestamp();
-        let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
-        ID_GENERATOR
-            .epoch()
-            .checked_add(unix_timestamp)
-            .expect("Invalid timestamp extracted from snowflake ID")
-    }
-
-    pub fn timestamp(self) -> chrono::DateTime<Utc> {
-        self.system_time().into()
-    }
-}
-
+/// A submission is a group of [`Chunk`]s.
+///
+/// This struct represents a submission that has not yet reached an end state.
+/// That is, they are neither completed nor failed.
+///
+/// Also see [`SubmissionCompleted`] and [`SubmissionFailed`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Submission {
     pub id: SubmissionId,
@@ -100,6 +122,11 @@ pub struct Submission {
     pub otel_trace_carrier: String,
 }
 
+/// A submission that has been completed successfully.
+///
+/// Once a submission is marked completed (which happens when all its chunks are
+/// marked as done), it gets moved to the `submissions_completed` table, and its
+/// old `submissions` record gets deleted.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
@@ -150,17 +177,12 @@ impl Submission {
         }
     }
 
-    pub fn generate_id() -> SubmissionId {
-        let inner: u64 = ID_GENERATOR.generate();
-        SubmissionId(u63::new(inner))
-    }
-
     pub fn from_vec(
         chunks: Vec<chunk::Content>,
         metadata: Option<Metadata>,
         chunk_size: ChunkSize,
     ) -> Option<(Submission, Vec<Chunk>)> {
-        let submission_id = Self::generate_id();
+        let submission_id = SubmissionId::new();
         let len = ChunkCount::new(u64::try_from(chunks.len()).ok()?).ok()?;
         let otel_trace_carrier = crate::tracing::current_context_to_json();
         let submission = Submission {
@@ -339,7 +361,7 @@ pub mod db {
         chunk_size: ChunkSize,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
-        let submission_id = Submission::generate_id();
+        let submission_id = SubmissionId::new();
         let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
         let otel_trace_carrier = crate::tracing::current_context_to_json();
         let submission = Submission {

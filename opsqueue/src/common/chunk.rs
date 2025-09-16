@@ -720,7 +720,7 @@ pub mod test {
 
         let mut submission = Submission::new();
         submission.chunks_total = u63::new(1).into();
-        submission.id = Submission::generate_id();
+        submission.id = SubmissionId::new();
         let chunk = Chunk::new(
             submission.id,
             u63::new(0).into(),
