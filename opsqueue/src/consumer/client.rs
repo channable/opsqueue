@@ -52,7 +52,9 @@ type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// - Is initialized lazily
 /// - Is reset on low-level failures
 /// - And therefore, that it is resilient to temporary network failures
-#[derive(Debug)]
+///
+/// This struct is cheap to clone.
+#[derive(Debug, Clone)]
 pub struct OuterClient(ArcSwapOption<Client>, Box<str>);
 
 impl OuterClient {
