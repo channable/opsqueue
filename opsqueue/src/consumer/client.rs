@@ -123,8 +123,7 @@ impl OuterClient {
     }
 
     async fn ensure_initialized(&self) {
-        let inner = self.0.load();
-        if inner.is_none() || inner.as_ref().is_some_and(|c| !c.is_healthy()) {
+        if !self.is_healthy() {
             let client = self.initialize().await;
             self.0.store(Some(Arc::new(client)));
         }
@@ -137,6 +136,14 @@ impl OuterClient {
         .notify(|err, duration| { tracing::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
         .await
         .expect("Infinite retries should never return Err")
+    }
+
+    /// When `false` is returned, the next call to the client will attempt to restore the connection.
+    ///
+    /// This function can be used to propagate healthiness info to a consumer service.
+    pub fn is_healthy(&self) -> bool {
+        let inner = self.0.load();
+        inner.as_ref().is_some_and(|c| c.is_healthy())
     }
 }
 
