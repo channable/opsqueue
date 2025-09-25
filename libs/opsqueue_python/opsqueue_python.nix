@@ -37,14 +37,14 @@ buildPythonPackage rec {
   cargoDeps = rustPlatform.importCargoLock { lockFile = ../../Cargo.lock; };
 
   env = {
-    DATABASE_URL = "sqlite:///build/opsqueue_python/opsqueue/opsqueue_example_database_schema.db";
+    DATABASE_URL = "sqlite://./opsqueue/opsqueue_example_database_schema.db";
   };
 
   pythonImportsCheck = [ pname ];
 
   maturinBuildFlags = [
     "--manifest-path"
-    "/build/opsqueue_python/libs/opsqueue_python/Cargo.toml"
+    "./libs/opsqueue_python/Cargo.toml"
   ];
 
   nativeBuildInputs = with rustPlatform; [
