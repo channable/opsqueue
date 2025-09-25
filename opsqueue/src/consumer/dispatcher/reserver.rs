@@ -58,10 +58,6 @@ where
         }
     }
 
-    // pub fn metastate(&self) -> &MetaState {
-    //     &self.metastate
-    // }
-
     /// Attempts to reserve a particular key-val.
     ///
     /// Returns `None` if someone else currently is already reserving `key`.

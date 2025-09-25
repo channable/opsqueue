@@ -12,6 +12,7 @@ let
       pytest
       pytest-random-order
       pytest-parallel
+      pytest-timeout
 
       # Repeated here so MyPy sees them:
       cbor2

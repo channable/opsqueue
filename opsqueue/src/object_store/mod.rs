@@ -13,7 +13,7 @@ use ux_serde::u63;
 /// and then re-use it in the producer/consumer for all communication going forward from there.
 ///
 /// It is Arc-wrapped, allowing for cheap cloning
-/// (which is especially necessary for `ObjectStoreClient::retrieve_chunks`)
+/// (which is especially necessary for [`ObjectStoreClient::retrieve_chunks`])
 #[derive(Debug, Clone)]
 pub struct ObjectStoreClient(Arc<ObjectStoreClientInner>);
 
@@ -98,7 +98,7 @@ pub enum NewObjectStoreClientError {
 impl ObjectStoreClient {
     /// Creates a new client for interacting with an object store.
     ///
-    /// The given `object_store_url` recognizes the formats detailed here: https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse
+    /// The given `object_store_url` recognizes the formats detailed [here](https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse).
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
     pub fn new(
         object_store_url: &str,
@@ -130,7 +130,7 @@ impl ObjectStoreClient {
                 )
                 .await?;
                 tracing::debug!(
-                    "Upladed chunk {}",
+                    "Uploaded chunk {}",
                     self.chunk_path(submission_prefix, chunk_index.into(), chunk_type)
                 );
                 Ok(chunk_index + u63::new(1))
@@ -238,31 +238,3 @@ impl ObjectStoreClient {
         &self.0.url
     }
 }
-
-// #[must_use("Streams do nothig unless polled")]
-// struct MyStream {
-//     object_store_client: ObjectStoreClient,
-//     submission_prefix: String,
-//     range: std::ops::Range<u63>,
-//     chunk_type: ChunkType,
-// }
-
-// impl futures::Stream for MyStream {
-//     type Item = Result<Vec<u8>, ChunkRetrievalError>;
-
-//     fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-//         let next_elem = self.range.start.into();
-//         let fut = self.object_store_client.retrieve_chunk(&self.submission_prefix, next_elem, self.chunk_type);
-//         tokio::pin!(fut);
-//         match fut.poll_unpin() {
-//             Poll::Pending => Poll::Pending,
-//             Poll::Ready(res) => Poll::Ready(Some(res)),
-//         }
-//     }
-
-//     fn size_hint(&self) -> (usize, Option<usize>) {
-//         let start: u64 = self.range.start.into();
-//         let end: u64 = self.range.end.into();
-//         (start as usize, Some(end as usize))
-//     }
-// }

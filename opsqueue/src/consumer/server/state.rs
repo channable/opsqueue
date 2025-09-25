@@ -41,8 +41,6 @@ impl Drop for ConsumerState {
 impl ConsumerState {
     pub fn new(server_state: &Arc<ServerState>) -> Self {
         Self {
-            // pool: server_state.pool.read_pool.clone(),
-            // dispatcher: server_state.dispatcher.clone(),
             reservations: Arc::new(Mutex::new(HashSet::new())),
             server_state: server_state.clone(),
         }

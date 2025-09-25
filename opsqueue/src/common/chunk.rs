@@ -546,7 +546,6 @@ pub mod db {
     ) -> sqlx::Result<()> {
         const ROWS_PER_QUERY: usize = 1000;
 
-        // let start = std::time::Instant::now();
         let mut iter = chunks.iter().peekable();
         while iter.peek().is_some() {
             let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
@@ -721,7 +720,7 @@ pub mod test {
 
         let mut submission = Submission::new();
         submission.chunks_total = u63::new(1).into();
-        submission.id = Submission::generate_id();
+        submission.id = SubmissionId::new();
         let chunk = Chunk::new(
             submission.id,
             u63::new(0).into(),
