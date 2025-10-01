@@ -74,6 +74,9 @@ pub struct Config {
     /// the full submission the chunk is a part of.
     #[arg(long, default_value_t = 10)]
     pub max_chunk_retries: u32,
+
+    #[arg(long, default_value = "1 hour")]
+    pub max_submission_age: humantime::Duration,
 }
 
 impl Default for Config {
@@ -88,6 +91,7 @@ impl Default for Config {
             humantime::Duration::from_str("10 seconds").expect("valid humantime");
         let max_missable_heartbeats = 3;
         let max_chunk_retries = 10;
+        let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
         Config {
             port,
             database_filename,
@@ -96,6 +100,7 @@ impl Default for Config {
             heartbeat_interval,
             max_missable_heartbeats,
             max_chunk_retries,
+            max_submission_age,
         }
     }
 }
