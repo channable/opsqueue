@@ -69,6 +69,9 @@ pub struct Config {
     /// At that time, the connection will be closed and any open reservations will be canceled.
     #[arg(long, default_value_t = 3)]
     pub max_missable_heartbeats: usize,
+
+    #[arg(long, default_value = "1 hour")]
+    pub max_submission_age: humantime::Duration,
 }
 
 impl Default for Config {
@@ -82,6 +85,7 @@ impl Default for Config {
         let heartbeat_interval =
             humantime::Duration::from_str("10 seconds").expect("valid humantime");
         let max_missable_heartbeats = 3;
+        let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
         Config {
             port,
             database_filename,
@@ -89,6 +93,7 @@ impl Default for Config {
             max_read_pool_size,
             heartbeat_interval,
             max_missable_heartbeats,
+            max_submission_age,
         }
     }
 }

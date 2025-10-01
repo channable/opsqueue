@@ -48,7 +48,7 @@ pub async fn async_main() {
             prometheus_config,
         ));
 
-        let max_age = Duration::from_secs(60 * 60);
+        let max_age = config.max_submission_age.into();
         scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
 
         scope.spawn(prometheus::periodically_calculate_scaling_metrics(
