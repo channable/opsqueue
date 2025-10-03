@@ -45,7 +45,7 @@ impl Client {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
-    /// Get the total number of non-failed, non-completed submissionsi currently
+    /// Get the total number of non-failed, non-completed submissions currently
     /// known to the server.
     ///
     /// This uses the `/producer/submissions/count` endpoint.
@@ -168,9 +168,9 @@ impl Client {
 
 #[derive(thiserror::Error, Debug)]
 pub enum InternalProducerClientError {
-    #[error("HTTP request failed")]
+    #[error("HTTP request failed: {0}")]
     HTTPClientError(#[from] reqwest::Error),
-    #[error("Error decoding JSON response")]
+    #[error("Error decoding JSON response: {0}")]
     ResponseDecodingError(#[from] serde_json::Error),
 }
 
