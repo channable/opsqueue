@@ -69,6 +69,11 @@ pub struct Config {
     /// At that time, the connection will be closed and any open reservations will be canceled.
     #[arg(long, default_value_t = 3)]
     pub max_missable_heartbeats: usize,
+
+    /// Maximum number of times a chunk is retried before permanently failing
+    /// the full submission the chunk is a part of.
+    #[arg(long, default_value_t = 10)]
+    pub max_chunk_retries: u32,
 }
 
 impl Default for Config {
@@ -82,6 +87,7 @@ impl Default for Config {
         let heartbeat_interval =
             humantime::Duration::from_str("10 seconds").expect("valid humantime");
         let max_missable_heartbeats = 3;
+        let max_chunk_retries = 10;
         Config {
             port,
             database_filename,
@@ -89,6 +95,7 @@ impl Default for Config {
             max_read_pool_size,
             heartbeat_interval,
             max_missable_heartbeats,
+            max_chunk_retries,
         }
     }
 }

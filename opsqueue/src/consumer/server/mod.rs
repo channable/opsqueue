@@ -72,7 +72,8 @@ impl ServerState {
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) = Completer::new(pool.writer_pool(), &dispatcher);
+        let (completer, completer_tx) =
+            Completer::new(pool.writer_pool(), &dispatcher, config.max_chunk_retries);
         Self {
             pool,
             completer: Some(completer),
@@ -170,12 +171,14 @@ pub struct Completer {
     pool: db::WriterPool,
     dispatcher: Dispatcher,
     count: usize,
+    max_chunk_retries: u32,
 }
 
 impl Completer {
     pub fn new(
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
+        max_chunk_retries: u32,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         let pool = pool.clone();
@@ -184,6 +187,7 @@ impl Completer {
             pool: pool.clone(),
             dispatcher: dispatcher.clone(),
             count: 0,
+            max_chunk_retries,
         };
         (me, tx)
     }
@@ -243,8 +247,13 @@ impl Completer {
                 } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let failed_permanently =
-                        crate::common::chunk::db::retry_or_fail_chunk(id, failure, &mut conn).await;
+                    let failed_permanently = crate::common::chunk::db::retry_or_fail_chunk(
+                        id,
+                        failure,
+                        &mut conn,
+                        self.max_chunk_retries,
+                    )
+                    .await;
                     reservations.lock().expect("No poison").remove(&id);
                     let maybe_started_at = self
                         .dispatcher

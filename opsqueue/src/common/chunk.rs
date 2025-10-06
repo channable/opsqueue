@@ -367,11 +367,11 @@ pub mod db {
         chunk_id: ChunkId,
         failure: String,
         mut conn: impl WriterConnection,
+        max_retries: u32,
     ) -> sqlx::Result<bool> {
         let failed_permanently = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
-                    const MAX_RETRIES: i64 = 10;
                     let ChunkId {
                         submission_id,
                         chunk_index,
@@ -388,7 +388,7 @@ pub mod db {
                     .fetch_one(tx.get_inner())
                     .await?;
                     tracing::trace!("Retries: {}", fields.retries);
-                    if fields.retries >= MAX_RETRIES {
+                    if fields.retries >= max_retries.into() {
                         crate::common::submission::db::fail_submission_notx(
                             submission_id,
                             chunk_index,
