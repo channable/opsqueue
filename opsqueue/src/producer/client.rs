@@ -31,14 +31,20 @@ impl Client {
     /// Construct a new producer client.
     ///
     /// `host` is where the `/producer/...` endpoints can be reached over http.
-    /// Don't include the scheme or the `/producer` part.
+    /// You can include the scheme if it's `http://` or `https://`. If it's not
+    /// included, http is chosen by default. If it's not supported, this function
+    /// panics.
     ///
-    /// Examples: `0.0.0.0:1312`, `my.opsueue.instance.example.com`, `services.example.com/opsqueue`
+    /// Examples: `0.0.0.0:1312`, `my.opsqueue.instance.example.com`, `https://services.example.com/opsqueue`
     pub fn new(host: &str) -> Self {
         let http_client = reqwest::Client::new();
-        let base_url = format!("http://{host}/producer").into_boxed_str();
+        let base_url = match host.split_once("://") {
+            Some(("http" | "https", _)) => format!("{host}/producer"),
+            None => format!("http://{host}/producer"),
+            Some((scheme, _)) => panic!("Unsupported scheme: {scheme}, must be 'http' or 'https'"),
+        };
         Client {
-            base_url,
+            base_url: base_url.into_boxed_str(),
             http_client,
         }
     }
