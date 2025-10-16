@@ -282,10 +282,9 @@ impl Client {
 
                                     },
                                     ServerToClientMessage::Async(msg) => {
-                                        // Handle a message from the server that was not associated with an earlier request
                                         match msg {
-                                            AsyncServerToClientMessage::ChunkReservationExpired(_chunk_id) => {
-                                                tracing::error!("Client could cancel execution of current work, but this is not implemented yet.");
+                                            AsyncServerToClientMessage::ChunkReservationExpired(chunk_id) => {
+                                                tracing::debug!("Server indicated that we took too long with {chunk_id:?}, and now our reservation has expired.");
                                             },
                                         }
                                     }
