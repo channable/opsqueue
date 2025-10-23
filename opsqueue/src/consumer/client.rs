@@ -284,7 +284,7 @@ impl Client {
                                     ServerToClientMessage::Async(msg) => {
                                         match msg {
                                             AsyncServerToClientMessage::ChunkReservationExpired(chunk_id) => {
-                                                tracing::debug!("Server indicated that we took too long with {chunk_id:?}, and now our reservation has expired.");
+                                                tracing::info!("Server indicated that we took too long with {chunk_id:?}, and now our reservation has expired.");
                                             },
                                         }
                                     }
