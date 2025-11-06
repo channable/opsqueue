@@ -25,15 +25,4 @@ in
       "rustfmt"
     ];
   };
-
-  pre-commit-env = self.buildEnv {
-    name = "pre-commit-env";
-    paths = [
-      super.python3Packages.pre-commit-hooks
-      super.nixfmt-rfc-style
-      super.ruff
-      super.biome
-      self.rust-with-lsp
-    ];
-  };
 }

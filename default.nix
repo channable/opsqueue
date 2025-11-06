@@ -29,8 +29,12 @@ let
       just
 
       # For linting and formatting
+      biome
+      nixfmt-rfc-style
       pre-commit
-      pre-commit-env
+      python3Packages.pre-commit-hooks
+      ruff
+      rust-with-lsp
 
       # For compiling the Rust parts
       rust-with-lsp
