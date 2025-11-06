@@ -1,7 +1,4 @@
-# Overlay for Nixpkgs which holds rust-jobs related packages.
-#
-# Serves as common overlay for this repository.
-#
+# Overlay for Nixpkgs which holds all opsqueue related packages.
 self: super:
 let
   sources = import ./sources.nix;
