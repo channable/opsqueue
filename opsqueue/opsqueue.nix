@@ -1,6 +1,5 @@
 {
-  fileFilter,
-  pkgs,
+  lib,
   rustPlatform,
   # Building options
   buildType ? "release",
@@ -11,6 +10,10 @@
   perl,
   git,
 }:
+let
+  root = ../.;
+  util = import (root + /nix/util.nix) { inherit lib; };
+in
 rustPlatform.buildRustPackage {
   name = "opsqueue";
   inherit
@@ -20,7 +23,7 @@ rustPlatform.buildRustPackage {
     useNextest
     ;
 
-  src = fileFilter {
+  src = util.fileFilter {
     name = "opsqueue";
     src = ./.;
 
