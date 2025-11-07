@@ -18,11 +18,4 @@ in
   # In our case cachix > ghc > shpinx > Python libraries.
   pythonChannable = prev.python312.override { packageOverrides = pythonOverlay; };
 
-  # We choose a minimal Rust channel to keep the Nix closure size smaller
-  rust-with-lsp = final.rust-bin.stable.latest.minimal.override {
-    extensions = [
-      "clippy"
-      "rustfmt"
-    ];
-  };
 }

@@ -22,33 +22,40 @@ let
     ]
   );
 
+  # We choose a minimal Rust channel to keep the Nix closure size smaller
+  rust = pkgs.rust-bin.stable.latest.minimal.override {
+    extensions = [
+      "clippy"
+      "rustfmt"
+    ];
+  };
+
   defaultEnv = pkgs.buildEnv {
     name = "opsqueue-env-default";
-    paths = with pkgs; [
+    paths = [
       # Command runner
-      just
+      pkgs.just
 
       # For linting and formatting
-      biome
-      nixfmt-rfc-style
-      pre-commit
-      python3Packages.pre-commit-hooks
-      ruff
-      rust-with-lsp
+      pkgs.biome
+      pkgs.nixfmt-rfc-style
+      pkgs.pre-commit
+      pkgs.python3Packages.pre-commit-hooks
+      pkgs.ruff
 
       # For compiling the Rust parts
-      rust-with-lsp
-      sqlx-cli
+      rust
+      pkgs.sqlx-cli
 
       # Manage nix pins
-      niv
-      nvd
+      pkgs.niv
+      pkgs.nvd
 
       # Rust build tools
-      cargo-audit
-      cargo-edit
-      cargo-nextest
-      maturin
+      pkgs.cargo-audit
+      pkgs.cargo-edit
+      pkgs.cargo-nextest
+      pkgs.maturin
     ];
   };
   environments = {
