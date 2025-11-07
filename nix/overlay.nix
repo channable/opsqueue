@@ -1,14 +1,9 @@
 # Overlay for Nixpkgs which holds all opsqueue related packages.
 final: prev:
 let
-  sources = import ./sources.nix;
-  pythonOverlay = import ./python-overlay.nix { inherit sources; };
+  pythonOverlay = import ./python-overlay.nix;
 in
 {
-  # Placing the sources in the overlay gives all packages access to the sources,
-  # and it makes it possible to override them in new overlays.
-  sources = if prev ? sources then prev.sources // sources else sources;
-
   opsqueue = final.callPackage ../opsqueue/opsqueue.nix { };
 
   # The explicit choice is made not to override `python312`, as this will cause a rebuild of many
