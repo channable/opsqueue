@@ -1,4 +1,3 @@
-# Pre-commit config as used by ./build.py.
 repos:
   # Use local to make sure the dependencies are taken from pre-commit's own environment and
   # therefore from our nix derivation.

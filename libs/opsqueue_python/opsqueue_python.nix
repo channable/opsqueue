@@ -1,5 +1,5 @@
 {
-  fileFilter,
+  lib,
   buildPythonPackage,
   rustPlatform,
   perl,
@@ -10,14 +10,18 @@
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
 }:
+let
+  root = ../../.;
+  util = import (root + /nix/util.nix) { inherit lib; };
+in
 buildPythonPackage rec {
   pname = "opsqueue";
   version = "0.1.0";
   pyproject = true;
 
-  src = fileFilter {
+  src = util.fileFilter {
     name = "opsqueue_python";
-    src = ../../.;
+    src = root;
 
     # We're copying slightly too much to the Nix store here,
     # but using the more granular file filter was very error-prone.
