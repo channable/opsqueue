@@ -117,6 +117,18 @@ impl TryFrom<u64> for SubmissionId {
     }
 }
 
+impl TryFrom<i64> for SubmissionId {
+    type Error = crate::common::errors::TryFromIntError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            return Err(crate::common::errors::TryFromIntError(()));
+        }
+
+        Ok(Self(u63::new(value as u64)))
+    }
+}
+
 impl From<&SubmissionId> for std::time::SystemTime {
     fn from(val: &SubmissionId) -> Self {
         val.system_time()
