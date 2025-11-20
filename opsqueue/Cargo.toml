@@ -1,6 +1,6 @@
 [package]
 name = "opsqueue"
-version = "0.30.8"
+version = "0.31.0"
 edition = "2021"
 description = "lightweight batch processing queue for heavy loads"
 repository = "https://github.com/channable/opsqueue"
