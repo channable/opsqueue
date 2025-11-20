@@ -5,7 +5,7 @@ use futures::stream::{self, TryStreamExt};
 use object_store::path::Path;
 use object_store::DynObjectStore;
 use reqwest::Url;
-use ux_serde::u63;
+use ux::u63;
 
 /// A client for interacting with an object store.
 ///

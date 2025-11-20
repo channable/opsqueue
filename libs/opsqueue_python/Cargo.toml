@@ -19,7 +19,7 @@ uuid = {version = "1.11.0", features = [
         "fast-rng",          # Use a faster (but still sufficiently random) RNG
     ]}
 chrono = { version = "0.4.38"}
-ux_serde = { version = "0.2.0", features = ["std"] }
+ux = "0.1.6"
 
 # Concurrency:
 tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}

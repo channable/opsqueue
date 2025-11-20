@@ -20,7 +20,7 @@ use opsqueue::{
     tracing::CarrierMap,
     E,
 };
-use ux_serde::u63;
+use ux::u63;
 
 use crate::{
     async_util,

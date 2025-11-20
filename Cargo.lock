@@ -2021,7 +2021,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "ux_serde",
+ "ux",
 ]
 
 [[package]]
@@ -2040,7 +2040,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "ux_serde",
+ "ux",
 ]
 
 [[package]]
@@ -3881,13 +3881,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ux_serde"
-version = "0.2.0"
+name = "ux"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8aaf0d6ee05126671164e6c620bfe83dc4ab13a6c8f472466dd957e309c64b9"
-dependencies = [
- "serde",
-]
+checksum = "3b59fc5417e036e53226bbebd90196825d358624fd5577432c4e486c95b1b096"
 
 [[package]]
 name = "valuable"

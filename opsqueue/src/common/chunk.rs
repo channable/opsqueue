@@ -6,20 +6,38 @@
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
-use ux_serde::u63;
+use ux::u63;
 
 use super::errors::TryFromIntError;
 use super::submission::SubmissionId;
 
 /// Index of this particular chunk in a submission.
-#[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChunkIndex(u63);
 
 impl std::fmt::Debug for ChunkIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("ChunkIndex").field(&self.0).finish()
+    }
+}
+
+impl serde::Serialize for ChunkIndex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        u64::from(*self).serialize(serializer)
+    }
+}
+
+impl<'a> serde::Deserialize<'a> for ChunkIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'a>,
+    {
+        let value = u64::deserialize(deserializer)?;
+
+        value.try_into().map_err(serde::de::Error::custom)
     }
 }
 

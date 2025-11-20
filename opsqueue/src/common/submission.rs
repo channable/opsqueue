@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use ux_serde::u63;
+use ux::u63;
 
 use super::chunk::{self, Chunk, ChunkFailed, ChunkSize};
 use super::chunk::{ChunkCount, ChunkIndex};
@@ -16,10 +16,28 @@ static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::
 ///
 /// Submission IDs are snowflakes. These are 64-bit identifiers that includes
 /// creation time information and are sortable on that timestamp.
-#[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SubmissionId(u63);
+
+impl serde::Serialize for SubmissionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        u64::from(*self).serialize(serializer)
+    }
+}
+
+impl<'a> serde::Deserialize<'a> for SubmissionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'a>,
+    {
+        let value = u64::deserialize(deserializer)?;
+
+        value.try_into().map_err(serde::de::Error::custom)
+    }
+}
 
 impl Default for SubmissionId {
     fn default() -> Self {

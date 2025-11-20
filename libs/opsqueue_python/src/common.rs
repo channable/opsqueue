@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 
 use opsqueue::common::{chunk, submission};
 use opsqueue::consumer::strategy;
-use ux_serde::u63;
+use ux::u63;
 
 use crate::errors::{CError, CPyResult, FatalPythonException};
 
