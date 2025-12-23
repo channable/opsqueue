@@ -19,7 +19,7 @@ fn retry_policy() -> impl BackoffBuilder {
         .with_jitter()
         .with_min_delay(Duration::from_millis(10))
         .with_max_delay(Duration::from_secs(10))
-        .without_max_times()
+        .with_max_times(10)
 }
 
 #[cfg(feature = "server-logic")]
