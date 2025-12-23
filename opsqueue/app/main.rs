@@ -67,7 +67,6 @@ pub async fn async_main() {
             "Startup of Opsqueue ({}) complete.",
             opsqueue::version_info()
         );
-        tracing::info!("Listening on {}", &server_addr);
 
         tokio::signal::ctrl_c()
             .await

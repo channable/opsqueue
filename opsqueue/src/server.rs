@@ -44,7 +44,12 @@ pub async fn serve_producer_and_consumer(
             prometheus_config.clone(),
         );
         let listener = tokio::net::TcpListener::bind(server_addr).await?;
-
+        match listener.local_addr() {
+            Ok(addr) => tracing::info!("Server listening on {addr}"),
+            Err(err) => tracing::warn!(
+                "Could not get locally bound address of the server, tried binding on {server_addr}: {err}"
+            ),
+        }
         axum::serve(listener, router)
             .with_graceful_shutdown(cancellation_token.clone().cancelled_owned())
             .await?;
