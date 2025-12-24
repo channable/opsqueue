@@ -6,6 +6,8 @@ import multiprocessing
 import subprocess
 import uuid
 import os
+from libs.opsqueue_python.tests.util import wait_for_server
+import psutil
 import pytest
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,12 +54,9 @@ def opsqueue() -> Generator[OpsqueueProcess, None, None]:
 
 @contextmanager
 def opsqueue_service(
-    *, port: int | None = None
+    *, port: int = 0,
 ) -> Generator[OpsqueueProcess, None, None]:
     global test_opsqueue_port_offset
-
-    if port is None:
-        port = random_free_port()
 
     temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
@@ -72,7 +71,8 @@ def opsqueue_service(
     if env.get("RUST_LOG") is None:
         env["RUST_LOG"] = "off"
 
-    with subprocess.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
+    with psutil.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
+        _host, port = wait_for_server(process)
         try:
             wrapper = OpsqueueProcess(port=port, process=process)
             yield wrapper
