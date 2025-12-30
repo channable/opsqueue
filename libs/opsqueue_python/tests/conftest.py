@@ -6,7 +6,6 @@ import multiprocessing
 import subprocess
 import uuid
 import os
-from libs.opsqueue_python.tests.util import wait_for_server
 import psutil
 import pytest
 from dataclasses import dataclass
@@ -15,6 +14,8 @@ import functools
 
 from opsqueue.common import SerializationFormat, json_as_bytes
 from opsqueue.consumer import Strategy
+
+from tests.util import wait_for_server
 
 # @pytest.hookimpl(tryfirst=True)
 # def pytest_configure(config: pytest.Config) -> None:
@@ -27,7 +28,7 @@ PROJECT_ROOT = Path(__file__).parents[3]
 @dataclass
 class OpsqueueProcess:
     port: int
-    process: subprocess.Popen[bytes]
+    process: psutil.Popen # subprocess.Popen[bytes]
 
 
 @functools.cache
@@ -54,10 +55,9 @@ def opsqueue() -> Generator[OpsqueueProcess, None, None]:
 
 @contextmanager
 def opsqueue_service(
-    *, port: int = 0,
+    *,
+    port: int = 0,
 ) -> Generator[OpsqueueProcess, None, None]:
-    global test_opsqueue_port_offset
-
     temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
     command = [

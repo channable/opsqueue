@@ -14,9 +14,12 @@ LOGGER = logging.getLogger(__name__)
 )
 def wait_for_server(proc: psutil.Popen) -> tuple[str, int]:
     """
-    Wait for a process to be listening on a single port.
-    If the process is listening on no ports, a ValueError is thrown and this is retried.
-    If multiple ports are listening, a RuntimeError is thrown.
+    Wait for a process to be listening on exactly one port and return that address.
+
+    This function expects the given process to listen on a single port only. If the
+    process is listening on no ports, a ValueError is raised and the check is retried.
+    If multiple ports are listening, a RuntimeError is raised as this indicates an
+    unexpected server configuration.
     """
     if not proc.is_running():
         raise ValueError(f"Process {proc} is not running")
