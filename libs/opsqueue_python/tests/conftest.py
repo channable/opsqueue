@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).parents[3]
 @dataclass
 class OpsqueueProcess:
     port: int
-    process: psutil.Popen # subprocess.Popen[bytes]
+    process: psutil.Popen
 
 
 @functools.cache
