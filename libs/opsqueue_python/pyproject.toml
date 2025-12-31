@@ -24,6 +24,9 @@ dependencies = [
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
+    # Testing:
+    "opnieuw",
+    "psutil",
 ]
 
 [project.urls]
