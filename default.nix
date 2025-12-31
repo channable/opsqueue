@@ -8,11 +8,14 @@ let
     p: with p; [
       click
       mypy
-      uv
+      opnieuw
+      psutil
       pytest
-      pytest-random-order
       pytest-parallel
+      pytest-random-order
       pytest-timeout
+      types-psutil
+      uv
 
       # Repeated here so MyPy sees them:
       cbor2
