@@ -9,6 +9,8 @@
   opentelemetry-api,
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
+  opnieuw,
+  psutil,
 }:
 let
   root = ../../.;
@@ -63,5 +65,7 @@ buildPythonPackage rec {
     opentelemetry-api
     opentelemetry-exporter-otlp
     opentelemetry-sdk
+    opnieuw
+    psutil
   ];
 }
