@@ -103,7 +103,7 @@ impl From<ServerToClientMessage> for ws::Message {
         ciborium::into_writer(&val, &mut writer)
             .expect("Failed to serialize ServerToClientMessage");
 
-        ws::Message::Binary(writer)
+        ws::Message::Binary(writer.into())
     }
 }
 
@@ -114,7 +114,7 @@ impl From<Envelope<ClientToServerMessage>> for ws::Message {
         ciborium::into_writer(&val, &mut writer)
             .expect("Failed to serialize ClientToServerMessage");
 
-        ws::Message::Binary(writer)
+        ws::Message::Binary(writer.into())
     }
 }
 
@@ -146,7 +146,7 @@ impl From<ServerToClientMessage> for tokio_tungstenite::tungstenite::Message {
         ciborium::into_writer(&val, &mut writer)
             .expect("Failed to serialize ServerToClientMessage");
 
-        tokio_tungstenite::tungstenite::Message::Binary(writer)
+        tokio_tungstenite::tungstenite::Message::Binary(writer.into())
     }
 }
 
@@ -157,6 +157,6 @@ impl From<Envelope<ClientToServerMessage>> for tokio_tungstenite::tungstenite::M
         ciborium::into_writer(&val, &mut writer)
             .expect("Failed to serialize ClientToServerMessage");
 
-        tokio_tungstenite::tungstenite::Message::Binary(writer)
+        tokio_tungstenite::tungstenite::Message::Binary(writer.into())
     }
 }
