@@ -80,7 +80,7 @@ impl ConsumerState {
         if new_reservations.len() == 1 {
             let submission = &new_reservations[0].1;
             let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);
-            Span::current().set_parent(context);
+            let _ = Span::current().set_parent(context);
         } else {
             for (_, submission) in &new_reservations {
                 let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);

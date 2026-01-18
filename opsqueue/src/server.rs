@@ -94,7 +94,7 @@ pub fn build_router(
         .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO))
         .on_request(|request: &http::Request<_>, span: &tracing::Span| {
             use tracing_opentelemetry::OpenTelemetrySpanExt;
-            span.set_parent(crate::tracing::context_from_headers(request.headers()));
+            let _ = span.set_parent(crate::tracing::context_from_headers(request.headers()));
         })
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 
