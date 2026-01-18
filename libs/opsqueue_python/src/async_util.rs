@@ -8,21 +8,21 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Unlock the GIL across `.await` points
+/// Detaches (unlocks) the Python GIL across `.await` points.
 ///
-/// Essentially `py.detach` but for async code.
+/// Essentially `Python::detach` but for async code.
 ///
-/// Based on https://pyo3.rs/v0.25.1/async-await.html#release-the-gil-across-await
-pub struct AsyncAllowThreads<F>(F);
+/// Based on https://pyo3.rs/v0.27.2/async-await.html#detaching-from-the-interpreter-across-await
+pub struct AsyncPyDetach<F>(F);
 
-pub fn async_allow_threads<F>(fut: F) -> AsyncAllowThreads<F>
+pub fn async_py_detach<F>(fut: F) -> AsyncPyDetach<F>
 where
     F: Future,
 {
-    AsyncAllowThreads(fut)
+    AsyncPyDetach(fut)
 }
 
-impl<F> Future for AsyncAllowThreads<F>
+impl<F> Future for AsyncPyDetach<F>
 where
     F: Future + Unpin + Send,
     F::Output: Send,
