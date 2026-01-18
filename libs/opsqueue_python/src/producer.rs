@@ -365,7 +365,7 @@ impl ProducerClient {
         let _tokio_active_runtime_guard = me.runtime.enter();
         async_util::future_into_py(
             py,
-            async_util::async_allow_threads(Box::pin(async move {
+            async_util::async_py_detach(Box::pin(async move {
                 match me.stream_completed_submission_chunks(submission_id).await {
                     Ok(iter) => {
                         let async_iter = PyChunksAsyncIter::from(iter);
@@ -544,7 +544,7 @@ impl PyChunksAsyncIter {
             py,
             // The only time we need the GIL is when turning the result into Python datatypes.
             // By unlocking here, we reduce the chance of deadlocks.
-            async_util::async_allow_threads(Box::pin(async move {
+            async_util::async_py_detach(Box::pin(async move {
                 // We lock the stream in a separate Tokio task
                 // that explicitly runs on the runtime thread rather than on the main Python thread.
                 // This reduces the possibility for deadlocks even further.
