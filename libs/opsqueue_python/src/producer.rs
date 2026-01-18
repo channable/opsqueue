@@ -91,7 +91,7 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
     ) -> CPyResult<String, E<FatalPythonException, InternalProducerClientError>> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .server_version()
@@ -108,7 +108,7 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
     ) -> CPyResult<u32, E<FatalPythonException, InternalProducerClientError>> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .count_submissions()
@@ -130,7 +130,7 @@ impl ProducerClient {
         id: SubmissionId,
     ) -> CPyResult<Option<SubmissionStatus>, E<FatalPythonException, InternalProducerClientError>>
     {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .get_submission(id.into())
@@ -150,7 +150,7 @@ impl ProducerClient {
         py: Python<'_>,
         prefix: &str,
     ) -> CPyResult<Option<SubmissionId>, E<FatalPythonException, InternalProducerClientError>> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
                     .lookup_submission_id_by_prefix(prefix)
@@ -175,7 +175,7 @@ impl ProducerClient {
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         let strategic_metadata = Default::default();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let submission = opsqueue::producer::InsertSubmission {
                 chunk_size: chunk_size.map(|n| chunk::ChunkSize(n as i64)),
                 chunk_contents: ChunkContents::Direct {
@@ -215,12 +215,12 @@ impl ProducerClient {
         // This function is split into two parts.
         // For the upload to object storage, we need the GIL as we run the python iterator to completion.
         // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
-        py.allow_threads(|| {
+        py.detach(|| {
             let prefix = uuid::Uuid::now_v7().to_string();
             tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = self.block_unless_interrupted(async {
                     let chunk_contents = std::iter::from_fn(move || {
-                        Python::with_gil(|py|
+                        Python::attach(|py|
                             chunk_contents.bind(py).clone().next()
                                 .map(|item| item.and_then(
                                     |item| item.extract()).map_err(Into::into)))
@@ -270,7 +270,7 @@ impl ProducerClient {
             InternalProducerClientError,
         ],
     > {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async move {
                 match self
                     .maybe_stream_completed_submission(id)
@@ -349,7 +349,7 @@ impl ProducerClient {
             InternalProducerClientError
         ],
     > {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.block_unless_interrupted(async move {
                 self.stream_completed_submission_chunks(submission_id).await
             })
@@ -496,7 +496,7 @@ impl PyChunksIter {
     fn __next__(&self, py: Python<'_>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
         // The only time we need the GIL is when turning the result back.
         // By unlocking here, we reduce the chance of deadlocks.
-        py.allow_threads(move || {
+        py.detach(move || {
             let runtime = self.runtime.clone();
             let stream = self.stream.clone();
             runtime.block_on(async {
