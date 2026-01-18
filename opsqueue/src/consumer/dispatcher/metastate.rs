@@ -138,7 +138,7 @@ mod tests {
             .collect();
 
         // Increment in one order
-        vals.shuffle(&mut rand::thread_rng());
+        vals.shuffle(&mut rand::rng());
         for val in &vals {
             sut.increment(key, val);
         }
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(too_highs.len(), n_groups);
 
         // Decrement in a different order
-        vals.shuffle(&mut rand::thread_rng());
+        vals.shuffle(&mut rand::rng());
         for val in &vals {
             sut.decrement(key, val);
         }
