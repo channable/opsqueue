@@ -125,7 +125,7 @@ impl From<strategy::Strategy> for Strategy {
             } => {
                 let underlying = Strategy::from(*underlying);
                 let underlying =
-                    Python::with_gil(|py| Py::new(py, underlying)).expect("A valid Strategy");
+                    Python::attach(|py| Py::new(py, underlying)).expect("A valid Strategy");
                 Strategy::PreferDistinct {
                     meta_key,
                     underlying,
@@ -424,7 +424,7 @@ where
 pub async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
-        let res = Python::with_gil(|py| {
+        let res = Python::attach(|py| {
             if let Err(err) = py.check_signals() {
                 // A signal was triggered
                 Some(err)
@@ -475,7 +475,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 ///
 /// c.f. <https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods>
 pub fn format_pyerr(err: &PyErr) -> String {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let msg: Option<String> = (|| {
             let traceback = err.traceback(py)?;
             let traceback_str = traceback

@@ -101,7 +101,7 @@ impl ConsumerClient {
             IncorrectUsage<LimitIsZero>,
         ],
     > {
-        py.allow_threads(|| self.reserve_chunks_gilless(max, strategy.into()))
+        py.detach(|| self.reserve_chunks_gilless(max, strategy.into()))
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
@@ -120,7 +120,7 @@ impl ConsumerClient {
             InternalConsumerClientError
         ],
     > {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.complete_chunk_gilless(
                 submission_id,
                 submission_prefix,
@@ -139,7 +139,7 @@ impl ConsumerClient {
         chunk_index: ChunkIndex,
         failure: String,
     ) -> CPyResult<(), E<FatalPythonException, InternalConsumerClientError>> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.fail_chunk_gilless(submission_id, submission_prefix, chunk_index, failure)
         })
     }
@@ -167,7 +167,7 @@ impl ConsumerClient {
         // NOTE: We take care here to unlock the GIL for most of the loop,
         // and only re-lock it for the duration of each call to `fun`.
         let unbound_fun = fun.as_unbound();
-        fun.py().allow_threads(|| {
+        fun.py().detach(|| {
             let mut done_count: usize = 0;
             loop {
                 let chunk_outcome = self.compute_chunk_outcome(strategy, unbound_fun, done_count);
@@ -355,7 +355,7 @@ impl ConsumerClient {
             chunk_index,
             &submission_prefix
         );
-            let res = Python::with_gil(|py| {
+            let res = Python::attach(|py| {
                 let res = unbound_fun.bind(py).call1((chunk,))?;
                 res.extract()
             });
@@ -401,7 +401,7 @@ impl ConsumerClient {
                 );
 
                     // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
-                    if !Python::with_gil(|py| failure.is_instance_of::<PyException>(py)) {
+                    if !Python::attach(|py| failure.is_instance_of::<PyException>(py)) {
                         return Err(failure.into());
                     }
 
@@ -409,7 +409,7 @@ impl ConsumerClient {
                     // as this might be thrown when someone tries to Ctrl-C
                     // while some native code (ex: OpenTelemetry integration)
                     // is executing.
-                    if Python::with_gil(|py| failure.is_instance_of::<PySystemError>(py)) {
+                    if Python::attach(|py| failure.is_instance_of::<PySystemError>(py)) {
                         return Err(failure.into());
                     }
 
