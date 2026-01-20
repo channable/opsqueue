@@ -51,11 +51,16 @@ buildPythonPackage rec {
     "./libs/opsqueue_python/Cargo.toml"
   ];
 
-  nativeBuildInputs = with rustPlatform; [
+  configurePhase = ''
+    rustc --version;
+    cargo --version
+  '';
+
+  nativeBuildInputs = [
     perl
     git
-    cargoSetupHook
-    maturinBuildHook
+    rustPlatform.cargoSetupHook
+    rustPlatform.maturinBuildHook
   ];
 
   propagatedBuildInputs = [

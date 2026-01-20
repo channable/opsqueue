@@ -6,7 +6,7 @@
   # Testing options
   checkType ? "debug",
   doCheck ? true,
-  useNextest ? false, # Disabled for now. Re-enable as part of https://github.com/channable/opsqueue/issues/81
+  useNextest ? true,
   perl,
   git,
 }:
@@ -49,6 +49,12 @@ rustPlatform.buildRustPackage {
   postUnpack = ''
     cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
     chmod +w /build/opsqueue/Cargo.lock
+  '';
+
+  # Print Rust and Cargo versions so we are 100% certain we are using the right ones
+  configurePhase = ''
+    rustc --version
+    cargo --version
   '';
 
   env = {
