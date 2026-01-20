@@ -34,8 +34,12 @@ pub async fn async_main() {
     // will not be seen otherwise
     let prometheus_config = opsqueue::prometheus::setup_prometheus();
 
-    let db_pool =
-        opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size).await;
+    let db_pool = tokio::time::timeout(
+        Duration::from_secs(10),
+        opsqueue::db::open_and_setup(&config.database_filename, config.max_read_pool_size),
+    )
+    .await
+    .expect("Timed out while initiating the database");
 
     moro_local::async_scope!(|scope| {
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
