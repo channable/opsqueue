@@ -418,7 +418,7 @@ impl ConsumerClient {
             }
 
             done_count = done_count.saturating_add(1);
-            if done_count % 50 == 0 {
+            if done_count.is_multiple_of(50) {
                 tracing::info!("Processed {} chunks", done_count);
             }
         }

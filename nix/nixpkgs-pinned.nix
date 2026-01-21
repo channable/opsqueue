@@ -10,7 +10,8 @@ let
   used_overlays = [
     (import sources.rust-overlay)
     (import ./overlay.nix)
-  ] ++ overlays;
+  ]
+  ++ overlays;
 
   nixpkgsArgs = args // {
     overlays = used_overlays;

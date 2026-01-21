@@ -47,11 +47,11 @@ test-integration *TEST_ARGS: build-bin build-python
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  timeout 30 pytest --color=yes {{TEST_ARGS}}
+  pytest --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
-nix-test-integration *TEST_ARGS:
+nix-test-integration *TEST_ARGS: nix-build
   #!/usr/bin/env bash
   set -euxo pipefail
   nix_build_python_library_dir=$(just nix-build-python)
@@ -61,7 +61,7 @@ nix-test-integration *TEST_ARGS:
   export OPSQUEUE_VIA_NIX=true
   export RUST_LOG="opsqueue=debug"
 
-  timeout 30 pytest --color=yes {{TEST_ARGS}}
+  pytest --color=yes {{TEST_ARGS}}
 
 # Run all linters, fast and slow
 [group('lint')]

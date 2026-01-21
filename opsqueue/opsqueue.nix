@@ -1,6 +1,7 @@
 {
+  pkgs,
   lib,
-  rustPlatform,
+  rustToolchain,
   # Building options
   buildType ? "release",
   # Testing options
@@ -9,64 +10,42 @@
   useNextest ? false, # Disabled for now. Re-enable as part of https://github.com/channable/opsqueue/issues/81
   perl,
   git,
+  python312,
 }:
 let
-  root = ../.;
-  util = import (root + /nix/util.nix) { inherit lib; };
-in
-rustPlatform.buildRustPackage {
-  name = "opsqueue";
-  inherit
-    buildType
-    checkType
-    doCheck
-    useNextest
-    ;
+  sources = import ../nix/sources.nix;
+  crane = import sources.crane { pkgs = pkgs; };
+  craneLib = crane.overrideToolchain (pkgs: rustToolchain);
+  extraFileFilter = path: _type: builtins.match ".*(db|sql)$" path != null;
+  fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
 
-  src = util.fileFilter {
+  # src = craneLib.cleanCargoSource ../.;
+  src = lib.cleanSourceWith {
+    src = ../.;
     name = "opsqueue";
-    src = ./.;
-
-    srcWhitelist = [
-      "Cargo.toml"
-      ".cargo(/.*)?"
-      "build\.rs"
-      "opsqueue_example_database_schema\.db"
-      "app(/.*)?"
-      "migrations(/.*)?"
-      "src(/.*)?"
-    ];
-
-    srcGlobalWhitelist = [
-      ".lock"
-      ".toml"
-      ".rs"
-      ".db"
-      ".sql"
-    ];
+    filter = fileFilter;
   };
 
-  postUnpack = ''
-    cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
-    chmod +w /build/opsqueue/Cargo.lock
-  '';
-
-  env = {
-    DATABASE_URL = "sqlite:///build/opsqueue/opsqueue_example_database_schema.db";
+  crateName = craneLib.crateNameFromCargoToml { cargoToml = ../opsqueue/Cargo.toml; };
+  pname = crateName.pname;
+  version = crateName.version;
+  commonArgs = {
+    inherit src version pname;
+    strictDeps = true;
+    nativeBuildInputs = [ python312 ];
   };
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+in
+craneLib.buildPackage (
+  commonArgs
+  // {
+    inherit cargoArtifacts;
 
-  nativeBuildInputs = [
-    perl
-    git
-  ];
+    # Needed for the SQLx macros:
+    env = {
+      DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
+    };
 
-  cargoLock = {
-    lockFile = ../Cargo.lock;
-  };
-
-  # This limits the build to only build the opsqueue executable
-  cargoBuildFlags = [
-    "--package"
-    "opsqueue"
-  ];
-}
+    cargoExtraArgs = "--package opsqueue";
+  }
+)
