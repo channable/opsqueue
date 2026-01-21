@@ -1,4 +1,16 @@
 {
+    "naersk": {
+        "branch": "master",
+        "description": "Build Rust projects in Nix - no configuration, no code generation, no IFD, sandbox friendly.",
+        "homepage": "",
+        "owner": "nix-community",
+        "repo": "naersk",
+        "rev": "8d97452673640eb7fabe428e8b6a425bc355008b",
+        "sha256": "0sgs8dh8yw62dzpd0mm6byf2q4vwqab3r0i62qy52las85f4p1qw",
+        "type": "tarball",
+        "url": "https://github.com/nix-community/naersk/archive/8d97452673640eb7fabe428e8b6a425bc355008b.tar.gz",
+        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
+    },
     "nixpkgs": {
         "branch": "nixpkgs-unstable",
         "description": "Nix Packages collection",

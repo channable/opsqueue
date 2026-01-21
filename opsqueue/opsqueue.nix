@@ -1,6 +1,7 @@
 {
   lib,
-  rustPlatform,
+  # rustPlatform,
+  naersk,
   # Building options
   buildType ? "release",
   # Testing options
@@ -14,7 +15,7 @@ let
   root = ../.;
   util = import (root + /nix/util.nix) { inherit lib; };
 in
-rustPlatform.buildRustPackage {
+naersk.buildPackage {
   name = "opsqueue";
   inherit
     buildType
@@ -23,12 +24,26 @@ rustPlatform.buildRustPackage {
     useNextest
     ;
 
+  # root = util.fileFilter {
+  #   name = "opsqueue";
+  #   src = ../.;
+  #   srcWhitelist = [
+  #     "Cargo.toml"
+  #     "Cargo.lock"
+  #   ];
+  #   srcGlobalWhitelist = [
+  #     ".lock"
+  #     ".toml"
+  #   ];
+  # };
+
   src = util.fileFilter {
     name = "opsqueue";
-    src = ./.;
+    src = ../.;
 
     srcWhitelist = [
       "Cargo.toml"
+      "Cargo.lock"
       ".cargo(/.*)?"
       "build\.rs"
       "opsqueue_example_database_schema\.db"
@@ -46,10 +61,10 @@ rustPlatform.buildRustPackage {
     ];
   };
 
-  postUnpack = ''
-    cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
-    chmod +w /build/opsqueue/Cargo.lock
-  '';
+  # postUnpack = ''
+  #   cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
+  #   chmod +w /build/opsqueue/Cargo.lock
+  # '';
 
   env = {
     DATABASE_URL = "sqlite:///build/opsqueue/opsqueue_example_database_schema.db";
@@ -60,13 +75,13 @@ rustPlatform.buildRustPackage {
     git
   ];
 
-  cargoLock = {
-    lockFile = ../Cargo.lock;
-  };
+  # cargoLock = {
+  #   lockFile = ../Cargo.lock;
+  # };
 
   # This limits the build to only build the opsqueue executable
-  cargoBuildFlags = [
-    "--package"
-    "opsqueue"
-  ];
+  # cargoBuildFlags = [
+  #   "--package"
+  #   "opsqueue"
+  # ];
 }
