@@ -17,7 +17,8 @@ let
     cargo = rustToolchain;
   };
 
-  craneLib = import sources.crane { pkgs = final; };
+  crane = import sources.crane { pkgs = final; };
+  craneLib = crane.overrideToolchain (pkgs: rustToolchain);
   # naersk = final.callPackage sources.naersk {
   #   rustc = rustToolchain;
   #   cargo = rustToolchain;

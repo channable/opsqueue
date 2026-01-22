@@ -41,8 +41,12 @@ let
     (craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; })).overrideAttrs
       (old: {
         nativeBuildInputs = old.nativeBuildInputs ++ [ maturin ];
-        buildPhase = old.buildPhase + ''
-          maturin build --verbose --release --offline --target-dir ./target --manifest-path "./libs/opsqueue_python/Cargo.toml"
+
+        # We intentionally _override_ rather than extend the buildPhase
+        # as Maturin itself calls `cargo build`, no need to call it twice.
+        buildPhase = ''
+          cargo --version
+          maturin build --release --offline --target-dir ./target --manifest-path "./libs/opsqueue_python/Cargo.toml"
         '';
 
         # We build a single wheel
@@ -51,11 +55,20 @@ let
         #
         # The Nix hash already covers us for uniqueness and compatibility.
         # So this 'trick' copies it to a predictably named file.
-        installPhase = old.installPhase + ''
+        #
+        # Just like `buildPhase`, we override rather than extend
+        # because we are only interested in the wheel output of Maturin as a whole.
+        # (which is an archive inside of it containing the `.so` cargo built)
+        installPhase = ''
+          mkdir -p $out
           for wheel in ./target/wheels/*.whl ; do
             cp "$wheel" $out/${wheelName}
           done
         '';
+
+        # There are no Rust unit tests in the Python FFI library currently,
+        # so we can skip rebuilding opsqueue_python for tests.
+        doCheck = false;
       });
 in
 buildPythonPackage {
@@ -65,4 +78,11 @@ buildPythonPackage {
   src = "${crateWheel}/${wheelName}";
   doCheck = false;
   pythonImportsCheck = [ "opsqueue" ];
+
+  propagatedBuildInputs = [
+    cbor2
+    opentelemetry-api
+    opentelemetry-exporter-otlp
+    opentelemetry-sdk
+  ];
 }
