@@ -17,15 +17,16 @@ let
     cargo = rustToolchain;
   };
 
-  naersk = final.callPackage sources.naersk {
-    rustc = rustToolchain;
-    cargo = rustToolchain;
-  };
+  craneLib = import sources.crane { pkgs = final; };
+  # naersk = final.callPackage sources.naersk {
+  #   rustc = rustToolchain;
+  #   cargo = rustToolchain;
+  # };
 in
 {
-  inherit naersk;
+  # inherit naersk;
   inherit rustToolchain;
-  opsqueue = final.callPackage ../opsqueue/opsqueue.nix { };
+  opsqueue = final.callPackage ../opsqueue/opsqueue.nix { inherit craneLib; };
 
   # The explicit choice is made not to override `python312`, as this will cause a rebuild of many
   # packages when nixpkgs uses python 3.12 as default python environment.
