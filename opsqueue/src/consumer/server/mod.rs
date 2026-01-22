@@ -200,7 +200,7 @@ impl Completer {
                 }
                 // Log some indication of progress every so often:
                 self.count = self.count.saturating_add(1);
-                if self.count % 1000 == 0 {
+                if self.count.is_multiple_of(1000) {
                     tracing::info!("Processed {} chunks", self.count);
                 }
             }

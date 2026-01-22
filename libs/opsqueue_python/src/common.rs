@@ -428,11 +428,8 @@ pub async fn check_signals_in_background() -> FatalPythonException {
             if let Err(err) = py.check_signals() {
                 // A signal was triggered
                 Some(err)
-            } else if let Some(err) = PyErr::take(py) {
-                // A non-signal Python exception was thrown
-                return Some(err);
             } else {
-                return None;
+                PyErr::take(py)
             }
         });
         if let Some(res) = res {

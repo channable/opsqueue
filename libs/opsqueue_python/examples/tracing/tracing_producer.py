@@ -13,7 +13,7 @@ from opentelemetry.sdk.trace.export import (
     # ConsoleSpanExporter,
 )
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # type: ignore[attr-defined]
 
 from opsqueue.producer import ProducerClient
 
@@ -75,7 +75,7 @@ def added_baggage(
         yield
     finally:
         for attached_token in attached_context_tokens:
-            opentelemetry.context.detach(attached_token)
+            opentelemetry.context.detach(attached_token)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

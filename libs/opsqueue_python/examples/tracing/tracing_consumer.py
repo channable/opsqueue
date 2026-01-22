@@ -8,7 +8,7 @@ from opentelemetry.sdk.trace.export import (
     # ConsoleSpanExporter,
 )
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # type: ignore[attr-defined]
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
