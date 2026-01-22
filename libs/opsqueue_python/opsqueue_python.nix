@@ -1,5 +1,8 @@
 {
   lib,
+  python,
+  craneLib,
+  maturin,
   buildPythonPackage,
   rustPlatform,
   perl,
@@ -11,57 +14,55 @@
   opentelemetry-sdk,
 }:
 let
-  root = ../../.;
-  util = import (root + /nix/util.nix) { inherit lib; };
+  extraFileFilter = path: _type: builtins.match ".*(db|sql|py|md)$" path != null;
+  fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
+
+  src = lib.cleanSourceWith {
+    src = ../../.;
+    name = "opsqueue";
+    filter = fileFilter;
+  };
+
+  crateName = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
+  pname = crateName.pname;
+  version = crateName.version;
+  commonArgs = {
+    inherit src version pname;
+    strictDeps = true;
+    nativeBuildInputs = [ python ];
+    cargoExtraArgs = "--package opsqueue_python";
+  };
+  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = pname; });
+
+  wheelTail = "py3-abi3-linux_x86_64";
+  wheelName = "opsqueue-${version}-${wheelTail}.whl";
+
+  crateWheel =
+    (craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; })).overrideAttrs
+      (old: {
+        nativeBuildInputs = old.nativeBuildInputs ++ [ maturin ];
+        buildPhase = old.buildPhase + ''
+          maturin build --verbose --release --offline --target-dir ./target --manifest-path "./libs/opsqueue_python/Cargo.toml"
+        '';
+
+        # We build a single wheel
+        # but by convention its name is based on the precise combination of
+        # Python version + OS version + architecture + ...
+        #
+        # The Nix hash already covers us for uniqueness and compatibility.
+        # So this 'trick' copies it to a predictably named file.
+        installPhase = old.installPhase + ''
+          for wheel in ./target/wheels/*.whl ; do
+            cp "$wheel" $out/${wheelName}
+          done
+        '';
+      });
 in
-buildPythonPackage rec {
-  pname = "opsqueue";
-  version = "0.1.0";
-  pyproject = true;
-
-  src = util.fileFilter {
-    name = "opsqueue_python";
-    src = root;
-
-    # We're copying slightly too much to the Nix store here,
-    # but using the more granular file filter was very error-prone.
-    # This is one thing that could be improved a little in the future.
-    srcGlobalWhitelist = [
-      ".py"
-      ".pyi"
-      "py.typed"
-      ".rs"
-      ".toml"
-      ".lock"
-      ".db"
-      ".md"
-    ];
-  };
-
-  cargoDeps = rustPlatform.importCargoLock { lockFile = ../../Cargo.lock; };
-
-  env = {
-    DATABASE_URL = "sqlite://./opsqueue/opsqueue_example_database_schema.db";
-  };
-
-  pythonImportsCheck = [ pname ];
-
-  maturinBuildFlags = [
-    "--manifest-path"
-    "./libs/opsqueue_python/Cargo.toml"
-  ];
-
-  nativeBuildInputs = with rustPlatform; [
-    perl
-    git
-    cargoSetupHook
-    maturinBuildHook
-  ];
-
-  propagatedBuildInputs = [
-    cbor2
-    opentelemetry-api
-    opentelemetry-exporter-otlp
-    opentelemetry-sdk
-  ];
+buildPythonPackage {
+  pname = pname;
+  format = "wheel";
+  version = crateName.version;
+  src = "${crateWheel}/${wheelName}";
+  doCheck = false;
+  pythonImportsCheck = [ "opsqueue" ];
 }

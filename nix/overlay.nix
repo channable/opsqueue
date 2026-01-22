@@ -2,7 +2,7 @@
 final: prev:
 let
   sources = import ./sources.nix;
-  pythonOverlay = import ./python-overlay.nix;
+  pythonOverlay = import ./python-overlay.nix { inherit craneLib; };
 
   # We want to use the same Rust version in Nix
   # as we use when _not_ using Nix.
