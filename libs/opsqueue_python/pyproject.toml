@@ -59,7 +59,7 @@ test = [
 [tool.pytest.ini_options]
 # We ensure tests never rely on global state,
 # by running them in a random order, and in parallel:
-addopts = "--random-order --workers=auto"
+addopts = "--random-order --workers=4"
 # Individual tests should be very fast. They should never take multiple seconds
 # If after 20sec (accomodating for a toaster-like PC) there is no progress,
 # assume a deadlock
