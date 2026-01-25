@@ -1,8 +1,7 @@
 {
+  pkgs,
   lib,
-  # rustPlatform,
-  # naersk,
-  craneLib,
+  rustToolchain,
   # Building options
   buildType ? "release",
   # Testing options
@@ -14,6 +13,9 @@
   python312,
 }:
 let
+  sources = import ../nix/sources.nix;
+  crane = import sources.crane { pkgs = pkgs; };
+  craneLib = crane.overrideToolchain (pkgs: rustToolchain);
   extraFileFilter = path: _type: builtins.match ".*(db|sql)$" path != null;
   fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
 
@@ -23,32 +25,6 @@ let
     name = "opsqueue";
     filter = fileFilter;
   };
-
-  util = import (../nix/util.nix) { inherit lib; };
-  # src = util.fileFilter {
-  #   name = "opsqueue";
-  #   src = ../.;
-
-  #   srcWhitelist = [
-  #     "Cargo.toml"
-  #     "Cargo.lock"
-  #     "opsqueue/Cargo.toml"
-  #     "opsqueue/.cargo(/.*)?"
-  #     "opsqueue/build\.rs"
-  #     "opsqueue/opsqueue_example_database_schema\.db"
-  #     "opsqueue/app(/.*)?"
-  #     "opsqueue/migrations(/.*)?"
-  #     "opsqueue/src(/.*)?"
-  #   ];
-
-  #   srcGlobalWhitelist = [
-  #     ".lock"
-  #     ".toml"
-  #     ".rs"
-  #     ".db"
-  #     ".sql"
-  #   ];
-  # };
 
   crateName = craneLib.crateNameFromCargoToml { cargoToml = ../opsqueue/Cargo.toml; };
   pname = crateName.pname;
@@ -73,80 +49,3 @@ craneLib.buildPackage (
     cargoExtraArgs = "--package opsqueue";
   }
 )
-# {
-#   name = "opsqueue";
-# }
-# let
-#   root = ../.;
-#   util = import (root + /nix/util.nix) { inherit lib; };
-# in
-# craneLib.buildPackage {
-#   name = "opsqueue";
-#   inherit
-#     buildType
-#     checkType
-#     doCheck
-#     useNextest
-#     ;
-
-#   # root = util.fileFilter {
-#   #   name = "opsqueue";
-#   #   src = ../.;
-#   #   srcWhitelist = [
-#   #     "Cargo.toml"
-#   #     "Cargo.lock"
-#   #   ];
-#   #   srcGlobalWhitelist = [
-#   #     ".lock"
-#   #     ".toml"
-#   #   ];
-#   # };
-
-#   src = util.fileFilter {
-#     name = "opsqueue";
-#     src = ../.;
-
-#     srcWhitelist = [
-#       "Cargo.toml"
-#       "Cargo.lock"
-#       ".cargo(/.*)?"
-#       "build\.rs"
-#       "opsqueue_example_database_schema\.db"
-#       "app(/.*)?"
-#       "migrations(/.*)?"
-#       "src(/.*)?"
-#     ];
-
-#     srcGlobalWhitelist = [
-#       ".lock"
-#       ".toml"
-#       ".rs"
-#       ".db"
-#       ".sql"
-#     ];
-#   };
-
-#   # postUnpack = ''
-#   #   cp "${../Cargo.lock}" "/build/opsqueue/Cargo.lock"
-#   #   chmod +w /build/opsqueue/Cargo.lock
-#   # '';
-
-#   env = {
-#     DATABASE_URL = "sqlite:///build/opsqueue/opsqueue_example_database_schema.db";
-#   };
-
-#   nativeBuildInputs = [
-#     perl
-#     git
-#   ];
-
-#   # cargoLock = {
-#   #   lockFile = ../Cargo.lock;
-#   # };
-
-#   # This limits the build to only build the opsqueue executable
-#   # cargoBuildFlags = [
-#   #   "--package"
-#   #   "opsqueue"
-#   # ];
-# }

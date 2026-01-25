@@ -1,6 +1,3 @@
-{ craneLib }:
 final: prev: {
-  opsqueue_python = final.callPackage ../libs/opsqueue_python/opsqueue_python.nix {
-    inherit craneLib;
-  };
+  opsqueue_python = final.callPackage ../libs/opsqueue_python/opsqueue_python.nix { };
 }

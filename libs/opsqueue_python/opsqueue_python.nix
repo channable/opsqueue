@@ -1,19 +1,28 @@
 {
+  # Builtin
+  pkgs,
   lib,
+
+  # Rust version. (Override this with an overlay if you like)
+  rustToolchain,
+
+  # Native build dependencies:
   python,
-  craneLib,
   maturin,
   buildPythonPackage,
-  rustPlatform,
   perl,
   git,
-  # Python packages:
+
+  # Python package dependencies:
   cbor2,
   opentelemetry-api,
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
 }:
 let
+  sources = import ../../nix/sources.nix;
+  crane = import sources.crane { pkgs = pkgs; };
+  craneLib = crane.overrideToolchain (pkgs: rustToolchain);
   extraFileFilter = path: _type: builtins.match ".*(db|sql|py|md)$" path != null;
   fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
 

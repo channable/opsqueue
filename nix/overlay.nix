@@ -2,7 +2,7 @@
 final: prev:
 let
   sources = import ./sources.nix;
-  pythonOverlay = import ./python-overlay.nix { inherit craneLib; };
+  pythonOverlay = import ./python-overlay.nix;
 
   # We want to use the same Rust version in Nix
   # as we use when _not_ using Nix.
@@ -19,15 +19,11 @@ let
 
   crane = import sources.crane { pkgs = final; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
-  # naersk = final.callPackage sources.naersk {
-  #   rustc = rustToolchain;
-  #   cargo = rustToolchain;
-  # };
 in
 {
   # inherit naersk;
   inherit rustToolchain;
-  opsqueue = final.callPackage ../opsqueue/opsqueue.nix { inherit craneLib; };
+  opsqueue = final.callPackage ../opsqueue/opsqueue.nix { };
 
   # The explicit choice is made not to override `python312`, as this will cause a rebuild of many
   # packages when nixpkgs uses python 3.12 as default python environment.
