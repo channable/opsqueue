@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use opsqueue::common::{StrategicMetadataMap};
 use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
@@ -279,6 +280,7 @@ impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompl
             completed_at: value.completed_at,
             chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
         }
     }
 }
@@ -373,11 +375,12 @@ impl SubmissionStatus {
 impl SubmissionCompleted {
     fn __repr__(&self) -> String {
         format!(
-            "SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?})",
+            "SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?}, strategic_metadata={4:?})",
             self.id.__repr__(),
             self.chunks_total,
             self.completed_at,
-            self.metadata
+            self.metadata,
+            self.strategic_metadata
         )
     }
 }
@@ -396,6 +399,7 @@ pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub completed_at: DateTime<Utc>,
 }
 
