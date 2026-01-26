@@ -133,6 +133,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, str | int] = None,
     ) -> SubmissionId:
         """
         Inserts a submission into the queue,
@@ -147,6 +148,7 @@ class ProducerClient:
         return self.insert_submission_chunks(
             _chunk_iterator(ops, chunk_size, serialization_format),
             metadata=metadata,
+            strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
         )
 
