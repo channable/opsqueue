@@ -4,7 +4,6 @@ from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
 import multiprocessing
 import subprocess
-import uuid
 import os
 import pytest
 from dataclasses import dataclass
@@ -59,7 +58,14 @@ def opsqueue_service(
     if port is None:
         port = random_free_port()
 
-    temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
+    # This will create a SQLite database in memory.
+    # We need the `cache=shared` to allow sharing this DB between all threads within the same OS process.
+    temp_dbname = "file::memory:?cache=shared"
+
+    # Switch this for the following if debugging a particular test locally.
+    # This is not the default because specifically Semaphore backed with Butterfs
+    # will from time to time hang for **many minutes** on initializing SQLite for some reason.
+    # temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
     command = [
         str(opsqueue_bin_location()),
