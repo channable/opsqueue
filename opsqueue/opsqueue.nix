@@ -2,21 +2,13 @@
   pkgs,
   lib,
   rustToolchain,
-  # Building options
-  buildType ? "release",
-  # Testing options
-  checkType ? "debug",
-  doCheck ? true,
-  useNextest ? false, # Disabled for now. Re-enable as part of https://github.com/channable/opsqueue/issues/81
-  perl,
   git,
-  python312,
 }:
 let
   sources = import ../nix/sources.nix;
   crane = import sources.crane { pkgs = pkgs; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
-  extraFileFilter = path: _type: builtins.match ".*(db|sql)$" path != null;
+  extraFileFilter = path: _type: builtins.match "^.*\.(db|sql)$" path != null;
   fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
 
   # src = craneLib.cleanCargoSource ../.;
@@ -26,13 +18,16 @@ let
     filter = fileFilter;
   };
 
-  crateName = craneLib.crateNameFromCargoToml { cargoToml = ../opsqueue/Cargo.toml; };
+  crateName = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
   pname = crateName.pname;
-  version = crateName.version;
+  version = (craneLib.crateNameFromCargoToml { cargoToml = ../Cargo.toml; }).version;
+  # version = crateName.version;
   commonArgs = {
     inherit src version pname;
     strictDeps = true;
-    nativeBuildInputs = [ python312 ];
+    nativeBuildInputs = [ ];
+    cargoExtraArgs = "--package opsqueue";
+    doCheck = true;
   };
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 in
@@ -46,6 +41,5 @@ craneLib.buildPackage (
       DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
     };
 
-    cargoExtraArgs = "--package opsqueue";
   }
 )

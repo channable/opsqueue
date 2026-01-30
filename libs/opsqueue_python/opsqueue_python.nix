@@ -7,7 +7,6 @@
   rustToolchain,
 
   # Native build dependencies:
-  python,
   maturin,
   buildPythonPackage,
   perl,
@@ -20,26 +19,40 @@
   opentelemetry-sdk,
 }:
 let
+  python = pkgs.python3;
   sources = import ../../nix/sources.nix;
   crane = import sources.crane { pkgs = pkgs; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
-  extraFileFilter = path: _type: builtins.match ".*(db|sql|py|md)$" path != null;
-  fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
 
-  src = lib.cleanSourceWith {
+  # Only the files necessary to build the Rust-side and cache dependencies
+  sqlFileFilter = path: _type: builtins.match "^.*\.(db|sql)$" path != null;
+  rustCrateFileFilter =
+    path: type: (sqlFileFilter path type) || (craneLib.filterCargoSources path type);
+  depsSrc = lib.cleanSourceWith {
     src = ../../.;
     name = "opsqueue";
-    filter = fileFilter;
+    filter = rustCrateFileFilter;
+  };
+
+  # Full set of files to build the Python wheel on top
+  pythonFileFilter = path: _type: builtins.match "^.*\.(py|md)$" path != null;
+  wheelFileFilter = path: type: (pythonFileFilter path type) || (rustCrateFileFilter path type);
+  wheelSrc = lib.cleanSourceWith {
+    src = ../../.;
+    name = "opsqueue";
+    filter = wheelFileFilter;
   };
 
   crateName = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
   pname = crateName.pname;
-  version = crateName.version;
+  version = (craneLib.crateNameFromCargoToml { cargoToml = ../../Cargo.toml; }).version;
   commonArgs = {
-    inherit src version pname;
+    inherit version pname;
+    src = depsSrc;
     strictDeps = true;
     nativeBuildInputs = [ python ];
     cargoExtraArgs = "--package opsqueue_python";
+    doCheck = false;
   };
   cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = pname; });
 
@@ -47,9 +60,16 @@ let
   wheelName = "opsqueue-${version}-${wheelTail}.whl";
 
   crateWheel =
-    (craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; })).overrideAttrs
+    (craneLib.buildPackage (
+      commonArgs
+      // {
+        inherit cargoArtifacts;
+        src = wheelSrc;
+      }
+    )).overrideAttrs
       (old: {
         nativeBuildInputs = old.nativeBuildInputs ++ [ maturin ];
+        env.PYO3_PYTHON = python.interpreter;
 
         # We intentionally _override_ rather than extend the buildPhase
         # as Maturin itself calls `cargo build`, no need to call it twice.
@@ -83,10 +103,19 @@ in
 buildPythonPackage {
   pname = pname;
   format = "wheel";
-  version = crateName.version;
+  version = version;
   src = "${crateWheel}/${wheelName}";
   doCheck = false;
-  pythonImportsCheck = [ "opsqueue" ];
+  pythonImportsCheck = [
+    "opsqueue"
+    # Internal: This is the most important one!
+    "opsqueue.opsqueue_internal"
+    # Visible:
+    "opsqueue.producer"
+    "opsqueue.consumer"
+    "opsqueue.exceptions"
+    "opsqueue.common"
+  ];
 
   propagatedBuildInputs = [
     cbor2

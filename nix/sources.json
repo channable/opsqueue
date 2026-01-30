@@ -11,28 +11,16 @@
         "url": "https://github.com/ipetkov/crane/archive/0bda7e7d005ccb5522a76d11ccfbf562b71953ca.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
-    "naersk": {
-        "branch": "master",
-        "description": "Build Rust projects in Nix - no configuration, no code generation, no IFD, sandbox friendly.",
-        "homepage": "",
-        "owner": "nix-community",
-        "repo": "naersk",
-        "rev": "8d97452673640eb7fabe428e8b6a425bc355008b",
-        "sha256": "0sgs8dh8yw62dzpd0mm6byf2q4vwqab3r0i62qy52las85f4p1qw",
-        "type": "tarball",
-        "url": "https://github.com/nix-community/naersk/archive/8d97452673640eb7fabe428e8b6a425bc355008b.tar.gz",
-        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
-    },
     "nixpkgs": {
         "branch": "nixpkgs-unstable",
         "description": "Nix Packages collection",
         "homepage": "",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "ed142ab1b3a092c4d149245d0c4126a5d7ea00b0",
-        "sha256": "1h7v295lpjfxpxkag2csam7whx918sdypixdi8i85vlb707gg0vm",
+        "rev": "6308c3b21396534d8aaeac46179c14c439a89b8a",
+        "sha256": "14qnx22pkl9v4r0lxnnz18f4ybxj8cv18hyf1klzap98hckg58y4",
         "type": "tarball",
-        "url": "https://github.com/NixOS/nixpkgs/archive/ed142ab1b3a092c4d149245d0c4126a5d7ea00b0.tar.gz",
+        "url": "https://github.com/NixOS/nixpkgs/archive/6308c3b21396534d8aaeac46179c14c439a89b8a.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "rust-overlay": {

@@ -4,7 +4,7 @@
 let
   pkgs = import ./nix/nixpkgs-pinned.nix { };
 
-  pythonEnv = pkgs.pythonChannable.withPackages (
+  pythonEnv = pkgs.python.withPackages (
     p: with p; [
       click
       mypy
