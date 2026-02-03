@@ -47,21 +47,21 @@ test-integration *TEST_ARGS: build-bin build-python
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  timeout 30 pytest --color=yes {{TEST_ARGS}}
+  pytest --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
-nix-test-integration *TEST_ARGS:
+nix-test-integration *TEST_ARGS: nix-build-bin
   #!/usr/bin/env bash
   set -euxo pipefail
   nix_build_python_library_dir=$(just nix-build-python)
 
   cd libs/opsqueue_python/tests
-  export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.12/site-packages"
+  export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.13/site-packages"
   export OPSQUEUE_VIA_NIX=true
   export RUST_LOG="opsqueue=debug"
 
-  timeout 30 pytest --color=yes {{TEST_ARGS}}
+  pytest --color=yes {{TEST_ARGS}}
 
 # Run all linters, fast and slow
 [group('lint')]
@@ -89,7 +89,7 @@ mypy:
 
 # Build Nix-derivations of binary and all libraries (release profile)
 [group('nix')]
-nix-build: (_nix-build "opsqueue" "pythonChannable.pkgs.opsqueue_python")
+nix-build: (_nix-build "opsqueue" "python.pkgs.opsqueue_python")
 
 # Build Nix-derivation of binary (release profile)
 [group('nix')]
@@ -97,7 +97,7 @@ nix-build-bin: (_nix-build "opsqueue")
 
 # Build Nix-derivation of Python client library (release profile)
 [group('nix')]
-nix-build-python: (_nix-build "pythonChannable.pkgs.opsqueue_python")
+nix-build-python: (_nix-build "python.pkgs.opsqueue_python")
 
 _nix-build +TARGETS:
   nix build --file nix/nixpkgs-pinned.nix --print-out-paths --print-build-logs --no-link --option sandbox true {{TARGETS}}

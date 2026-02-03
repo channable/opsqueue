@@ -25,12 +25,6 @@ repos:
         language: system
         types: [python]
         require_serial: true
-      - id: biome
-        name: Biome formatting
-        entry: biome format --write --files-ignore-unknown=true --no-errors-on-unmatched
-        language: system
-        types: [json]
-        require_serial: true
       - id: rustfmt
         name: rustfmt
         entry: cargo fmt --

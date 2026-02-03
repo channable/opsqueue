@@ -62,7 +62,7 @@ blocks:
       jobs:
         - name: "Build Opsqueue binary (in release mode) & run unit tests"
           commands:
-            - "just nix-build-bin | cachix push channable"
+            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build-bin)) | grep -v '\\.drv$' | cachix push channable"
             # Once a day, we update the devenv cache.
             # Except when fresh, this takes < 1 second
             # but it cannot live in the prologue
@@ -70,7 +70,7 @@ blocks:
             - cache store nix-store-$(date -u -Idate) /nix
         - name: "Build Python library (in release mode)"
           commands:
-            - "just nix-build-python | cachix push channable"
+            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build-python)) | grep -v '\\.drv$' | cachix push channable"
   - name: "Integration"
     dependencies:
       - "Build"

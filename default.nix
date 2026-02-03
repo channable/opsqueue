@@ -4,7 +4,7 @@
 let
   pkgs = import ./nix/nixpkgs-pinned.nix { };
 
-  pythonEnv = pkgs.pythonChannable.withPackages (
+  pythonEnv = pkgs.python.withPackages (
     p: with p; [
       click
       mypy
@@ -22,9 +22,6 @@ let
     ]
   );
 
-  # We choose a minimal Rust channel to keep the Nix closure size smaller
-  rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-
   defaultEnv = pkgs.buildEnv {
     name = "opsqueue-env-default";
     paths = [
@@ -39,7 +36,7 @@ let
       pkgs.ruff
 
       # For compiling the Rust parts
-      rust
+      pkgs.rustToolchain
       pkgs.sqlx-cli
 
       # Manage nix pins
