@@ -7,6 +7,7 @@ use std::{
 };
 
 use axum::extract::ws::{Message, WebSocket};
+use futures::SinkExt;
 use tokio::{
     select,
     sync::{
@@ -134,7 +135,7 @@ impl ConsumerConn {
         }
     }
 
-    async fn graceful_shutdown(self) {
+    async fn graceful_shutdown(mut self) {
         const GRACEFUL_WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(100);
         select! {
             _ = self.ws_stream.close() => {},
