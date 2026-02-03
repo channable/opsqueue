@@ -4,6 +4,7 @@ use crate::common::chunk;
 use futures::stream::{self, TryStreamExt};
 use object_store::path::Path;
 use object_store::DynObjectStore;
+use object_store::ObjectStoreExt;
 use reqwest::Url;
 use ux::u63;
 
