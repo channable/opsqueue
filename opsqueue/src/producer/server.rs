@@ -52,10 +52,10 @@ impl ServerState {
             )
             .route("/submissions/count", get(submissions_count))
             .route(
-                "/submissions/lookup_id_by_prefix/:prefix",
+                "/submissions/lookup_id_by_prefix/{prefix}",
                 get(lookup_submission_id_by_prefix),
             )
-            .route("/submissions/:submission_id", get(submission_status))
+            .route("/submissions/{submission_id}", get(submission_status))
             .route("/version", get(crate::server::version_endpoint)) // We're also exposing it here so the producer client can view it
             .with_state(self)
     }

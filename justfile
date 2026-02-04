@@ -20,7 +20,7 @@ build-bin *ARGS:
 [group('build')]
 build-python *ARGS:
   #!/usr/bin/env bash
-  set -euxo pipefail
+  set -euo pipefail
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
@@ -43,7 +43,7 @@ test-unit *TEST_ARGS:
 [group('test')]
 test-integration *TEST_ARGS: build-bin build-python
   #!/usr/bin/env bash
-  set -euxo pipefail
+  set -euo pipefail
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
@@ -53,7 +53,7 @@ test-integration *TEST_ARGS: build-bin build-python
 [group('nix')]
 nix-test-integration *TEST_ARGS: nix-build-bin
   #!/usr/bin/env bash
-  set -euxo pipefail
+  set -euo pipefail
   nix_build_python_library_dir=$(just nix-build-python)
 
   cd libs/opsqueue_python/tests
