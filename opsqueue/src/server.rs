@@ -87,14 +87,17 @@ pub fn build_router(
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
 
-    // NOTE: For the initial release, these values make sense for extra introspection.
-    // In some future version, we probably want to lower these log levels down to DEBUG
-    // and stop logging a pair of lines for every HTTP request.
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO))
-        .on_request(|request: &http::Request<_>, span: &tracing::Span| {
+        .make_span_with(|request: &http::Request<_>| {
             use tracing_opentelemetry::OpenTelemetrySpanExt;
-            span.set_parent(crate::tracing::context_from_headers(request.headers()));
+            let span = tracing::info_span!("request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        version = ?request.version(),
+                        headers = ?request.headers(),
+            );
+            let _ = span.set_parent(crate::tracing::context_from_headers(request.headers()));
+            span
         })
         .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
 

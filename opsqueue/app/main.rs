@@ -1,4 +1,7 @@
 use clap::Parser;
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_otlp::SpanExporter;
+use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
     sync::{atomic::AtomicBool, Arc},
@@ -108,11 +111,14 @@ fn init_sentry() -> sentry::ClientInitGuard {
     sentry::init(options)
 }
 
-struct OtelGuard {}
+struct OtelGuard {
+    provider: SdkTracerProvider,
+}
 
 impl Drop for OtelGuard {
     fn drop(&mut self) {
-        opentelemetry::global::shutdown_tracer_provider(); // Give OTel a tiny bit of time to gracefully shut down.
+        let _ = self.provider.force_flush();
+        let _ = self.provider.shutdown();
     }
 }
 
@@ -131,6 +137,9 @@ fn setup_tracing() -> OtelGuard {
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
 
+    let provider = otel_tracer_provider();
+    let tracer = provider.tracer("opsqueue");
+
     tracing_subscriber::registry()
         .with(log_filter)
         .with(
@@ -139,39 +148,18 @@ fn setup_tracing() -> OtelGuard {
                 .with_thread_ids(true)
                 .with_target(true),
         )
-        .with(tracing_opentelemetry::OpenTelemetryLayer::new(otel_tracer()))
+        .with(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
         // While we don´t forward traces to Sentry, we do want info and above spans to show up as breadcrumbs
         // and error spans to show up as errors
         .with(sentry_tracing::layer())
         .init();
 
-    OtelGuard {}
-}
-
-// We override the default error handler to log errors at a lower logging level,
-// and this way make it less noisy for devs that are not actively running e.g. `jaeger` in development.
-//
-// This is based on https://github.com/open-telemetry/opentelemetry-rust/blob/8bd529a6d629aff7482b875cfc39275a8a71eaeb/opentelemetry/src/global/error_handler.rs#L56
-//
-// This is slightly suspect, as this usage of `log` might itself end up as a tracing event.
-// As such, it really is only intended for development mode.
-#[cfg(debug_assertions)]
-fn otel_debug_mode_error_handler<T: Into<opentelemetry::global::Error>>(err: T) {
-    use opentelemetry::global::Error;
-    match err.into() {
-        Error::Trace(err) => tracing::debug!("OpenTelemetry trace error occurred. {}", err),
-        Error::Propagation(err) => {
-            tracing::debug!("OpenTelemetry propagation error occurred. {}", err)
-        }
-        other => tracing::debug!("OpenTelemetry error occurred. {}", other),
-    }
+    OtelGuard { provider }
 }
 
 /// Builds the tracer configuration for OpenTelemetry,
 /// including the desired sampling rate and exporter to use.
-fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
-    use opentelemetry::trace::TracerProvider;
-
+fn otel_tracer_provider() -> SdkTracerProvider {
     // Allow overriding the default trace sample rate using an environment variable.
     // By default, 1% is used.
     // Note that if a producer or consumer request arrives at Opsqueue
@@ -180,42 +168,32 @@ fn otel_tracer() -> opentelemetry_sdk::trace::Tracer {
     let default_trace_sample_rate: f64 = std::env::var("OPSQUEUE_OTEL_DEFAULT_TRACE_SAMPLE_RATE")
         .ok()
         .and_then(|x| x.parse().ok())
-        .unwrap_or(0.01);
+        .unwrap_or(1.0);
 
-    let provider = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_trace_config(
-            opentelemetry_sdk::trace::Config::default()
-                .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
-                    opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(default_trace_sample_rate),
-                )))
-                .with_id_generator(opentelemetry_sdk::trace::RandomIdGenerator::default())
-                .with_resource(opentelemetry_resource()),
-        )
-        .with_batch_config(opentelemetry_sdk::trace::BatchConfig::default())
-        .with_exporter(opentelemetry_otlp::new_exporter().tonic())
-        .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .unwrap();
+    let exporter = SpanExporter::builder().with_tonic().build().unwrap();
+    let sampler = Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+        default_trace_sample_rate,
+    )));
+    let provider: SdkTracerProvider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_sampler(sampler)
+        .with_id_generator(RandomIdGenerator::default())
+        .with_resource(opentelemetry_resource())
+        .build();
 
     opentelemetry::global::set_tracer_provider(provider.clone());
 
-    // In debug builds, override the error handler, to avoid noisy logs when devs don't run Jaeger.
-    #[cfg(debug_assertions)]
-    let _ = opentelemetry::global::set_error_handler(otel_debug_mode_error_handler);
-
-    provider.tracer("opsqueue")
+    provider
 }
 fn opentelemetry_resource() -> opentelemetry_sdk::Resource {
-    use opentelemetry_semantic_conventions::{
-        attribute::{DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_NAME, SERVICE_VERSION},
-        SCHEMA_URL,
+    use opentelemetry_semantic_conventions::attribute::{
+        DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_NAME, SERVICE_VERSION,
     };
-    opentelemetry_sdk::Resource::from_schema_url(
-        [
+    opentelemetry_sdk::Resource::builder()
+        .with_attributes([
             opentelemetry::KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
             opentelemetry::KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
             opentelemetry::KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, "develop"),
-        ],
-        SCHEMA_URL,
-    )
+        ])
+        .build()
 }
