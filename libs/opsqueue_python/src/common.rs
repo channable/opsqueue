@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use opsqueue::common::{StrategicMetadataMap};
 use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
+use opsqueue::common::StrategicMetadataMap;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use opsqueue::tracing::CarrierMap;
 use pyo3::prelude::*;
