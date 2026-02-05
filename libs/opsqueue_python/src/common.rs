@@ -292,6 +292,7 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
             failed_at: value.failed_at,
             chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
             failed_chunk_id: value.failed_chunk_id.into(),
         }
     }
@@ -409,6 +410,7 @@ pub struct SubmissionFailed {
     pub id: SubmissionId,
     pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
 }
