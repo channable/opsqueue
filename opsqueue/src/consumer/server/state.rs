@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use axum_prometheus::metrics::histogram;
 use opentelemetry::trace::TraceContextExt;
-use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::common::chunk;

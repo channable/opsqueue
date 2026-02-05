@@ -389,8 +389,8 @@ impl SubmissionCompleted {
 #[pymethods]
 impl SubmissionFailed {
     fn __repr__(&self) -> String {
-        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?})",
-        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata)
+        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?}, strategic_metadata={5:?})",
+        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata, self.strategic_metadata)
     }
 }
 
