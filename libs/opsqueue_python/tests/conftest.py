@@ -2,7 +2,7 @@ import cbor2
 import pickle
 from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
-import multiprocess  # type[import-not-found]
+import multiprocess  # type: ignore[import-untyped]
 import subprocess
 import os
 import pytest
