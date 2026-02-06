@@ -1,8 +1,16 @@
 {
   pkgs,
   lib,
-  rustToolchain,
   git,
+
+  # Downstream users can override which Rust version is used.
+  # But this is opt-in. By default we'll use the same version
+  # that we use in this repo for development.
+  rustToolchain ? (
+    (lib.fix (final: pkgs // (import (import ./nix/sources.nix).rust-overlay) final pkgs))
+    .rust-bin.fromRustupToolchainFile
+      ./rust-toolchain.toml
+  ),
 }:
 let
   sources = import ../nix/sources.nix;
