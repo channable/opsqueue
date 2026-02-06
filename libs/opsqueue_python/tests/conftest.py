@@ -2,7 +2,7 @@ import cbor2
 import pickle
 from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
-import multiprocess
+import multiprocess  # type: ignore[import-untyped]
 import subprocess
 import os
 import pytest
@@ -110,13 +110,12 @@ def background_process(
     args: Iterable[Any] = (),
 ) -> Generator[multiprocess.Process, None, None]:
     proc = multiprocess.Process(target=function, args=args)
-    # try:
-    proc.daemon = True
-    proc.start()
-    yield proc
-    # finally:
-    #     # proc.terminate()
-    #     pass
+    try:
+        proc.daemon = True
+        proc.start()
+        yield proc
+    finally:
+        proc.terminate()
 
 
 @contextmanager

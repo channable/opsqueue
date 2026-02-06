@@ -113,15 +113,6 @@ pub enum Strategy {
     },
 }
 
-// #[pymethods]
-// impl Strategy {
-//     fn __reduce__(&self) -> (&str, ()) {
-//         match self {
-//             Strategy::Oldest() => ("Strategy_Oldest", ()),
-//         }
-//     }
-// }
-
 impl Debug for Strategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
