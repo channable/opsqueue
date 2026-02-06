@@ -9,9 +9,15 @@ from opsqueue.producer import (
     ChunkFailed,
     SubmissionFailedError,
 )
-from opsqueue.consumer import ConsumerClient, Strategy, Chunk
+from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.common import SerializationFormat
-from conftest import background_process, multiple_background_processes, OpsqueueProcess
+from conftest import (
+    background_process,
+    multiple_background_processes,
+    OpsqueueProcess,
+    StrategyDescription,
+    strategy_from_description,
+)
 import logging
 
 import pytest
@@ -21,7 +27,9 @@ def increment(data: int) -> int:
     return data + 1
 
 
-def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -> None:
+def test_roundtrip(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
     """
     A most basic test that round-trips all three components.
     If this fails, something is very wrong.
@@ -34,7 +42,8 @@ def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_roundtrip"
         )
-        consumer_client.run_each_op(increment, strategy=any_consumer_strategy)
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(increment, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
         input_iter = range(0, 100)
@@ -48,7 +57,7 @@ def test_roundtrip(opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy) -
 
 
 def test_empty_submission(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
     """
     Empty submissions ought to be supported without problems.
@@ -69,7 +78,7 @@ def test_empty_submission(
 
 def test_roundtrip_explicit_serialization_format(
     opsqueue: OpsqueueProcess,
-    any_consumer_strategy: Strategy,
+    any_consumer_strategy: StrategyDescription,
     serialization_format: SerializationFormat,
 ) -> None:
     """
@@ -86,9 +95,10 @@ def test_roundtrip_explicit_serialization_format(
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_roundtrip"
         )
+        strategy = strategy_from_description(any_consumer_strategy)
         consumer_client.run_each_op(
             increment,
-            strategy=any_consumer_strategy,
+            strategy=strategy,
             serialization_format=serialization_format,
         )
 
@@ -151,7 +161,7 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
 
 
 def test_chunk_roundtrip(
-    opsqueue: OpsqueueProcess, basic_consumer_strategy: Strategy
+    opsqueue: OpsqueueProcess, basic_consumer_strategy: StrategyDescription
 ) -> None:
     """
     Tests whether everything still works well
@@ -172,7 +182,8 @@ def test_chunk_roundtrip(
             f"localhost:{opsqueue.port}",
             "file:///tmp/opsqueue/test_chunk_roundtrip",
         )
-        consumer_client.run_each_chunk(increment_list, strategy=basic_consumer_strategy)
+        strategy = strategy_from_description(basic_consumer_strategy)
+        consumer_client.run_each_chunk(increment_list, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
         input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(0, 10))
@@ -188,7 +199,7 @@ def test_chunk_roundtrip(
 
 
 def test_many_consumers(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: Strategy
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
     """
     Ensure the system still works if we have many consumers concurrently
@@ -210,7 +221,8 @@ def test_many_consumers(
         consumer_client = ConsumerClient(
             f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_many_consumers"
         )
-        consumer_client.run_each_op(increment, strategy=any_consumer_strategy)
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(increment, strategy=strategy)
 
     n_consumers = 16
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:

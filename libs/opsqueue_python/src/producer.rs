@@ -33,7 +33,7 @@ create_exception!(opsqueue_internal, ProducerClientError, PyException);
 const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(5000);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
-#[pyclass]
+#[pyclass(module = "opsqueue")]
 #[derive(Debug, Clone)]
 pub struct ProducerClient {
     producer_client: ActualClient,
@@ -466,7 +466,7 @@ impl ProducerClient {
 
 pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>;
 
-#[pyclass]
+#[pyclass(module = "opsqueue")]
 pub struct PyChunksIter {
     stream: Arc<tokio::sync::Mutex<ChunksStream>>,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -515,7 +515,7 @@ impl PyChunksIter {
     }
 }
 
-#[pyclass]
+#[pyclass(module = "opsqueue")]
 pub struct PyChunksAsyncIter {
     stream: Arc<tokio::sync::Mutex<ChunksStream>>,
     runtime: Arc<tokio::runtime::Runtime>,
