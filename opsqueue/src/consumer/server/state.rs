@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use axum_prometheus::metrics::histogram;
 use opentelemetry::trace::TraceContextExt;
-use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::common::chunk;
@@ -82,7 +81,7 @@ impl ConsumerState {
         if new_reservations.len() == 1 {
             let submission = &new_reservations[0].1;
             let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);
-            reservation_span.set_parent(context).unwrap();
+            let _ = reservation_span.set_parent(context);
         } else {
             for (_, submission) in &new_reservations {
                 let context = crate::tracing::json_to_context(&submission.otel_trace_carrier);
