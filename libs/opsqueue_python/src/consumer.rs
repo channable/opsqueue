@@ -34,7 +34,7 @@ use super::common::{Chunk, ChunkIndex, Strategy, SubmissionId};
 
 create_exception!(opsqueue_internal, ConsumerClientError, PyException);
 
-#[pyclass]
+#[pyclass(module = "opsqueue")]
 #[derive(Debug)]
 pub struct ConsumerClient {
     client: ActualConsumerClient,

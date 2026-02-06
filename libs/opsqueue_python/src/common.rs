@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +23,7 @@ pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(not(debug_assertions))]
 pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-#[pyclass(frozen, get_all, eq, ord, hash)]
+#[pyclass(frozen, get_all, eq, ord, hash, module = "opsqueue")]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SubmissionId {
     pub id: u64,
@@ -57,7 +58,7 @@ impl From<submission::SubmissionId> for SubmissionId {
     }
 }
 
-#[pyclass(frozen, get_all, eq, ord, hash)]
+#[pyclass(frozen, get_all, eq, ord, hash, module = "opsqueue")]
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkIndex {
     pub id: u64,
@@ -97,8 +98,7 @@ impl From<u63> for ChunkIndex {
     }
 }
 
-#[pyclass(frozen, eq)]
-#[derive(Debug)]
+#[pyclass(frozen, eq, module = "opsqueue_internal")]
 pub enum Strategy {
     #[pyo3(constructor=())]
     Oldest(),
@@ -111,6 +111,35 @@ pub enum Strategy {
         meta_key: String,
         underlying: Py<Strategy>,
     },
+}
+
+// #[pymethods]
+// impl Strategy {
+//     fn __reduce__(&self) -> (&str, ()) {
+//         match self {
+//             Strategy::Oldest() => ("Strategy_Oldest", ()),
+//         }
+//     }
+// }
+
+impl Debug for Strategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Strategy::Oldest() => f.debug_struct("Strategy.Oldest").finish(),
+            Strategy::Newest() => f.debug_struct("Strategy.Newest").finish(),
+            Strategy::Random() => f.debug_struct("Strategy.Random").finish(),
+            Strategy::PreferDistinct {
+                meta_key,
+                underlying,
+            } => Python::with_gil(|py| {
+                let underlying = underlying.borrow(py);
+                f.debug_struct("Strategy.PreferDistinct")
+                    .field("meta_key", meta_key)
+                    .field("underlying", &*underlying)
+                    .finish()
+            }),
+        }
+    }
 }
 
 impl From<strategy::Strategy> for Strategy {
@@ -184,7 +213,7 @@ impl Eq for Strategy {}
 
 /// Wrapper for the internal Opsqueue Chunk datatype
 /// Note that it also includes some fields originating from the Submission
-#[pyclass(frozen, get_all)]
+#[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
     pub submission_id: SubmissionId,
@@ -238,7 +267,7 @@ impl Chunk {
 
 /// Wrapper for the internal Opsqueue Chunk datatype
 /// Note that it also includes some fields originating from the Submission
-#[pyclass(frozen, get_all)]
+#[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFailed {
     pub submission_id: SubmissionId,
@@ -295,7 +324,7 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
     InProgress {
@@ -329,7 +358,7 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
     }
 }
 
-#[pyclass(frozen, get_all)]
+#[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submission {
     pub id: SubmissionId,
@@ -390,7 +419,7 @@ impl SubmissionFailed {
     }
 }
 
-#[pyclass(frozen, get_all)]
+#[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
@@ -399,7 +428,7 @@ pub struct SubmissionCompleted {
     pub completed_at: DateTime<Utc>,
 }
 
-#[pyclass(frozen, get_all)]
+#[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionFailed {
     pub id: SubmissionId,
