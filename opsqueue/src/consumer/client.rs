@@ -147,7 +147,7 @@ impl OuterClient {
     }
 }
 
-// TOOD: Set max retries to `None`;
+// TODO: Set max retries to `None`;
 // will require either writing our own Backoff (iterator)
 // or extending the backon crate.
 fn retry_policy() -> impl BackoffBuilder {
@@ -279,7 +279,7 @@ impl Client {
                             } else if msg.is_pong() {
                                 tracing::debug!("Received Pong reply to heartbeat, nice!");
                             } else if msg.is_binary() {
-                                let msg: ServerToClientMessage = msg.try_into().expect("Unparseable ServerToClientMessage");
+                                let msg: ServerToClientMessage = msg.try_into().expect("Unparsable ServerToClientMessage");
                                 match msg {
                                     ServerToClientMessage::Sync(envelope) => {
                                         let mut in_flight_requests = in_flight_requests.lock().await;

@@ -143,7 +143,7 @@ impl ProducerClient {
     }
 
     /// Attempts to find the submission ID if only the prefix of the submission
-    /// (AKA the path at which the submision's chunks are stored in the object store)
+    /// (AKA the path at which the submission's chunks are stored in the object store)
     /// is known.
     pub fn lookup_submission_id_by_prefix(
         &self,
