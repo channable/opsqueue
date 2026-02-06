@@ -2,6 +2,7 @@
 use std::fmt::Display;
 use std::time::Duration;
 
+use crate::common::StrategicMetadataMap;
 use chrono::{DateTime, Utc};
 use ux::u63;
 
@@ -164,6 +165,7 @@ pub struct SubmissionCompleted {
     pub chunks_total: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub completed_at: DateTime<Utc>,
     pub otel_trace_carrier: String,
 }
@@ -175,6 +177,7 @@ pub struct SubmissionFailed {
     pub chunks_total: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: ChunkIndex,
     pub otel_trace_carrier: String,
@@ -530,15 +533,18 @@ pub mod db {
             return Ok(Some(SubmissionStatus::InProgress(submission)));
         }
 
-        let completed_submission = query_as!(
-            SubmissionCompleted,
+        let completed_row_opt = query!(
             r#"
         SELECT
             id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
-            , chunk_size AS "chunk_size: ChunkSize"
+            , chunk_size AS "chunk_size!: ChunkSize"
             , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_completed.id
+              ) AS "strategic_metadata: sqlx::types::Json<StrategicMetadataMap>"
             , completed_at AS "completed_at: DateTime<Utc>"
             , otel_trace_carrier
         FROM submissions_completed WHERE id = $1
@@ -547,19 +553,32 @@ pub mod db {
         )
         .fetch_optional(conn.get_inner())
         .await?;
-        if let Some(completed_submission) = completed_submission {
-            return Ok(Some(SubmissionStatus::Completed(completed_submission)));
+        if let Some(row) = completed_row_opt {
+            let submission_completed = SubmissionCompleted {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunk_size: row.chunk_size,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.map(|json| json.0),
+                completed_at: row.completed_at,
+                otel_trace_carrier: row.otel_trace_carrier,
+            };
+            return Ok(Some(SubmissionStatus::Completed(submission_completed)));
         }
 
-        let failed_submission = query_as!(
-            SubmissionFailed,
+        let failed_row_opt = query!(
             r#"
         SELECT
               id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
-            , chunk_size AS "chunk_size: ChunkSize"
+            , chunk_size AS "chunk_size!: ChunkSize"
             , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_failed.id
+              ) AS "strategic_metadata: sqlx::types::Json<StrategicMetadataMap>"
             , failed_at AS "failed_at: DateTime<Utc>"
             , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
             , otel_trace_carrier
@@ -569,15 +588,25 @@ pub mod db {
         )
         .fetch_optional(conn.get_inner())
         .await?;
-        if let Some(failed_submission) = failed_submission {
-            let failed_chunk_id = (failed_submission.id, failed_submission.failed_chunk_id).into();
+        if let Some(row) = failed_row_opt {
+            let failed_submission = SubmissionFailed {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunk_size: row.chunk_size,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.map(|json| json.0),
+                failed_at: row.failed_at,
+                failed_chunk_id: row.failed_chunk_id,
+                otel_trace_carrier: row.otel_trace_carrier,
+            };
+            let failed_chunk_id = (row.id, row.failed_chunk_id).into();
             let failed_chunk = super::chunk::db::get_chunk_failed(failed_chunk_id, conn).await?;
             return Ok(Some(SubmissionStatus::Failed(
                 failed_submission,
                 failed_chunk,
             )));
         }
-
         Ok(None)
     }
 
