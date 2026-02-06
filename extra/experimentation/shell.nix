@@ -1,16 +1,15 @@
 { pkgs ? import ./nixpkgs-pinned.nix {} }:
   pkgs.mkShell rec {
     python = pkgs.python311.withPackages (ps: [
-      # ps.google-cloud-storage
-      ps.sqlite-utils
       ps.fastapi
-      ps.uvicorn
+      ps.google-cloud-storage
       ps.httpx
+      ps.ipython
       ps.pytest
       ps.requests
-      ps.google-cloud-storage
-      ps.ipython
+      ps.sqlite-utils
       ps.types-requests
+      ps.uvicorn
     ]);
     buildInputs = with pkgs; [
       sqlite
