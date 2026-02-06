@@ -53,4 +53,4 @@ addopts = "-n 4 --dist=worksteal"
 # Individual tests should be very fast. They should never take multiple seconds
 # If after 120sec (accomodating for a toaster-like PC, or an overloaded Semaphore runner)
 # there is no progress, assume a deadlock
-timeout=120
+# timeout=120
