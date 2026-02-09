@@ -10,9 +10,9 @@ let
       mypy
       uv
       pytest
-      pytest-random-order
-      pytest-parallel
+      pytest-xdist
       pytest-timeout
+      multiprocess
 
       # Repeated here so MyPy sees them:
       cbor2

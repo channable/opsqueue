@@ -2,7 +2,7 @@ import cbor2
 import pickle
 from contextlib import contextmanager, ExitStack
 from typing import Generator, Callable, Any, Iterable
-import multiprocessing
+import multiprocess  # type: ignore[import-untyped]
 import subprocess
 import os
 import pytest
@@ -13,10 +13,12 @@ import functools
 from opsqueue.common import SerializationFormat, json_as_bytes
 from opsqueue.consumer import Strategy
 
-# @pytest.hookimpl(tryfirst=True)
-# def pytest_configure(config: pytest.Config) -> None:
-#     print("A")
-#     multiprocessing.set_start_method('forkserver')
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    print("A")
+    multiprocess.set_start_method("forkserver")
+
 
 PROJECT_ROOT = Path(__file__).parents[3]
 
@@ -106,8 +108,8 @@ def is_port_in_use(port: int) -> bool:
 def background_process(
     function: Callable[..., None],
     args: Iterable[Any] = (),
-) -> Generator[multiprocessing.Process, None, None]:
-    proc = multiprocessing.Process(target=function, args=args)
+) -> Generator[multiprocess.Process, None, None]:
+    proc = multiprocess.Process(target=function, args=args)
     try:
         proc.daemon = True
         proc.start()
@@ -126,32 +128,34 @@ def multiple_background_processes(
         yield
 
 
-basic_strategies = Strategy.Random(), Strategy.Newest(), Strategy.Oldest()
-any_strategies = [
-    *basic_strategies,
-    *(Strategy.PreferDistinct(meta_key="id", underlying=s) for s in basic_strategies),
-]
+type StrategyDescription = str | tuple[str, str, StrategyDescription]
+
+basic_strategies: Iterable[StrategyDescription] = ("Random", "Newest", "Oldest")
+any_strategies: Iterable[StrategyDescription] = (
+    *(basic_strategies),
+    *(("PreferDistinct", "id", s) for s in basic_strategies),
+)
 
 
 @pytest.fixture(
     scope="function",
-    ids=lambda s: f"Strategy.{s}",
+    ids=lambda s: f"Strategy.{strategy_from_description(s)}",
     params=basic_strategies,
 )
 def basic_consumer_strategy(
     request: pytest.FixtureRequest,
-) -> Generator[Strategy, None, None]:
+) -> Generator[StrategyDescription, None, None]:
     yield request.param
 
 
 @pytest.fixture(
     scope="function",
-    ids=lambda s: f"Strategy.{s}",
+    ids=lambda s: f"Strategy.{strategy_from_description(s)}",
     params=any_strategies,
 )
 def any_consumer_strategy(
     request: pytest.FixtureRequest,
-) -> Generator[Strategy, None, None]:
+) -> Generator[StrategyDescription, None, None]:
     yield request.param
 
 
@@ -160,3 +164,22 @@ def serialization_format(
     request: pytest.FixtureRequest,
 ) -> Generator[SerializationFormat, None, None]:
     yield request.param
+
+
+def strategy_from_description(description: StrategyDescription) -> Strategy:
+    """
+    PyO3 objects cannot currently be Pickle'd.
+    This helper function allows us to pass a pickle-able description across `multiprocessing.Process` borders,
+    and then look up the actual Strategy inside the consumer.
+    """
+    match description:
+        case "Random":
+            return Strategy.Random()
+        case "Newest":
+            return Strategy.Newest()
+        case "Oldest":
+            return Strategy.Oldest()
+        case ("PreferDistinct", key, underlying):
+            return Strategy.PreferDistinct(
+                meta_key=key, underlying=strategy_from_description(underlying)
+            )
