@@ -18,6 +18,7 @@ from opsqueue.exceptions import SubmissionFailedError
 from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionId,
     SubmissionStatus,
+    SubmissionCompleted,
     SubmissionFailed,
     ChunkFailed,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "ProducerClient",
     "SubmissionId",
     "SubmissionStatus",
+    "SubmissionCompleted",
     "SubmissionFailedError",
     "SubmissionFailed",
     "ChunkFailed",
