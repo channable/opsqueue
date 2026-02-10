@@ -85,7 +85,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
     ) -> Iterator[Any]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
@@ -116,7 +116,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
     ) -> AsyncIterator[Any]:
         tracer = trace.get_tracer("opsqueue.producer")
         with tracer.start_as_current_span("run_submission"):
@@ -135,7 +135,7 @@ class ProducerClient:
         chunk_size: int,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
     ) -> SubmissionId:
         """
         Inserts a submission into the queue,
@@ -199,7 +199,7 @@ class ProducerClient:
         chunk_contents: Iterable[bytes],
         *,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
     ) -> Iterator[bytes]:
         """
@@ -226,7 +226,7 @@ class ProducerClient:
         chunk_contents: Iterable[bytes],
         *,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
     ) -> AsyncIterator[bytes]:
         # NOTE: the insertion is not currently async.
@@ -247,7 +247,7 @@ class ProducerClient:
         chunk_contents: Iterable[bytes],
         *,
         metadata: None | bytes = None,
-        strategic_metadata: None | dict[str, str | int] = None,
+        strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
     ) -> SubmissionId:
         """
