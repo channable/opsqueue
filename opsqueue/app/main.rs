@@ -170,7 +170,7 @@ fn otel_tracer_provider() -> SdkTracerProvider {
         .and_then(|x| x.parse().ok())
         .unwrap_or(1.0);
 
-    let exporter = SpanExporter::builder().with_tonic().build().unwrap();
+    let exporter = SpanExporter::builder().with_http().build().unwrap();
     let sampler = Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
         default_trace_sample_rate,
     )));
