@@ -1,6 +1,8 @@
 use clap::Parser;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::SpanExporter;
+use opentelemetry_resource_detectors::HostResourceDetector;
+use opentelemetry_resource_detectors::{OsResourceDetector, ProcessResourceDetector};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
@@ -23,10 +25,10 @@ fn main() {
 
 #[tokio::main]
 pub async fn async_main() {
+    let config = Box::leak(Box::new(Config::parse()));
+
     let _tracing_guard = setup_tracing();
     tracing::info!("Finished setting up tracing subscriber");
-
-    let config = Box::leak(Box::new(Config::parse()));
 
     let server_addr = Box::from(format!("0.0.0.0:{}", config.port));
     let app_healthy_flag = Arc::new(AtomicBool::new(false));
@@ -106,6 +108,8 @@ fn init_sentry() -> sentry::ClientInitGuard {
     let options = sentry::ClientOptions {
         // We want to send traces to whatever is configured for OpenTelemetry, *not* sentry:
         traces_sample_rate: 0.0,
+        send_default_pii: true,
+        release: sentry::release_name!(),
         ..Default::default()
     };
     sentry::init(options)
@@ -178,22 +182,25 @@ fn otel_tracer_provider() -> SdkTracerProvider {
         .with_batch_exporter(exporter)
         .with_sampler(sampler)
         .with_id_generator(RandomIdGenerator::default())
-        .with_resource(opentelemetry_resource())
+        .with_resource(otel_resource())
         .build();
 
     opentelemetry::global::set_tracer_provider(provider.clone());
 
     provider
 }
-fn opentelemetry_resource() -> opentelemetry_sdk::Resource {
-    use opentelemetry_semantic_conventions::attribute::{
-        DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_NAME, SERVICE_VERSION,
-    };
+
+fn otel_resource() -> opentelemetry_sdk::Resource {
+    use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
     opentelemetry_sdk::Resource::builder()
+        .with_detectors(&[
+            Box::new(OsResourceDetector),
+            Box::new(ProcessResourceDetector),
+            Box::new(HostResourceDetector::default()),
+        ])
         .with_attributes([
             opentelemetry::KeyValue::new(SERVICE_NAME, env!("CARGO_PKG_NAME")),
             opentelemetry::KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-            opentelemetry::KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, "develop"),
         ])
         .build()
 }
