@@ -50,7 +50,7 @@ let
   };
 
   crateName = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
-  pname = crateName.pname;
+  pname = "opsqueue";
   version = (craneLib.crateNameFromCargoToml { cargoToml = ../../Cargo.toml; }).version;
   commonArgs = {
     inherit version pname;
