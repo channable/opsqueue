@@ -51,11 +51,12 @@ tower-http = { version = "0.6.8", features = ["trace", "catch-panic"], optional 
 # Logging and tracing:
 tracing = {version = "0.1", features = ["log"] }
 tracing-subscriber = {version = "0.3", features = ["std", "env-filter"] }
-sentry = {version = "0.46", optional = true, default-features=false, features=["rustls", "reqwest"]}
+sentry = {version = "0.46", optional = true, default-features=false, features=["rustls", "reqwest", "anyhow", "backtrace", "contexts", "tracing", "panic"]}
 sentry-tracing = {version = "0.46", optional = true}
 # Exporting traces to Opentelemetry:
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-resource-detectors = "0.10.0"
 opentelemetry-http = { version = "0.31" }
 opentelemetry-otlp = { version = "0.31", optional = true, features = ["grpc-tonic"] }
 tracing-opentelemetry = {version = "0.32.1" }
