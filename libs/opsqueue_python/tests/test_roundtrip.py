@@ -5,6 +5,7 @@
 from collections.abc import Iterator, Sequence
 from opsqueue.producer import (
     ProducerClient,
+    SubmissionCompleted,
     SubmissionFailed,
     ChunkFailed,
     SubmissionFailedError,
@@ -276,3 +277,80 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
 
     with background_process(run_consumer) as _consumer:
         asyncio.run(run_many_submissions())
+
+
+def test_metadata_in_submission_complete(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """SubmissionCompleted should include the submission's metadata and
+    strategic metadata.
+
+    """
+    metadata = b"1234"
+    strategic_metadata = {"6": 7}
+    url = "file:///tmp/opsqueue/test_metadata_in_submission_complete"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission(
+        (1, 2, 3),
+        chunk_size=1,
+        metadata=metadata,
+        strategic_metadata=strategic_metadata,
+    )
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(lambda x: x, strategy=strategy)
+
+    with background_process(run_consumer) as _consumer:
+        # Wait for the submission to complete.
+        producer_client.blocking_stream_completed_submission(submission_id)
+        submission = producer_client.get_submission_status(submission_id)
+        assert submission is not None
+        assert isinstance(submission.submission, SubmissionCompleted)
+        assert submission.submission.metadata == metadata
+        assert submission.submission.strategic_metadata == strategic_metadata
+
+
+def test_metadata_in_submission_failed(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """SubmissionFailed should include the submission's metadata and
+    strategic metadata.
+
+    """
+    metadata = b"I am meta"
+    strategic_metadata = {"6": 7}
+    url = "file:///tmp/opsqueue/test_metadata_in_submission_failed"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission(
+        (1, 2, 3),
+        chunk_size=1,
+        metadata=metadata,
+        strategic_metadata=strategic_metadata,
+    )
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+
+        def consume(x: int) -> None:
+            raise ValueError(f"Couldn't consume {x}")
+
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(consume, strategy=strategy)
+
+    with background_process(run_consumer) as _consumer:
+
+        def assert_submission_failed_has_metadata(x: SubmissionFailed) -> None:
+            assert isinstance(x, SubmissionFailed)
+            assert x.metadata == metadata
+            assert x.strategic_metadata == strategic_metadata
+
+        with pytest.raises(SubmissionFailedError) as exc_info:
+            # Wait for the submission to fail.
+            producer_client.blocking_stream_completed_submission(submission_id)
+        assert_submission_failed_has_metadata(exc_info.value.submission)
+
+        submission = producer_client.get_submission_status(submission_id)
+        assert submission is not None
+        assert_submission_failed_has_metadata(submission.submission)

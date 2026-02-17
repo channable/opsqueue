@@ -6,6 +6,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
+use opsqueue::common::StrategicMetadataMap;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use opsqueue::tracing::CarrierMap;
 use pyo3::prelude::*;
@@ -299,6 +300,7 @@ impl From<opsqueue::common::submission::SubmissionCompleted> for SubmissionCompl
             completed_at: value.completed_at,
             chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
         }
     }
 }
@@ -310,6 +312,7 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
             failed_at: value.failed_at,
             chunks_total: value.chunks_total.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
             failed_chunk_id: value.failed_chunk_id.into(),
         }
     }
@@ -393,11 +396,12 @@ impl SubmissionStatus {
 impl SubmissionCompleted {
     fn __repr__(&self) -> String {
         format!(
-            "SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?})",
+            "SubmissionCompleted(id={0}, chunks_total={1}, completed_at={2}, metadata={3:?}, strategic_metadata={4:?})",
             self.id.__repr__(),
             self.chunks_total,
             self.completed_at,
-            self.metadata
+            self.metadata,
+            self.strategic_metadata
         )
     }
 }
@@ -405,8 +409,8 @@ impl SubmissionCompleted {
 #[pymethods]
 impl SubmissionFailed {
     fn __repr__(&self) -> String {
-        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?})",
-        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata)
+        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?}, strategic_metadata={5:?})",
+        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata, self.strategic_metadata)
     }
 }
 
@@ -416,6 +420,7 @@ pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub completed_at: DateTime<Utc>,
 }
 
@@ -425,6 +430,7 @@ pub struct SubmissionFailed {
     pub id: SubmissionId,
     pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
 }
