@@ -14,20 +14,20 @@ crate-type = ["cdylib"]
 opsqueue = {path = "../../opsqueue/", default-features = false, features = ["client-logic"] }
 
 # General-purpose datatypes:
-uuid = {version = "1.11.0", features = [
+uuid = {version = "1.21.0", features = [
         "v7",                # Temporally orderable UUIDs with random component
         "fast-rng",          # Use a faster (but still sufficiently random) RNG
     ]}
-chrono = { version = "0.4.38"}
+chrono = { version = "0.4.44"}
 ux = "0.1.6"
 
 # Concurrency:
 tokio = {version = "1.38", features = ["macros", "rt-multi-thread"]}
-futures = "0.3.30"
+futures = "0.3.32"
 
 # Error handling:
-anyhow = "1.0.86"
-thiserror = "1.0.65"
+anyhow = "1.0.102"
+thiserror = "2.0.18"
 
 # Python FFI:
 pyo3 = { version = "0.23.4", features = ["chrono"] }
