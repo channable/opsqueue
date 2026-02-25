@@ -635,6 +635,58 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(conn))]
+    pub async fn cancel_submission(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        conn.transaction(move |mut tx| {
+            Box::pin(
+                async move { cancel_submission_notx(id, &mut tx).await },
+            )
+        })
+        .await
+    }
+
+    /// Do not call directly! Must be called inside a transaction.
+    pub async fn cancel_submission_notx(
+        id: SubmissionId,
+        mut conn: impl WriterConnection<Transaction = True>,
+    ) -> sqlx::Result<()> {
+        cancel_submission_raw(id, &mut conn).await?;
+        super::chunk::db::skip_remaining_chunks(id, conn).await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn cancel_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        let now = chrono::prelude::Utc::now();
+
+        query!(
+            "
+    INSERT INTO submissions_cancelled
+    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $3;
+
+    DELETE FROM submissions WHERE id = $4 RETURNING *;
+    ",
+            now,
+            id,
+            id,
+        )
+        .fetch_one(conn.get_inner())
+        .await?;
+        counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+        histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+            crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+        );
+
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(conn))]
     /// Do not call directly! MUST be called inside a transaction.
     pub(super) async fn complete_submission_raw(
         id: SubmissionId,
