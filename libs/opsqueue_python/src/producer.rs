@@ -118,6 +118,25 @@ impl ProducerClient {
         })
     }
 
+    /// TODO docstring
+    pub fn cancel_submission(
+        &self,
+        py: Python<'_>,
+        id: SubmissionId,
+    ) -> CPyResult<(), E<FatalPythonException, InternalProducerClientError>>
+    {
+        py.allow_threads(|| {
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .cancel_submission(id.into())
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+            // .map(|opt| opt.map(Into::into))
+            // .map_err(|e| ProducerClientError::new_err(e.to_string()))
+        })
+    }
+
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
     ///
     /// The returned SubmissionStatus object also includes the number of chunks finished so far,

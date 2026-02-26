@@ -102,6 +102,29 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
+           tracing::debug!("retrying error {err:?} with sleeping {dur:?}");}) .await
+    }
+
+    /// TODO docstring
+    pub async fn cancel_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<(), InternalProducerClientError> {
+        (|| async {
+            let base_url = &self.base_url;
+            self
+                .http_client
+                .post(format!("{base_url}/submissions/cancel/{submission_id}"))
+                .send()
+                .await?
+                .error_for_status()?;
+            // let bytes = resp.bytes().await?;
+            // let body = serde_json::from_slice(&bytes)?;
+            Ok(())
+        })
+        .retry(retry_policy())
+        .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
             tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
         .await

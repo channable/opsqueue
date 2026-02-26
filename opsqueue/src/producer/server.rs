@@ -47,6 +47,10 @@ impl ServerState {
         Router::new()
             .route("/submissions", post(insert_submission))
             .route(
+                "/submissions/cancel/{submission_id}",
+                post(cancel_submission),
+            )
+            .route(
                 "/submissions/count_completed",
                 get(submissions_count_completed),
             )
@@ -83,6 +87,15 @@ where
     fn from(err: E) -> Self {
         Self(err.into())
     }
+}
+
+async fn cancel_submission(
+    State(state): State<ServerState>,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<(), ServerError> {
+    let mut conn = state.pool.writer_conn().await?;
+    submission::db::cancel_submission(submission_id, &mut conn).await?;
+    Ok(())
 }
 
 async fn submission_status(
