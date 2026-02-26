@@ -325,6 +325,7 @@ impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCance
             chunks_total: value.chunks_total.into(),
             chunks_done: value.chunks_done.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
             cancelled_at: value.cancelled_at,
         }
     }
@@ -468,7 +469,7 @@ pub struct SubmissionCancelled {
     pub chunks_total: u64,
     pub chunks_done: u64,
     pub metadata: Option<submission::Metadata>,
-    // TODO pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub cancelled_at: DateTime<Utc>,
 }
 

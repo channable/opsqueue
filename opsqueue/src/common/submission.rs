@@ -194,7 +194,7 @@ pub struct SubmissionCancelled {
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
     pub metadata: Option<Metadata>,
-    // TODO pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
     pub cancelled_at: DateTime<Utc>,
 }
 
@@ -624,8 +624,7 @@ pub mod db {
             )));
         }
 
-        let cancelled = query_as!(
-            SubmissionCancelled,
+        let cancelled_row_opt = query!(
             r#"
         SELECT
               id AS "id: SubmissionId"
@@ -633,6 +632,10 @@ pub mod db {
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
             , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_cancelled.id
+              ) AS "strategic_metadata: sqlx::types::Json<StrategicMetadataMap>"
             , cancelled_at AS "cancelled_at: DateTime<Utc>"
         FROM submissions_cancelled WHERE id = $1
         "#,
@@ -640,8 +643,17 @@ pub mod db {
         )
         .fetch_optional(conn.get_inner())
         .await?;
-        if let Some(cancelled) = cancelled {
-            return Ok(Some(SubmissionStatus::Cancelled(cancelled)));
+        if let Some(row) = cancelled_row_opt {
+            let cancelled_submission = SubmissionCancelled {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.map(|json| json.0),
+                cancelled_at: row.cancelled_at,
+            };
+            return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
         }
 
         Ok(None)
