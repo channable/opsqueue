@@ -203,7 +203,7 @@ pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
-    Cancelled(SubmissionCancelled)
+    Cancelled(SubmissionCancelled),
 }
 
 impl Default for Submission {
@@ -689,9 +689,7 @@ pub mod db {
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         conn.transaction(move |mut tx| {
-            Box::pin(
-                async move { cancel_submission_notx(id, &mut tx).await },
-            )
+            Box::pin(async move { cancel_submission_notx(id, &mut tx).await })
         })
         .await
     }

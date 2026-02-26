@@ -346,7 +346,7 @@ pub enum SubmissionStatus {
     },
     Cancelled {
         submission: SubmissionCancelled,
-    }
+    },
 }
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
@@ -363,10 +363,10 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
                 let chunk = ChunkFailed::from_internal(c, &s);
                 let submission = s.into();
                 SubmissionStatus::Failed { submission, chunk }
-            },
+            }
             Cancelled(s) => SubmissionStatus::Cancelled {
                 submission: s.into(),
-            }
+            },
         }
     }
 }

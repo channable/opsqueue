@@ -7,4 +7,3 @@ CREATE TABLE submissions_cancelled
     metadata BLOB,
     cancelled_at DATETIME NOT NULL -- Unix Timestamp
 );
-

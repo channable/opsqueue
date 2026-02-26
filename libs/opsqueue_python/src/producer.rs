@@ -123,8 +123,7 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> CPyResult<(), E<FatalPythonException, InternalProducerClientError>>
-    {
+    ) -> CPyResult<(), E<FatalPythonException, InternalProducerClientError>> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client

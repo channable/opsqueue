@@ -102,7 +102,9 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-           tracing::debug!("retrying error {err:?} with sleeping {dur:?}");}) .await
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+        })
+        .await
     }
 
     /// TODO docstring
@@ -112,8 +114,7 @@ impl Client {
     ) -> Result<(), InternalProducerClientError> {
         (|| async {
             let base_url = &self.base_url;
-            self
-                .http_client
+            self.http_client
                 .post(format!("{base_url}/submissions/cancel/{submission_id}"))
                 .send()
                 .await?
