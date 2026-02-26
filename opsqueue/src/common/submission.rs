@@ -183,11 +183,27 @@ pub struct SubmissionFailed {
     pub otel_trace_carrier: String,
 }
 
+/// A submission that has been cancelled.
+///
+/// Once a submission is cancelled, it gets moved to the `submissions_cancelled`
+/// table, and its old `submissions` record gets deleted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionCancelled {
+    pub id: SubmissionId,
+    pub prefix: Option<String>,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
+    pub metadata: Option<Metadata>,
+    // TODO pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub cancelled_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
+    Cancelled(SubmissionCancelled)
 }
 
 impl Default for Submission {
@@ -607,6 +623,27 @@ pub mod db {
                 failed_chunk,
             )));
         }
+
+        let cancelled = query_as!(
+            SubmissionCancelled,
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , metadata
+            , cancelled_at AS "cancelled_at: DateTime<Utc>"
+        FROM submissions_cancelled WHERE id = $1
+        "#,
+            id
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if let Some(cancelled) = cancelled {
+            return Ok(Some(SubmissionStatus::Cancelled(cancelled)));
+        }
+
         Ok(None)
     }
 

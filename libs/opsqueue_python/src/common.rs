@@ -318,6 +318,18 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     }
 }
 
+impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCancelled {
+    fn from(value: opsqueue::common::submission::SubmissionCancelled) -> Self {
+        Self {
+            id: value.id.into(),
+            chunks_total: value.chunks_total.into(),
+            chunks_done: value.chunks_done.into(),
+            metadata: value.metadata,
+            cancelled_at: value.cancelled_at,
+        }
+    }
+}
+
 #[pyclass(frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
@@ -331,6 +343,9 @@ pub enum SubmissionStatus {
         submission: SubmissionFailed,
         chunk: ChunkFailed,
     },
+    Cancelled {
+        submission: SubmissionCancelled,
+    }
 }
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
@@ -347,6 +362,9 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
                 let chunk = ChunkFailed::from_internal(c, &s);
                 let submission = s.into();
                 SubmissionStatus::Failed { submission, chunk }
+            },
+            Cancelled(s) => SubmissionStatus::Cancelled {
+                submission: s.into(),
             }
         }
     }
@@ -414,6 +432,14 @@ impl SubmissionFailed {
     }
 }
 
+#[pymethods]
+impl SubmissionCancelled {
+    fn __repr__(&self) -> String {
+        format!("SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, cancelled_at={4})",
+        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata, self.cancelled_at)
+    }
+}
+
 #[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCompleted {
@@ -433,6 +459,17 @@ pub struct SubmissionFailed {
     pub strategic_metadata: Option<StrategicMetadataMap>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
+}
+
+#[pyclass(frozen, get_all, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionCancelled {
+    pub id: SubmissionId,
+    pub chunks_total: u64,
+    pub chunks_done: u64,
+    pub metadata: Option<submission::Metadata>,
+    // TODO pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub cancelled_at: DateTime<Utc>,
 }
 
 pub async fn run_unless_interrupted<T, E>(
