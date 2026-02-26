@@ -314,6 +314,15 @@ class ProducerClient:
         """
         return self.inner.count_submissions()  # type: ignore[no-any-return]
 
+    def cancel_submission(self, submission_id: SubmissionId) -> None:
+        """
+        Cancel a specific submission if it's in progress.
+
+        Raises:
+        - `InternalProducerClientError` if there is a low-level internal error.
+        """
+        return self.inner.cancel_submission(submission_id)
+
     def get_submission_status(
         self, submission_id: SubmissionId
     ) -> SubmissionStatus | None:

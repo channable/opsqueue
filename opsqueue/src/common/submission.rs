@@ -668,9 +668,9 @@ pub mod db {
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
-    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $3;
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
 
-    DELETE FROM submissions WHERE id = $4 RETURNING *;
+    DELETE FROM submissions WHERE id = $3 RETURNING *;
     ",
             now,
             id,
