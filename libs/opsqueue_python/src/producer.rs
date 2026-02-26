@@ -10,6 +10,7 @@ use pyo3::{
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
     common::errors::E::{self, L, R},
+    common::errors::{SubmissionNotCancellable, SubmissionNotFound},
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
 };
@@ -118,12 +119,23 @@ impl ProducerClient {
         })
     }
 
-    /// TODO docstring
+    /// Cancel a submission.
+    ///
+    /// Will return an error if the submission is already complete, failed, or
+    /// cancelled, or if the submission could not be found.
     pub fn cancel_submission(
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> CPyResult<(), E<FatalPythonException, InternalProducerClientError>> {
+    ) -> CPyResult<
+        (),
+        E![
+            FatalPythonException,
+            SubmissionNotFound,
+            SubmissionNotCancellable,
+            InternalProducerClientError
+        ],
+    > {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
@@ -131,8 +143,6 @@ impl ProducerClient {
                     .await
                     .map_err(|e| CError(R(e)))
             })
-            // .map(|opt| opt.map(Into::into))
-            // .map_err(|e| ProducerClientError::new_err(e.to_string()))
         })
     }
 

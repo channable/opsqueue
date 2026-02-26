@@ -371,6 +371,13 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
     }
 }
 
+#[pymethods]
+impl SubmissionStatus {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
 #[pyclass(frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submission {
@@ -401,13 +408,6 @@ impl Submission {
             self.chunks_done,
             self.metadata
         )
-    }
-}
-
-#[pymethods]
-impl SubmissionStatus {
-    fn __repr__(&self) -> String {
-        format!("{self:?}")
     }
 }
 
@@ -471,6 +471,50 @@ pub struct SubmissionCancelled {
     pub metadata: Option<submission::Metadata>,
     pub strategic_metadata: Option<StrategicMetadataMap>,
     pub cancelled_at: DateTime<Utc>,
+}
+
+/// Submission could not be cancelled because it was already completed, failed
+/// or cancelled.
+#[pyclass(frozen, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionNotCancellable {
+    Completed {
+        submission: SubmissionCompleted,
+    },
+    Failed {
+        submission: SubmissionFailed,
+        chunk: ChunkFailed,
+    },
+    Cancelled {
+        submission: SubmissionCancelled,
+    },
+}
+
+impl From<opsqueue::common::errors::SubmissionNotCancellable> for SubmissionNotCancellable {
+    fn from(value: opsqueue::common::errors::SubmissionNotCancellable) -> Self {
+        use opsqueue::common::errors::SubmissionNotCancellable::*;
+        match value {
+            Completed(s) => SubmissionNotCancellable::Completed {
+                submission: s.into(),
+            },
+            Failed(s, c) => {
+                let chunk = ChunkFailed::from_internal(c, &s);
+                SubmissionNotCancellable::Failed {
+                    submission: s.into(), chunk
+                }
+            },
+            Cancelled(s) => SubmissionNotCancellable::Cancelled {
+                submission: s.into(),
+            },
+        }
+    }
+}
+
+#[pymethods]
+impl SubmissionNotCancellable {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
 }
 
 pub async fn run_unless_interrupted<T, E>(

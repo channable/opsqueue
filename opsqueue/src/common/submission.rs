@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use crate::common::StrategicMetadataMap;
+use crate::E;
 use chrono::{DateTime, Utc};
 use ux::u63;
 
@@ -260,7 +261,7 @@ impl Submission {
 pub mod db {
     use crate::{
         common::{
-            errors::{DatabaseError, SubmissionNotFound, E},
+            errors::{DatabaseError, SubmissionNotCancellable, SubmissionNotFound, E},
             StrategicMetadataMap,
         },
         db::{Connection, True, WriterConnection, WriterPool},
@@ -692,15 +693,15 @@ pub mod db {
     pub async fn cancel_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E![DatabaseError, SubmissionNotFound, SubmissionNotCancellable]> {
         conn.transaction(move |mut tx| {
             Box::pin(async move {
                 match cancel_submission_notx(id, &mut tx).await {
                     Ok(()) => Ok(()),
                     Err(E::L(db_err)) => Err(E::L(db_err)),
                     Err(E::R(not_found_err)) => {
-                        // Submission could not be found, let's check the status
-                        // in order to return a more informative error.
+                        // Submission was not found in the 'submissions' table,
+                        // but it could still be in one of the other tables.
                         match submission_status(id, &mut tx).await {
                             Ok(None) => Err(E::R(E::L(not_found_err))),
                             Ok(Some(SubmissionStatus::InProgress(submission))) => {
@@ -728,7 +729,7 @@ pub mod db {
     pub async fn cancel_submission_notx(
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         cancel_submission_raw(id, &mut conn).await?;
         super::chunk::db::skip_remaining_chunks(id, conn).await?;
         Ok(())
@@ -738,10 +739,10 @@ pub mod db {
     pub(super) async fn cancel_submission_raw(
         id: SubmissionId,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
-        query!(
+        let submission_opt = query!(
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
@@ -753,14 +754,18 @@ pub mod db {
             id,
             id,
         )
-        .fetch_one(conn.get_inner())
+        .fetch_optional(conn.get_inner())
         .await?;
-        counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
-        histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
-            crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-        );
-
-        Ok(())
+        match submission_opt {
+            None => Err(E::R(SubmissionNotFound(id))),
+            Some(_) => {
+                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+                histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+                    crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+                );
+                Ok(())
+            }
+        }
     }
 
     #[tracing::instrument(skip(conn))]
@@ -964,7 +969,7 @@ pub mod db {
 
                 tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
                 tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
-                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions (with {n_chunks_completed} chunks completed and {n_chunks_failed} chunks failed)");
+                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions");
                 Ok(())
             })
         })

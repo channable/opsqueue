@@ -17,7 +17,7 @@ use crate::db::DBPools;
 pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total_count";
 pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed_count";
 pub const SUBMISSIONS_FAILED_COUNTER: &str = "submissions_failed_count";
-pub const SUBMISSIONS_CANCELLED_COUNTER: &str = "submissions_failed_count";
+pub const SUBMISSIONS_CANCELLED_COUNTER: &str = "submissions_cancelled_count";
 pub const SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM: &str = "submissions_complete_duration_seconds";
 pub const SUBMISSIONS_DURATION_FAIL_HISTOGRAM: &str = "submissions_fail_duration_seconds";
 pub const SUBMISSIONS_DURATION_CANCEL_HISTOGRAM: &str = "submissions_cancel_duration_seconds";
@@ -59,11 +59,19 @@ pub fn describe_metrics() {
     describe_counter!(
         SUBMISSIONS_CANCELLED_COUNTER,
         Unit::Count,
-        "Number of submissions cancelled permanently"
+        "Number of submissions cancelled (client-requested cancellation, not failure) permanently"
     );
     describe_histogram!(SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its final chunk being completed. Does not count failed submissions.");
-    describe_histogram!(SUBMISSIONS_DURATION_FAIL_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its first chunk being failed.");
-    describe_histogram!(SUBMISSIONS_DURATION_CANCEL_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its first chunk being canceled.");
+    describe_histogram!(
+        SUBMISSIONS_DURATION_FAIL_HISTOGRAM,
+        Unit::Seconds,
+        "Time between a submission entering the system and its first chunk being failed."
+    );
+    describe_histogram!(
+        SUBMISSIONS_DURATION_CANCEL_HISTOGRAM,
+        Unit::Seconds,
+        "Time between a submission entering the system and it being cancelled (client-requested cancellation, not failure)."
+    );
 
     describe_counter!(
         CHUNKS_COMPLETED_COUNTER,
