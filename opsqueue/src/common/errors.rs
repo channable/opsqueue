@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::consumer::common::SyncServerToClientResponse;
 
-use super::{chunk::ChunkId, submission::SubmissionId};
+use super::{chunk::ChunkId, submission::{SubmissionId, SubmissionCompleted, SubmissionFailed, SubmissionCancelled}};
 
 // #[derive(Error, Debug, Clone, Serialize, Deserialize)]
 // #[error("Low-level database error: {0:?}")]
@@ -35,6 +35,15 @@ pub struct ChunkNotFound(pub ChunkId);
 #[derive(Error, Debug)]
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
+
+/// A submission could not be cancelled due to one of the enumerated reasons.
+#[derive(Error, Debug)]
+#[error("Submission could not be cancelled {0:?}")]
+pub enum SubmissionNotCancellable {
+    Cancelled(SubmissionCancelled),
+    Failed(SubmissionFailed),
+    Completed(SubmissionCompleted),
+}
 
 #[derive(Error, Debug)]
 #[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]

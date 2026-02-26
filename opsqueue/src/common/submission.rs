@@ -687,7 +687,7 @@ pub mod db {
     pub async fn cancel_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         conn.transaction(move |mut tx| {
             Box::pin(async move { cancel_submission_notx(id, &mut tx).await })
         })
@@ -698,7 +698,7 @@ pub mod db {
     pub async fn cancel_submission_notx(
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         cancel_submission_raw(id, &mut conn).await?;
         super::chunk::db::skip_remaining_chunks(id, conn).await?;
         Ok(())
@@ -708,10 +708,10 @@ pub mod db {
     pub(super) async fn cancel_submission_raw(
         id: SubmissionId,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
-        query!(
+        let submission_opt = query!(
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
@@ -723,14 +723,18 @@ pub mod db {
             id,
             id,
         )
-        .fetch_one(conn.get_inner())
+        .fetch_optional(conn.get_inner())
         .await?;
-        counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
         histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
             crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
         );
-
-        Ok(())
+        match submission_opt {
+            None => Err(E::R(SubmissionNotFound(id))),
+            Some(_) => {
+                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+                Ok(())
+            },
+        }
     }
 
     #[tracing::instrument(skip(conn))]

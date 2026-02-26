@@ -37,6 +37,30 @@ class SubmissionFailedError(Exception):
     def __repr__(self) -> str:
         return str(self)
 
+class SubmissionNotCancellableError(Exception):
+    __slots__ = ["submission"]
+    """Raised when a submission could not be cancelled due to already being
+    completed, failed or cancelled.
+
+    """
+
+    def __init__(
+        self,
+        submission: opsqueue_internal.SubmissionNotCancellableError,
+    ):
+        super().__init__()
+        self.submission = submission
+
+    def __str__(self) -> str:
+        return f"""
+        Submission {self.submission.id} was not cancelled because:
+
+        {self.submission}
+        """
+
+    def __repr__(self) -> str:
+        return str(self)
+
 
 ## Usage errors:
 

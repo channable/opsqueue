@@ -14,7 +14,7 @@ from opsqueue.common import (
 )
 from . import opsqueue_internal
 from . import tracing
-from opsqueue.exceptions import SubmissionFailedError
+from opsqueue.exceptions import SubmissionFailedError, SubmissionNotCancellableError, SubmissionNotFoundError
 from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionId,
     SubmissionStatus,
@@ -30,6 +30,8 @@ __all__ = [
     "SubmissionCompleted",
     "SubmissionFailedError",
     "SubmissionFailed",
+    "SubmissionNotCancellableError",
+    "SubmissionNotFoundError",
     "ChunkFailed",
 ]
 
@@ -316,10 +318,14 @@ class ProducerClient:
 
     def cancel_submission(self, submission_id: SubmissionId) -> None:
         """
-        Cancel a specific submission if it's in progress.
+        Cancel a specific submission if it's still in progress.
+
+        Returns None if the submission was succesfully cancelled.
 
         Raises:
-        - `InternalProducerClientError` if there is a low-level internal error.
+        - `SubmissionNotCancellableError` if the submission could not be
+          cancelled because it was already completed, failed or cancelled.
+        - `SubmissionNotFoundError`
         """
         return self.inner.cancel_submission(submission_id)
 

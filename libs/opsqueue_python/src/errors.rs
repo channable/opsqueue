@@ -7,7 +7,7 @@ use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use pyo3::exceptions::PyBaseException;
-use pyo3::{import_exception, Bound, PyErr, Python};
+use pyo3::{import_exception, Bound, PyErr, Python, prelude::*};
 
 use crate::common::{ChunkIndex, SubmissionId};
 
@@ -19,6 +19,7 @@ import_exception!(opsqueue.exceptions, IncorrectUsageError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
+import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
 import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
 import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
@@ -140,6 +141,21 @@ impl From<CError<SubmissionFailed>> for PyErr {
         let submission: crate::common::SubmissionFailed = value.0 .0;
         let chunk: crate::common::ChunkFailed = value.0 .1;
         SubmissionFailedError::new_err((submission, chunk))
+    }
+}
+
+#[pyclass(frozen, get_all, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionNotCancellable {
+    Cancelled(crate::common::SubmissionCancelled),
+    Completed(crate::common::SubmissionCompleted),
+    Failed(crate::common::SubmissionFailed),
+    // NotFound(SubmissionNotFoundError),
+}
+
+impl From<CError<SubmissionNotCancellable>> for PyErr {
+    fn from(value: CError<SubmissionNotCancellable>) -> Self {
+        SubmissionNotCancellableError::new_err(value.0)
     }
 }
 
