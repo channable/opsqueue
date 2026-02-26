@@ -316,7 +316,9 @@ class ProducerClient:
 
     def cancel_submission(self, submission_id: SubmissionId) -> None:
         """
-        Cancel a specific submission if it's in progress.
+        Cancel a specific submission that is in progress.
+
+        Returns None if the submission was successfully cancelled.
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.

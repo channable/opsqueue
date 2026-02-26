@@ -183,11 +183,27 @@ pub struct SubmissionFailed {
     pub otel_trace_carrier: String,
 }
 
+/// A submission that has been cancelled.
+///
+/// Once a submission is cancelled, it gets moved to the `submissions_cancelled`
+/// table, and its old `submissions` record gets deleted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionCancelled {
+    pub id: SubmissionId,
+    pub prefix: Option<String>,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
+    pub metadata: Option<Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub cancelled_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
+    Cancelled(SubmissionCancelled),
 }
 
 impl Default for Submission {
@@ -612,6 +628,39 @@ pub mod db {
                 failed_chunk,
             )));
         }
+
+        let cancelled_row_opt = query!(
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_cancelled.id
+              ) AS "strategic_metadata: sqlx::types::Json<StrategicMetadataMap>"
+            , cancelled_at AS "cancelled_at: DateTime<Utc>"
+        FROM submissions_cancelled WHERE id = $1
+        "#,
+            id
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if let Some(row) = cancelled_row_opt {
+            let cancelled_submission = SubmissionCancelled {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.map(|json| json.0),
+                cancelled_at: row.cancelled_at,
+            };
+            return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
+        }
+
         Ok(None)
     }
 
@@ -645,9 +694,32 @@ pub mod db {
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         conn.transaction(move |mut tx| {
-            Box::pin(
-                async move { cancel_submission_notx(id, &mut tx).await },
-            )
+            Box::pin(async move {
+                match cancel_submission_notx(id, &mut tx).await {
+                    Ok(()) => Ok(()),
+                    Err(E::L(db_err)) => Err(E::L(db_err)),
+                    Err(E::R(not_found_err)) => {
+                        // Submission could not be found, let's check the status
+                        // in order to return a more informative error.
+                        match submission_status(id, &mut tx).await {
+                            Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::InProgress(submission))) => {
+                                panic!("Failed to cancel in progress submission {:?}", submission)
+                            }
+                            Ok(Some(SubmissionStatus::Completed(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Completed(submission))))
+                            }
+                            Ok(Some(SubmissionStatus::Failed(submission, chunk))) => Err(E::R(
+                                E::R(SubmissionNotCancellable::Failed(submission, chunk)),
+                            )),
+                            Ok(Some(SubmissionStatus::Cancelled(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
+                            }
+                            Err(db_err) => Err(E::L(db_err)),
+                        }
+                    }
+                }
+            })
         })
         .await
     }
@@ -831,7 +903,7 @@ pub mod db {
                 // Clean up old submissions_metadata
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
                     );",
                     older_than
@@ -840,13 +912,25 @@ pub mod db {
                 .await?;
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
                     );",
                     older_than
                 )
                 .execute(tx.get_inner())
                 .await?;
+<<<<<<< HEAD
+=======
+                query!(
+                    "DELETE FROM submissions_metadata
+                    WHERE submission_id IN (
+                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
+                    );",
+                    older_than
+                )
+                .execute(tx.get_inner())
+                .await?;
+>>>>>>> a783c86 (fixup! Add SubmissionCancelled to SubmissionStatus)
 
                 // Clean up old submissions:
                 let n_submissions_completed = query!(

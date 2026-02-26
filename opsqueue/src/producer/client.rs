@@ -102,7 +102,9 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-           tracing::debug!("retrying error {err:?} with sleeping {dur:?}");}) .await
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+        })
+        .await
     }
 
     /// TODO docstring
@@ -112,15 +114,41 @@ impl Client {
     ) -> Result<(), InternalProducerClientError> {
         (|| async {
             let base_url = &self.base_url;
-            self
-                .http_client
+            self.http_client
                 .post(format!("{base_url}/submissions/cancel/{submission_id}"))
                 .send()
-                .await?
-                .error_for_status()?;
-            // let bytes = resp.bytes().await?;
-            // let body = serde_json::from_slice(&bytes)?;
-            Ok(())
+                .await
+                .map_err(|e| E::R(E::R(e.into())))?;
+            let status = response.status();
+            // 200, the submission was successfully cancelled.
+            if status.is_success() {
+                return Ok(());
+            }
+            // 404, the submission could not be found.
+            if status == StatusCode::NOT_FOUND {
+                let not_found_err = response
+                    .json::<errors::SubmissionNotFound>()
+                    .await
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::L(not_found_err));
+            }
+            // 409, the submission could not be cancelled.
+            if status == StatusCode::CONFLICT {
+                let not_cancellable_err = response
+                    .json::<errors::SubmissionNotCancellable>()
+                    .await
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::R(E::L(
+                    not_cancellable_err,
+                )));
+            }
+            response
+                .error_for_status()
+                .map_err(|e| E::R(E::R(e.into())))?;
+            panic!(
+                "Unexpected {:?} from Opsqueue when cancelling a submission",
+                status
+            )
         })
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
