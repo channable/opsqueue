@@ -889,6 +889,15 @@ pub mod db {
                 )
                 .execute(tx.get_inner())
                 .await?;
+                query!(
+                    "DELETE FROM submissions_metadata
+                    WHERE submission_id = (
+                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
+                    );",
+                    older_than
+                )
+                .execute(tx.get_inner())
+                .await?;
 
                 // Clean up old submissions:
                 let n_submissions_completed = query!(
@@ -899,6 +908,12 @@ pub mod db {
                 .await?.rows_affected();
                 let n_submissions_failed = query!(
                     "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
+                    older_than
+                )
+                .execute(tx.get_inner())
+                .await?.rows_affected();
+                let n_submissions_cancelled = query!(
+                    "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
                     older_than
                 )
                 .execute(tx.get_inner())
@@ -917,8 +932,9 @@ pub mod db {
                 .execute(tx.get_inner())
                 .await?.rows_affected();
 
-                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks)");
-                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks)");
+                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
+                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
+                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions (with {n_chunks_completed} chunks completed and {n_chunks_failed} chunks failed)");
                 Ok(())
             })
         })
