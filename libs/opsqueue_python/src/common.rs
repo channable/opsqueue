@@ -436,8 +436,8 @@ impl SubmissionFailed {
 #[pymethods]
 impl SubmissionCancelled {
     fn __repr__(&self) -> String {
-        format!("SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, cancelled_at={4})",
-        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata, self.cancelled_at)
+        format!("SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?}, cancelled_at={5})",
+        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata, self.strategic_metadata, self.cancelled_at)
     }
 }
 
