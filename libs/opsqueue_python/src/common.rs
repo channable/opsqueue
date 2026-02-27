@@ -318,6 +318,19 @@ impl From<opsqueue::common::submission::SubmissionFailed> for SubmissionFailed {
     }
 }
 
+impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCancelled {
+    fn from(value: opsqueue::common::submission::SubmissionCancelled) -> Self {
+        Self {
+            id: value.id.into(),
+            chunks_total: value.chunks_total.into(),
+            chunks_done: value.chunks_done.into(),
+            metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
+            cancelled_at: value.cancelled_at,
+        }
+    }
+}
+
 #[pyclass(frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
@@ -330,6 +343,9 @@ pub enum SubmissionStatus {
     Failed {
         submission: SubmissionFailed,
         chunk: ChunkFailed,
+    },
+    Cancelled {
+        submission: SubmissionCancelled,
     },
 }
 
@@ -348,7 +364,17 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
                 let submission = s.into();
                 SubmissionStatus::Failed { submission, chunk }
             }
+            Cancelled(s) => SubmissionStatus::Cancelled {
+                submission: s.into(),
+            },
         }
+    }
+}
+
+#[pymethods]
+impl SubmissionStatus {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
     }
 }
 
@@ -386,13 +412,6 @@ impl Submission {
 }
 
 #[pymethods]
-impl SubmissionStatus {
-    fn __repr__(&self) -> String {
-        format!("{self:?}")
-    }
-}
-
-#[pymethods]
 impl SubmissionCompleted {
     fn __repr__(&self) -> String {
         format!(
@@ -411,6 +430,14 @@ impl SubmissionFailed {
     fn __repr__(&self) -> String {
         format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?}, strategic_metadata={5:?})",
         self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata, self.strategic_metadata)
+    }
+}
+
+#[pymethods]
+impl SubmissionCancelled {
+    fn __repr__(&self) -> String {
+        format!("SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?}, cancelled_at={5})",
+        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata, self.strategic_metadata, self.cancelled_at)
     }
 }
 
@@ -433,6 +460,62 @@ pub struct SubmissionFailed {
     pub strategic_metadata: Option<StrategicMetadataMap>,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
+}
+
+#[pyclass(frozen, get_all, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionCancelled {
+    pub id: SubmissionId,
+    pub chunks_total: u64,
+    pub chunks_done: u64,
+    pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub cancelled_at: DateTime<Utc>,
+}
+
+/// Submission could not be cancelled because it was already completed, failed
+/// or cancelled.
+#[pyclass(frozen, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionNotCancellable {
+    Completed {
+        submission: SubmissionCompleted,
+    },
+    Failed {
+        submission: SubmissionFailed,
+        chunk: ChunkFailed,
+    },
+    Cancelled {
+        submission: SubmissionCancelled,
+    },
+}
+
+impl From<opsqueue::common::errors::SubmissionNotCancellable> for SubmissionNotCancellable {
+    fn from(value: opsqueue::common::errors::SubmissionNotCancellable) -> Self {
+        use opsqueue::common::errors::SubmissionNotCancellable::*;
+        match value {
+            Completed(s) => SubmissionNotCancellable::Completed {
+                submission: s.into(),
+            },
+            Failed(s, c) => {
+                let chunk = ChunkFailed::from_internal(c, &s);
+                SubmissionNotCancellable::Failed {
+                    submission: s.into(),
+                    chunk,
+                }
+            }
+            Cancelled(s) => SubmissionNotCancellable::Cancelled {
+                submission: s.into(),
+            },
+        }
+    }
+}
+
+#[pymethods]
+impl SubmissionNotCancellable {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
 }
 
 pub async fn run_unless_interrupted<T, E>(

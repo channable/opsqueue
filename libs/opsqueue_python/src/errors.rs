@@ -1,14 +1,16 @@
-/// NOTE: We defne the potentially raisable errors/exceptions in Python
+/// NOTE: We define the potentially raisable errors/exceptions in Python
 /// so we have nice IDE support for docs-on-hover and for 'go to definition'.
 use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
+    ChunkNotFound, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
+    UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use pyo3::exceptions::PyBaseException;
 use pyo3::{import_exception, Bound, PyErr, Python};
 
+use crate::common;
 use crate::common::{ChunkIndex, SubmissionId};
 
 // Expected errors:
@@ -19,6 +21,7 @@ import_exception!(opsqueue.exceptions, IncorrectUsageError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
+import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
 import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
 import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
@@ -123,10 +126,23 @@ impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
     }
 }
 
+impl From<CError<SubmissionNotCancellable>> for PyErr {
+    fn from(value: CError<SubmissionNotCancellable>) -> Self {
+        let c: Option<common::ChunkFailed> = match &value.0 {
+            opsqueue::common::errors::SubmissionNotCancellable::Failed(submission, chunk) => Some(
+                common::ChunkFailed::from_internal(chunk.clone(), submission),
+            ),
+            _ => None,
+        };
+        let s: common::SubmissionNotCancellable = value.0.into();
+        SubmissionNotCancellableError::new_err((s, c))
+    }
+}
+
 impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
         let submission_id = value.0 .0;
-        SubmissionNotFoundError::new_err((value.0.to_string(), SubmissionId::from(submission_id)))
+        SubmissionNotFoundError::new_err(u64::from(submission_id))
     }
 }
 

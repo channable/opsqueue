@@ -183,11 +183,27 @@ pub struct SubmissionFailed {
     pub otel_trace_carrier: String,
 }
 
+/// A submission that has been cancelled.
+///
+/// Once a submission is cancelled, it gets moved to the `submissions_cancelled`
+/// table, and its old `submissions` record gets deleted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionCancelled {
+    pub id: SubmissionId,
+    pub prefix: Option<String>,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
+    pub metadata: Option<Metadata>,
+    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub cancelled_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
+    Cancelled(SubmissionCancelled),
 }
 
 impl Default for Submission {
@@ -244,7 +260,7 @@ impl Submission {
 pub mod db {
     use crate::{
         common::{
-            errors::{DatabaseError, SubmissionNotFound, E},
+            errors::{DatabaseError, SubmissionNotCancellable, SubmissionNotFound, E},
             StrategicMetadataMap,
         },
         db::{Connection, True, WriterConnection, WriterPool},
@@ -607,6 +623,39 @@ pub mod db {
                 failed_chunk,
             )));
         }
+
+        let cancelled_row_opt = query!(
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_cancelled.id
+              ) AS "strategic_metadata: sqlx::types::Json<StrategicMetadataMap>"
+            , cancelled_at AS "cancelled_at: DateTime<Utc>"
+        FROM submissions_cancelled WHERE id = $1
+        "#,
+            id
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if let Some(row) = cancelled_row_opt {
+            let cancelled_submission = SubmissionCancelled {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.map(|json| json.0),
+                cancelled_at: row.cancelled_at,
+            };
+            return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
+        }
+
         Ok(None)
     }
 
@@ -632,6 +681,85 @@ pub mod db {
             })
         })
         .await
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub async fn cancel_submission(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, SubmissionNotCancellable>>> {
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                match cancel_submission_notx(id, &mut tx).await {
+                    Ok(()) => Ok(()),
+                    Err(E::L(db_err)) => Err(E::L(db_err)),
+                    Err(E::R(not_found_err)) => {
+                        // Submission could not be found, let's check the status
+                        // in order to return a more informative error.
+                        match submission_status(id, &mut tx).await {
+                            Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::InProgress(submission))) => {
+                                panic!("Failed to cancel in progress submission {:?}", submission)
+                            }
+                            Ok(Some(SubmissionStatus::Completed(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Completed(submission))))
+                            }
+                            Ok(Some(SubmissionStatus::Failed(submission, chunk))) => Err(E::R(
+                                E::R(SubmissionNotCancellable::Failed(submission, chunk)),
+                            )),
+                            Ok(Some(SubmissionStatus::Cancelled(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
+                            }
+                            Err(db_err) => Err(E::L(db_err)),
+                        }
+                    }
+                }
+            })
+        })
+        .await
+    }
+
+    /// Do not call directly! Must be called inside a transaction.
+    pub async fn cancel_submission_notx(
+        id: SubmissionId,
+        mut conn: impl WriterConnection<Transaction = True>,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        cancel_submission_raw(id, &mut conn).await?;
+        super::chunk::db::skip_remaining_chunks(id, conn).await?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn cancel_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let now = chrono::prelude::Utc::now();
+
+        let submission_opt = query!(
+            "
+    INSERT INTO submissions_cancelled
+    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
+
+    DELETE FROM submissions WHERE id = $3 RETURNING *;
+    ",
+            now,
+            id,
+            id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+            crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+        );
+        match submission_opt {
+            None => Err(E::R(SubmissionNotFound(id))),
+            Some(_) => {
+                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+                Ok(())
+            }
+        }
     }
 
     #[tracing::instrument(skip(conn))]
@@ -774,7 +902,7 @@ pub mod db {
                 // Clean up old submissions_metadata
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
                     );",
                     older_than
@@ -783,8 +911,17 @@ pub mod db {
                 .await?;
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
+                    );",
+                    older_than
+                )
+                .execute(tx.get_inner())
+                .await?;
+                query!(
+                    "DELETE FROM submissions_metadata
+                    WHERE submission_id IN (
+                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
                     );",
                     older_than
                 )
@@ -804,6 +941,12 @@ pub mod db {
                 )
                 .execute(tx.get_inner())
                 .await?.rows_affected();
+                let n_submissions_cancelled = query!(
+                    "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
+                    older_than
+                )
+                .execute(tx.get_inner())
+                .await?.rows_affected();
 
                 let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
@@ -818,8 +961,9 @@ pub mod db {
                 .execute(tx.get_inner())
                 .await?.rows_affected();
 
-                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks)");
-                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks)");
+                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
+                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
+                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions");
                 Ok(())
             })
         })

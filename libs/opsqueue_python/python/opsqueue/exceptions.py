@@ -1,6 +1,7 @@
 ## Expected errors:
 
 from . import opsqueue_internal
+from typing import Optional
 
 
 class SubmissionFailedError(Exception):
@@ -32,6 +33,35 @@ class SubmissionFailedError(Exception):
         Failure reason:
 
         {self.failure}
+        """
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class SubmissionNotCancellableError(Exception):
+    __slots__ = ["submission", "chunk"]
+    """Raised when a submission could not be cancelled due to already being
+    completed, failed or cancelled.
+
+    """
+
+    def __init__(
+        self,
+        submission: opsqueue_internal.SubmissionNotCancellable,
+        chunk: Optional[opsqueue_internal.ChunkFailed] = None,
+    ):
+        super().__init__()
+        self.submission = submission
+        self.chunk = chunk
+
+    def __str__(self) -> str:
+        chunk_str = f"\n{self.chunk}"
+        return f"""
+        Submission {self.submission.submission.id} was not cancelled because:
+
+        {self.submission}
+        {"" if self.chunk is None else chunk_str}
         """
 
     def __repr__(self) -> str:
@@ -76,7 +106,20 @@ class SubmissionNotFoundError(IncorrectUsageError):
     but the submission doesn't exist within the Opsqueue.
     """
 
-    pass
+    __slots__ = ["submission_id"]
+
+    def __init__(
+        self,
+        submission_id: int,
+    ):
+        super().__init__()
+        self.submission_id = submission_id
+
+    def __str__(self) -> str:
+        return f"Submission {self.submission_id} could not be found"
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class ChunkCountIsZeroError(IncorrectUsageError):

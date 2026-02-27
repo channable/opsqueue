@@ -3,7 +3,10 @@ use std::time::Duration;
 use backon::BackoffBuilder;
 use backon::FibonacciBuilder;
 use backon::Retryable;
+use http::StatusCode;
 
+use crate::common::errors;
+use crate::common::errors::E;
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 use crate::tracing::CarrierMap;
 
@@ -101,6 +104,71 @@ impl Client {
         })
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+        })
+        .await
+    }
+
+    /// Send a HTTP request to the OpsQueue server to cancel a submission.
+    ///
+    /// Will return an error if the submission is already complete, failed, or
+    /// cancelled, or if the submission could not be found.
+    pub async fn cancel_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<
+        (),
+        E<
+            errors::SubmissionNotFound,
+            E<errors::SubmissionNotCancellable, InternalProducerClientError>,
+        >,
+    > {
+        (|| async {
+            let base_url = &self.base_url;
+            let response = self
+                .http_client
+                .post(format!("{base_url}/submissions/cancel/{submission_id}"))
+                .send()
+                .await
+                .map_err(|e| E::R(E::R(e.into())))?;
+            let status = response.status();
+            // 200, the submission was successfully cancelled.
+            if status.is_success() {
+                return Ok(());
+            }
+            // 404, the submission could not be found.
+            if status == StatusCode::NOT_FOUND {
+                let not_found_err = response
+                    .json::<errors::SubmissionNotFound>()
+                    .await
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::L(not_found_err));
+            }
+            // 409, the submission could not be cancelled.
+            if status == StatusCode::CONFLICT {
+                let not_cancellable_err = response
+                    .json::<errors::SubmissionNotCancellable>()
+                    .await
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::R(E::L(
+                    not_cancellable_err,
+                )));
+            }
+            response
+                .error_for_status()
+                .map_err(|e| E::R(E::R(e.into())))?;
+            panic!(
+                "Unexpected {:?} from Opsqueue when cancelling a submission",
+                status
+            )
+        })
+        .retry(retry_policy())
+        .when(|e| match e {
+            E::L(_) => false,
+            E::R(E::L(_)) => false,
+            E::R(E::R(client_err)) => client_err.is_ephemeral(),
+        })
         .notify(|err, dur| {
             tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
@@ -343,7 +411,9 @@ mod tests {
             .expect("Should be OK")
             .expect("Should be Some");
         match status {
-            SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_, _) => {
+            SubmissionStatus::Completed(_)
+            | SubmissionStatus::Failed(_, _)
+            | SubmissionStatus::Cancelled(_) => {
                 panic!("Expected a SubmissionStatus that is still Inprogress, got: {status:?}");
             }
             SubmissionStatus::InProgress(submission) => {

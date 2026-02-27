@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::common::errors::E;
 use crate::common::submission::{self, SubmissionId};
 use crate::db::DBPools;
 use axum::extract::{Path, State};
@@ -47,6 +48,10 @@ impl ServerState {
         Router::new()
             .route("/submissions", post(insert_submission))
             .route(
+                "/submissions/cancel/{submission_id}",
+                post(cancel_submission),
+            )
+            .route(
                 "/submissions/count_completed",
                 get(submissions_count_completed),
             )
@@ -82,6 +87,31 @@ where
 {
     fn from(err: E) -> Self {
         Self(err.into())
+    }
+}
+
+// 200 if the submission was successfully cancelled.
+// 404 if the submission could not be found.
+// 409 if the submission could not be cancelled.
+// 500 if a DatabaseError occurred.
+async fn cancel_submission(
+    State(state): State<ServerState>,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<(), Response> {
+    let mut conn = state
+        .pool
+        .writer_conn()
+        .await
+        .map_err(|e| ServerError(e.into()).into_response())?;
+    match submission::db::cancel_submission(submission_id, &mut conn).await {
+        Ok(_) => Ok(()),
+        Err(E::L(db_err)) => Err(ServerError(db_err.into()).into_response()),
+        Err(E::R(E::L(not_found_err))) => {
+            Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
+        }
+        Err(E::R(E::R(not_cancellable_err))) => {
+            Err((StatusCode::CONFLICT, Json(not_cancellable_err)).into_response())
+        }
     }
 }
 
