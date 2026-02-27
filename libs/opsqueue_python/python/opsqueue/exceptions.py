@@ -100,9 +100,20 @@ class SubmissionNotFoundError(IncorrectUsageError):
     Raised when a method is used to look up information about a submission
     but the submission doesn't exist within the Opsqueue.
     """
+    __slots = ["submission_id"]
 
-    pass
+    def __init__(
+        self,
+        submission_id: int,
+    ):
+        super().__init__()
+        self.submission_id = submission_id
 
+    def __str__(self) -> str:
+        return f"Submission {self.submission_id} could not be found"
+
+    def __repr__(self) -> str:
+        return str(self)
 
 class ChunkCountIsZeroError(IncorrectUsageError):
     """

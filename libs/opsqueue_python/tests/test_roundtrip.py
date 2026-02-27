@@ -2,6 +2,7 @@
 # - use pytest's `--log-cli-level=info` (or `=debug`) argument to get more detailed logs from the producer/consumer clients
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
+import opsqueue
 from collections.abc import Iterator, Sequence
 from opsqueue.producer import (
     ProducerClient,
@@ -9,6 +10,7 @@ from opsqueue.producer import (
     SubmissionFailed,
     ChunkFailed,
     SubmissionFailedError,
+    SubmissionNotFoundError,
 )
 from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.common import SerializationFormat
@@ -354,3 +356,23 @@ def test_metadata_in_submission_failed(
         submission = producer_client.get_submission_status(submission_id)
         assert submission is not None
         assert_submission_failed_has_metadata(submission.submission)
+
+def test_cancel_submission(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """SubmissionCompleted should include the submission's metadata and
+    strategic metadata.
+
+    """
+    url = "file:///tmp/opsqueue/test_cancel_submission"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
+    assert (type(producer_client.get_submission_status(submission_id)).__name__
+      == "SubmissionStatus_InProgress")
+    # Cancel an in progress submission.
+    assert producer_client.cancel_submission(submission_id) is None
+    # Cancel an already cancelled submission.
+    # TODO this should return a NotCancellableError
+    with pytest.raises(SubmissionNotFoundError) as exc_info:
+        producer_client.cancel_submission(submission_id)
+    assert exc_info.value.submission_id == submission_id.id
