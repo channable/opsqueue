@@ -130,7 +130,7 @@ impl From<CError<SubmissionNotCancellable>> for PyErr {
     fn from(value: CError<SubmissionNotCancellable>) -> Self {
         let c: Option<common::ChunkFailed> = match &value.0 {
             opsqueue::common::errors::SubmissionNotCancellable::Failed(submission, chunk) => Some(
-                common::ChunkFailed::from_internal(chunk.clone(), &submission),
+                common::ChunkFailed::from_internal(chunk.clone(), submission),
             ),
             _ => None,
         };

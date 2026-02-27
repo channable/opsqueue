@@ -393,9 +393,9 @@ def test_cancel_in_progress_and_already_cancelled_submissions(
         type(producer_client.get_submission_status(submission_id)).__name__
         == "SubmissionStatus_InProgress"
     )
-    # Cancelling an in progress submission should succeed.
-    assert producer_client.cancel_submission(submission_id) is None
-    # Submission status should now be cancelled.
+    # Cancelling an in progress submission should change submission status to
+    # cancelled.
+    producer_client.cancel_submission(submission_id)
     assert (
         type(producer_client.get_submission_status(submission_id)).__name__
         == "SubmissionStatus_Cancelled"
@@ -428,6 +428,7 @@ def test_cancel_complete_submission(
         # Wait for the submission to complete.
         producer_client.blocking_stream_completed_submission(submission_id)
         submission = producer_client.get_submission_status(submission_id)
+        assert submission is not None
         assert isinstance(submission.submission, SubmissionCompleted)
         # Cancelling the already completed submission should fail.
         with pytest.raises(SubmissionNotCancellableError) as exc_info:
@@ -469,4 +470,4 @@ def test_cancel_failed_submission(
             type(exc_info.value.submission).__name__
             == "SubmissionNotCancellable_Failed"
         )
-        assert exc_info.value.chunk is not None
+        assert isinstance(exc_info.value.chunk, ChunkFailed)

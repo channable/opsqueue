@@ -331,7 +331,7 @@ class ProducerClient:
           cancelled because it was already completed, failed or cancelled.
         - `SubmissionNotFoundError` if the submission could not be found.
         """
-        return self.inner.cancel_submission(submission_id)
+        self.inner.cancel_submission(submission_id)
 
     def get_submission_status(
         self, submission_id: SubmissionId
