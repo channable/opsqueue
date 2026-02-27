@@ -360,6 +360,7 @@ def test_metadata_in_submission_failed(
         assert submission is not None
         assert_submission_failed_has_metadata(submission.submission)
 
+
 def test_cancel_submission_not_found(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
@@ -421,6 +422,7 @@ def test_cancel_already_cancelled(
         producer_client.cancel_submission(submission_id)
     assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Cancelled)
 
+
 def test_cancel_complete_submission(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
@@ -448,6 +450,7 @@ def test_cancel_complete_submission(
             producer_client.cancel_submission(submission_id)
         assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Completed)
         assert exc_info.value.chunk is None
+
 
 def test_cancel_failed_submission(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription

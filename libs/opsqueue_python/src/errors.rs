@@ -4,7 +4,7 @@ use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, IncorrectUsage, SubmissionNotFound, SubmissionNotCancellable,
+    ChunkNotFound, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
     UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use pyo3::exceptions::PyBaseException;
