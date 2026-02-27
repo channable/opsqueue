@@ -114,7 +114,13 @@ impl Client {
     pub async fn cancel_submission(
         &self,
         submission_id: SubmissionId,
-    ) -> Result<(), E<errors::SubmissionNotFound, InternalProducerClientError>> {
+    ) -> Result<
+        (),
+        E<
+            errors::SubmissionNotFound,
+            E<errors::SubmissionNotCancellable, InternalProducerClientError>,
+        >,
+    > {
         (|| async {
             let base_url = &self.base_url;
             let response = self
@@ -122,7 +128,7 @@ impl Client {
                 .post(format!("{base_url}/submissions/cancel/{submission_id}"))
                 .send()
                 .await
-                .map_err(|e| E::R(e.into()))?;
+                .map_err(|e| E::R(E::R(e.into())))?;
             let status = response.status();
             if status.is_success() {
                 return Ok(());
@@ -131,16 +137,28 @@ impl Client {
                 let not_found_err = response
                     .json::<errors::SubmissionNotFound>()
                     .await
-                    .map_err(|e| E::R(e.into()))?;
-                return Err(E::<_, InternalProducerClientError>::L(not_found_err));
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::L(not_found_err));
             }
-            response.error_for_status().map_err(|e| E::R(e.into()))?;
+            if status == StatusCode::CONFLICT {
+                let not_cancellable_err = response
+                    .json::<errors::SubmissionNotCancellable>()
+                    .await
+                    .map_err(|e| E::R(E::R(e.into())))?;
+                return Err(E::<_, E<_, InternalProducerClientError>>::R(E::L(
+                    not_cancellable_err,
+                )));
+            }
+            response
+                .error_for_status()
+                .map_err(|e| E::R(E::R(e.into())))?;
             Ok(())
         })
         .retry(retry_policy())
         .when(|e| match e {
             E::L(_) => false,
-            E::R(client_err) => client_err.is_ephemeral(),
+            E::R(E::L(_)) => false,
+            E::R(E::R(client_err)) => client_err.is_ephemeral(),
         })
         .notify(|err, dur| {
             tracing::debug!("retrying error {err:?} with sleeping {dur:?}");

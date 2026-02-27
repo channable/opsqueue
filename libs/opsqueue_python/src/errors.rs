@@ -4,11 +4,13 @@ use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
+    ChunkNotFound, IncorrectUsage, SubmissionNotFound, SubmissionNotCancellable,
+    UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use pyo3::exceptions::PyBaseException;
 use pyo3::{import_exception, Bound, PyErr, Python};
 
+use crate::common;
 use crate::common::{ChunkIndex, SubmissionId};
 
 // Expected errors:
@@ -19,7 +21,7 @@ import_exception!(opsqueue.exceptions, IncorrectUsageError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
-// import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
+import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
 import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
 import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
@@ -124,6 +126,14 @@ impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
     }
 }
 
+impl From<CError<SubmissionNotCancellable>> for PyErr {
+    fn from(value: CError<SubmissionNotCancellable>) -> Self {
+        let s: common::SubmissionNotCancellable = value.0.into();
+        // TODO pass the 'ChunkFailed' to the Python exception.
+        SubmissionNotCancellableError::new_err(s)
+    }
+}
+
 impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
         let submission_id = value.0 .0;
@@ -143,20 +153,6 @@ impl From<CError<SubmissionFailed>> for PyErr {
         SubmissionFailedError::new_err((submission, chunk))
     }
 }
-
-// #[pyclass(frozen, get_all, module = "opsqueue")]
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// pub enum SubmissionNotCancellable {
-//     Cancelled(crate::common::SubmissionCancelled),
-//     Completed(crate::common::SubmissionCompleted),
-//     Failed(crate::common::SubmissionFailed),
-// }
-
-// impl From<CError<SubmissionNotCancellable>> for PyErr {
-//     fn from(value: CError<SubmissionNotCancellable>) -> Self {
-//         SubmissionNotCancellableError::new_err(value.0)
-//     }
-// }
 
 impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
     fn from(value: CError<crate::producer::SubmissionNotCompletedYetError>) -> Self {

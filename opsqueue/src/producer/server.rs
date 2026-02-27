@@ -92,7 +92,8 @@ where
 
 // 200 if the submission was successfully cancelled.
 // 404 if the submission could not be found.
-// 500 if a DatabaseError occurred
+// 409 if the submission could not be cancelled.
+// 500 if a DatabaseError occurred.
 async fn cancel_submission(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
@@ -105,8 +106,11 @@ async fn cancel_submission(
     match submission::db::cancel_submission(submission_id, &mut conn).await {
         Ok(_) => Ok(()),
         Err(E::L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(E::R(not_found_err)) => {
+        Err(E::R(E::L(not_found_err))) => {
             Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
+        }
+        Err(E::R(E::R(not_cancellable_err))) => {
+            Err((StatusCode::CONFLICT, Json(not_cancellable_err)).into_response())
         }
     }
 }

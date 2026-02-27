@@ -16,7 +16,7 @@ from . import opsqueue_internal
 from . import tracing
 from opsqueue.exceptions import (
     SubmissionFailedError,
-    # SubmissionNotCancellableError,
+    SubmissionNotCancellableError,
     SubmissionNotFoundError,
 )
 from .opsqueue_internal import (  # type: ignore[import-not-found]
@@ -34,7 +34,7 @@ __all__ = [
     "SubmissionCompleted",
     "SubmissionFailedError",
     "SubmissionFailed",
-    # "SubmissionNotCancellableError",
+    "SubmissionNotCancellableError",
     "SubmissionNotFoundError",
     "ChunkFailed",
 ]

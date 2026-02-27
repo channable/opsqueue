@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::consumer::common::SyncServerToClientResponse;
 
 use super::{
-    chunk::ChunkId,
+    chunk::{ChunkFailed, ChunkId},
     submission::{SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId},
 };
 
@@ -40,11 +40,11 @@ pub struct ChunkNotFound(pub ChunkId);
 pub struct SubmissionNotFound(pub SubmissionId);
 
 /// A submission could not be cancelled due to one of the enumerated reasons.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Deserialize, Serialize)]
 #[error("Submission could not be cancelled {0:?}")]
 pub enum SubmissionNotCancellable {
     Cancelled(SubmissionCancelled),
-    Failed(SubmissionFailed),
+    Failed(SubmissionFailed, ChunkFailed),
     Completed(SubmissionCompleted),
 }
 

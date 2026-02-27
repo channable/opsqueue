@@ -1,6 +1,7 @@
 ## Expected errors:
 
 from . import opsqueue_internal
+from typing import Optional
 
 
 class SubmissionFailedError(Exception):
@@ -38,29 +39,31 @@ class SubmissionFailedError(Exception):
         return str(self)
 
 
-# class SubmissionNotCancellableError(Exception):
-#     __slots__ = ["submission"]
-#     """Raised when a submission could not be cancelled due to already being
-#     completed, failed or cancelled.
+class SubmissionNotCancellableError(Exception):
+    __slots__ = ["submission", "chunk"]
+    """Raised when a submission could not be cancelled due to already being
+    completed, failed or cancelled.
 
-#     """
+    """
 
-#     def __init__(
-#         self,
-#         submission: opsqueue_internal.SubmissionNotCancellableError,
-#     ):
-#         super().__init__()
-#         self.submission = submission
+    def __init__(
+        self,
+        submission: opsqueue_internal.SubmissionNotCancellable,
+        chunk: Optional[opsqueue_internal.ChunkFailed]=None,
+    ):
+        super().__init__()
+        self.submission = submission
+        self.chunk = chunk
 
-#     def __str__(self) -> str:
-#         return f"""
-#         Submission {self.submission.id} was not cancelled because:
+    def __str__(self) -> str:
+        return f"""
+        Submission {self.submission.id} was not cancelled because:
 
-#         {self.submission}
-#         """
+        {self.submission}
+        """
 
-#     def __repr__(self) -> str:
-#         return str(self)
+    def __repr__(self) -> str:
+        return str(self)
 
 
 ## Usage errors:
@@ -100,6 +103,7 @@ class SubmissionNotFoundError(IncorrectUsageError):
     Raised when a method is used to look up information about a submission
     but the submission doesn't exist within the Opsqueue.
     """
+
     __slots = ["submission_id"]
 
     def __init__(
@@ -114,6 +118,7 @@ class SubmissionNotFoundError(IncorrectUsageError):
 
     def __repr__(self) -> str:
         return str(self)
+
 
 class ChunkCountIsZeroError(IncorrectUsageError):
     """

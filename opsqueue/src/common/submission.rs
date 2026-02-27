@@ -260,7 +260,7 @@ impl Submission {
 pub mod db {
     use crate::{
         common::{
-            errors::{DatabaseError, SubmissionNotFound, E},
+            errors::{DatabaseError, SubmissionNotCancellable, SubmissionNotFound, E},
             StrategicMetadataMap,
         },
         db::{Connection, True, WriterConnection, WriterPool},
@@ -687,9 +687,34 @@ pub mod db {
     pub async fn cancel_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
-    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, SubmissionNotCancellable>>> {
         conn.transaction(move |mut tx| {
-            Box::pin(async move { cancel_submission_notx(id, &mut tx).await })
+            Box::pin(async move {
+                match cancel_submission_notx(id, &mut tx).await {
+                    Ok(()) => Ok(()),
+                    Err(E::L(db_err)) => Err(E::L(db_err)),
+                    Err(E::R(not_found_err)) => {
+                        // Submission could not be found, let's check the status
+                        // in order to return a more informative error.
+                        match submission_status(id, &mut tx).await {
+                            Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::InProgress(submission))) => {
+                                panic!("Failed to cancel in progress submission {:?}", submission)
+                            }
+                            Ok(Some(SubmissionStatus::Completed(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Completed(submission))))
+                            }
+                            Ok(Some(SubmissionStatus::Failed(submission, chunk))) => Err(E::R(
+                                E::R(SubmissionNotCancellable::Failed(submission, chunk)),
+                            )),
+                            Ok(Some(SubmissionStatus::Cancelled(submission))) => {
+                                Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
+                            }
+                            Err(_) => Ok(()),
+                        }
+                    }
+                }
+            })
         })
         .await
     }
