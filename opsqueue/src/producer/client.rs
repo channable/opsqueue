@@ -110,7 +110,10 @@ impl Client {
         .await
     }
 
-    /// TODO docstring
+    /// Send a HTTP request to the OpsQueue server to cancel a submission.
+    ///
+    /// Will return an error if the submission is already complete, failed, or
+    /// cancelled, or if the submission could not be found.
     pub async fn cancel_submission(
         &self,
         submission_id: SubmissionId,
@@ -130,9 +133,11 @@ impl Client {
                 .await
                 .map_err(|e| E::R(E::R(e.into())))?;
             let status = response.status();
+            // 200, the submission was successfully cancelled.
             if status.is_success() {
                 return Ok(());
             }
+            // 404, the submission could not be found.
             if status == StatusCode::NOT_FOUND {
                 let not_found_err = response
                     .json::<errors::SubmissionNotFound>()
@@ -140,6 +145,7 @@ impl Client {
                     .map_err(|e| E::R(E::R(e.into())))?;
                 return Err(E::<_, E<_, InternalProducerClientError>>::L(not_found_err));
             }
+            // 404, the submission could not be cancelled.
             if status == StatusCode::CONFLICT {
                 let not_cancellable_err = response
                     .json::<errors::SubmissionNotCancellable>()
@@ -152,7 +158,10 @@ impl Client {
             response
                 .error_for_status()
                 .map_err(|e| E::R(E::R(e.into())))?;
-            Ok(())
+            panic!(
+                "Unexpected {:?} from Opsqueue when cancelling a submission",
+                status
+            )
         })
         .retry(retry_policy())
         .when(|e| match e {

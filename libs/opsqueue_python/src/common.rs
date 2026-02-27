@@ -473,18 +473,20 @@ pub struct SubmissionCancelled {
     pub cancelled_at: DateTime<Utc>,
 }
 
+/// Submission could not be cancelled because it was already completed, failed
+/// or cancelled.
 #[pyclass(frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionNotCancellable {
-    Cancelled {
-        submission: SubmissionCancelled,
-    },
     Completed {
         submission: SubmissionCompleted,
     },
     Failed {
         submission: SubmissionFailed,
         chunk: ChunkFailed,
+    },
+    Cancelled {
+        submission: SubmissionCancelled,
     },
 }
 

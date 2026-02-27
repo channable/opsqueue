@@ -56,10 +56,12 @@ class SubmissionNotCancellableError(Exception):
         self.chunk = chunk
 
     def __str__(self) -> str:
+        chunk_str = f"\n{self.chunk}"
         return f"""
         Submission {self.submission.id} was not cancelled because:
 
         {self.submission}
+        {"" if self.chunk is None else chunk_str}
         """
 
     def __repr__(self) -> str:

@@ -128,9 +128,14 @@ impl<T: Error> From<CError<IncorrectUsage<T>>> for PyErr {
 
 impl From<CError<SubmissionNotCancellable>> for PyErr {
     fn from(value: CError<SubmissionNotCancellable>) -> Self {
+        let c: Option<common::ChunkFailed> = match &value.0 {
+            opsqueue::common::errors::SubmissionNotCancellable::Failed(submission, chunk) => Some(
+                common::ChunkFailed::from_internal(chunk.clone(), &submission),
+            ),
+            _ => None,
+        };
         let s: common::SubmissionNotCancellable = value.0.into();
-        // TODO pass the 'ChunkFailed' to the Python exception.
-        SubmissionNotCancellableError::new_err(s)
+        SubmissionNotCancellableError::new_err((s, c))
     }
 }
 

@@ -436,6 +436,7 @@ def test_cancel_complete_submission(
             type(exc_info.value.submission).__name__
             == "SubmissionNotCancellable_Completed"
         )
+        assert exc_info.value.chunk is None
 
 
 def test_cancel_failed_submission(
@@ -468,3 +469,4 @@ def test_cancel_failed_submission(
             type(exc_info.value.submission).__name__
             == "SubmissionNotCancellable_Failed"
         )
+        assert exc_info.value.chunk is not None

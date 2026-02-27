@@ -39,13 +39,14 @@ pub struct ChunkNotFound(pub ChunkId);
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
 
-/// A submission could not be cancelled due to one of the enumerated reasons.
+/// Submission could not be cancelled because it was already completed, failed
+/// or cancelled.
 #[derive(Error, Debug, Deserialize, Serialize)]
 #[error("Submission could not be cancelled {0:?}")]
 pub enum SubmissionNotCancellable {
-    Cancelled(SubmissionCancelled),
-    Failed(SubmissionFailed, ChunkFailed),
     Completed(SubmissionCompleted),
+    Failed(SubmissionFailed, ChunkFailed),
+    Cancelled(SubmissionCancelled),
 }
 
 #[derive(Error, Debug)]

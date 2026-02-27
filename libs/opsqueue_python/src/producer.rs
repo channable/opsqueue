@@ -119,7 +119,10 @@ impl ProducerClient {
         })
     }
 
-    /// TODO docstring
+    /// Cancel a submission.
+    ///
+    /// Will return an error if the submission is already complete, failed, or
+    /// cancelled, or if the submission could not be found.
     pub fn cancel_submission(
         &self,
         py: Python<'_>,
@@ -138,6 +141,7 @@ impl ProducerClient {
                     .await
                     .map_err(|e| CError(R(e)))
             })
+            // TODO ?
             // .map(|opt| opt.map(Into::into))
             // .map_err(|e| ProducerClientError::new_err(e.to_string()))
         })
