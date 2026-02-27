@@ -498,9 +498,10 @@ impl From<opsqueue::common::errors::SubmissionNotCancellable> for SubmissionNotC
             Failed(s, c) => {
                 let chunk = ChunkFailed::from_internal(c, &s);
                 SubmissionNotCancellable::Failed {
-                    submission: s.into(), chunk
+                    submission: s.into(),
+                    chunk,
                 }
-            },
+            }
             Cancelled(s) => SubmissionNotCancellable::Cancelled {
                 submission: s.into(),
             },

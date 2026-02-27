@@ -11,7 +11,7 @@ from opsqueue.producer import (
     ChunkFailed,
     SubmissionFailedError,
     SubmissionNotFoundError,
-    SubmissionNotCancellableError
+    SubmissionNotCancellableError,
 )
 from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.common import SerializationFormat
@@ -358,6 +358,7 @@ def test_metadata_in_submission_failed(
         assert submission is not None
         assert_submission_failed_has_metadata(submission.submission)
 
+
 def test_cancel_submission_not_found(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
@@ -372,6 +373,7 @@ def test_cancel_submission_not_found(
         producer_client.cancel_submission(SubmissionId(0))
     assert exc_info.value.submission_id == submission_id
 
+
 def test_cancel_in_progress_and_already_cancelled_submissions(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
@@ -381,7 +383,9 @@ def test_cancel_in_progress_and_already_cancelled_submissions(
 
     """
 
-    url = "file:///tmp/opsqueue/test_cancel_in_progress_and_already_cancelled_submissions"
+    url = (
+        "file:///tmp/opsqueue/test_cancel_in_progress_and_already_cancelled_submissions"
+    )
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
     # Sanity check submission is in progress before proceeding to cancel.
@@ -400,9 +404,9 @@ def test_cancel_in_progress_and_already_cancelled_submissions(
     with pytest.raises(SubmissionNotCancellableError) as exc_info:
         producer_client.cancel_submission(submission_id)
     assert (
-        type(exc_info.value.submission).__name__
-        == "SubmissionNotCancellable_Cancelled"
+        type(exc_info.value.submission).__name__ == "SubmissionNotCancellable_Cancelled"
     )
+
 
 def test_cancel_complete_submission(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
@@ -432,6 +436,7 @@ def test_cancel_complete_submission(
             type(exc_info.value.submission).__name__
             == "SubmissionNotCancellable_Completed"
         )
+
 
 def test_cancel_failed_submission(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription

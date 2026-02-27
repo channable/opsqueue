@@ -49,7 +49,7 @@ class SubmissionNotCancellableError(Exception):
     def __init__(
         self,
         submission: opsqueue_internal.SubmissionNotCancellable,
-        chunk: Optional[opsqueue_internal.ChunkFailed]=None,
+        chunk: Optional[opsqueue_internal.ChunkFailed] = None,
     ):
         super().__init__()
         self.submission = submission
