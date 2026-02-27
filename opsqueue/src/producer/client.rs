@@ -3,7 +3,10 @@ use std::time::Duration;
 use backon::BackoffBuilder;
 use backon::FibonacciBuilder;
 use backon::Retryable;
+use http::StatusCode;
 
+use crate::common::errors;
+use crate::common::errors::E;
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 use crate::tracing::CarrierMap;
 
@@ -111,20 +114,34 @@ impl Client {
     pub async fn cancel_submission(
         &self,
         submission_id: SubmissionId,
-    ) -> Result<(), InternalProducerClientError> {
+    ) -> Result<(), E<errors::SubmissionNotFound, InternalProducerClientError>> {
         (|| async {
             let base_url = &self.base_url;
-            self.http_client
+            let response = self
+                .http_client
                 .post(format!("{base_url}/submissions/cancel/{submission_id}"))
                 .send()
-                .await?
-                .error_for_status()?;
-            // let bytes = resp.bytes().await?;
-            // let body = serde_json::from_slice(&bytes)?;
+                .await
+                .map_err(|e| E::R(e.into()))?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(());
+            }
+            if status == StatusCode::NOT_FOUND {
+                let not_found_err = response
+                    .json::<errors::SubmissionNotFound>()
+                    .await
+                    .map_err(|e| E::R(e.into()))?;
+                return Err(E::<_, InternalProducerClientError>::L(not_found_err));
+            }
+            response.error_for_status().map_err(|e| E::R(e.into()))?;
             Ok(())
         })
         .retry(retry_policy())
-        .when(InternalProducerClientError::is_ephemeral)
+        .when(|e| match e {
+            E::L(_) => false,
+            E::R(client_err) => client_err.is_ephemeral(),
+        })
         .notify(|err, dur| {
             tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })
@@ -367,7 +384,9 @@ mod tests {
             .expect("Should be OK")
             .expect("Should be Some");
         match status {
-            SubmissionStatus::Completed(_) | SubmissionStatus::Failed(_, _) | SubmissionStatus::Cancelled(_) => {
+            SubmissionStatus::Completed(_)
+            | SubmissionStatus::Failed(_, _)
+            | SubmissionStatus::Cancelled(_) => {
                 panic!("Expected a SubmissionStatus that is still Inprogress, got: {status:?}");
             }
             SubmissionStatus::InProgress(submission) => {

@@ -11,7 +11,10 @@ use thiserror::Error;
 
 use crate::consumer::common::SyncServerToClientResponse;
 
-use super::{chunk::ChunkId, submission::{SubmissionId, SubmissionCompleted, SubmissionFailed, SubmissionCancelled}};
+use super::{
+    chunk::ChunkId,
+    submission::{SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId},
+};
 
 // #[derive(Error, Debug, Clone, Serialize, Deserialize)]
 // #[error("Low-level database error: {0:?}")]
@@ -32,7 +35,7 @@ impl<T> From<DatabaseError> for E<DatabaseError, T> {
 #[error("Chunk not found for ID {0:?}")]
 pub struct ChunkNotFound(pub ChunkId);
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Deserialize, Serialize)]
 #[error("Submission not found for ID {0:?}")]
 pub struct SubmissionNotFound(pub SubmissionId);
 

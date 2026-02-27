@@ -1,4 +1,4 @@
-/// NOTE: We defne the potentially raisable errors/exceptions in Python
+/// NOTE: We define the potentially raisable errors/exceptions in Python
 /// so we have nice IDE support for docs-on-hover and for 'go to definition'.
 use std::error::Error;
 
@@ -7,7 +7,7 @@ use opsqueue::common::errors::{
     ChunkNotFound, IncorrectUsage, SubmissionNotFound, UnexpectedOpsqueueConsumerServerResponse, E,
 };
 use pyo3::exceptions::PyBaseException;
-use pyo3::{import_exception, Bound, PyErr, Python, prelude::*};
+use pyo3::{import_exception, prelude::*, Bound, PyErr, Python};
 
 use crate::common::{ChunkIndex, SubmissionId};
 

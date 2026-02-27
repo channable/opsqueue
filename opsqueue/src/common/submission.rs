@@ -733,7 +733,7 @@ pub mod db {
             Some(_) => {
                 counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
                 Ok(())
-            },
+            }
         }
     }
 

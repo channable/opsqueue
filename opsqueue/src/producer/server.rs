@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::common::errors::E;
 use crate::common::submission::{self, SubmissionId};
 use crate::db::DBPools;
 use axum::extract::{Path, State};
@@ -89,13 +90,25 @@ where
     }
 }
 
+// 200 if the submission was successfully cancelled.
+// 404 if the submission could not be found.
+// 500 if a DatabaseError occurred
 async fn cancel_submission(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
-) -> Result<(), ServerError> {
-    let mut conn = state.pool.writer_conn().await?;
-    submission::db::cancel_submission(submission_id, &mut conn).await?;
-    Ok(())
+) -> Result<(), Response> {
+    let mut conn = state
+        .pool
+        .writer_conn()
+        .await
+        .map_err(|e| ServerError(e.into()).into_response())?;
+    match submission::db::cancel_submission(submission_id, &mut conn).await {
+        Ok(_) => Ok(()),
+        Err(E::L(db_err)) => Err(ServerError(db_err.into()).into_response()),
+        Err(E::R(not_found_err)) => {
+            Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
+        }
+    }
 }
 
 async fn submission_status(

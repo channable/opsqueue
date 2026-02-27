@@ -9,6 +9,7 @@ use pyo3::{
 
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use opsqueue::{
+    common::errors::{SubmissionNotFound},
     common::errors::E::{self, L, R},
     object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::client::{Client as ActualClient, InternalProducerClientError},
@@ -123,7 +124,7 @@ impl ProducerClient {
         &self,
         py: Python<'_>,
         id: SubmissionId,
-    ) -> CPyResult<(), E<FatalPythonException, InternalProducerClientError>> {
+    ) -> CPyResult<(), E<FatalPythonException, E<SubmissionNotFound, InternalProducerClientError>>> {
         py.allow_threads(|| {
             self.block_unless_interrupted(async {
                 self.producer_client
