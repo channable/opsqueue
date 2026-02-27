@@ -963,7 +963,7 @@ pub mod db {
 
                 tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
                 tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
-                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions (with {n_chunks_completed} chunks completed and {n_chunks_failed} chunks failed)");
+                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions");
                 Ok(())
             })
         })
