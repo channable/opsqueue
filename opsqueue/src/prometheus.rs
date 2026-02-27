@@ -56,7 +56,14 @@ pub fn describe_metrics() {
         Unit::Count,
         "Number of submissions failed permanently"
     );
+    describe_counter!(
+        SUBMISSIONS_CANCELLED_COUNTER,
+        Unit::Count,
+        "Number of submissions cancelled permanently"
+    );
     describe_histogram!(SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its final chunk being completed. Does not count failed submissions.");
+    describe_histogram!(SUBMISSIONS_DURATION_FAIL_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its first chunk being failed.");
+    describe_histogram!(SUBMISSIONS_DURATION_CANCEL_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its first chunk being canceled.");
 
     describe_counter!(
         CHUNKS_COMPLETED_COUNTER,

@@ -145,7 +145,7 @@ impl Client {
                     .map_err(|e| E::R(E::R(e.into())))?;
                 return Err(E::<_, E<_, InternalProducerClientError>>::L(not_found_err));
             }
-            // 404, the submission could not be cancelled.
+            // 409, the submission could not be cancelled.
             if status == StatusCode::CONFLICT {
                 let not_cancellable_err = response
                     .json::<errors::SubmissionNotCancellable>()

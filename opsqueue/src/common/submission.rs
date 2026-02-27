@@ -710,7 +710,7 @@ pub mod db {
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
                             }
-                            Err(_) => Ok(()),
+                            Err(db_err) => Err(E::L(db_err)),
                         }
                     }
                 }
@@ -902,7 +902,7 @@ pub mod db {
                 // Clean up old submissions_metadata
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
                     );",
                     older_than
@@ -911,7 +911,7 @@ pub mod db {
                 .await?;
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
                     );",
                     older_than
@@ -920,7 +920,7 @@ pub mod db {
                 .await?;
                 query!(
                     "DELETE FROM submissions_metadata
-                    WHERE submission_id = (
+                    WHERE submission_id IN (
                         SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
                     );",
                     older_than

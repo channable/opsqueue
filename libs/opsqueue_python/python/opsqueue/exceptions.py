@@ -106,7 +106,7 @@ class SubmissionNotFoundError(IncorrectUsageError):
     but the submission doesn't exist within the Opsqueue.
     """
 
-    __slots = ["submission_id"]
+    __slots__ = ["submission_id"]
 
     def __init__(
         self,

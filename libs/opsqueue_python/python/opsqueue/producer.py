@@ -324,7 +324,7 @@ class ProducerClient:
         """
         Cancel a specific submission that is in progress.
 
-        Returns None if the submission was succesfully cancelled.
+        Returns None if the submission was successfully cancelled.
 
         Raises:
         - `SubmissionNotCancellableError` if the submission could not be
