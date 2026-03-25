@@ -90,7 +90,7 @@ pub fn build_router(
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(|request: &http::Request<_>| {
             use tracing_opentelemetry::OpenTelemetrySpanExt;
-            let span = tracing::info_span!("request",
+            let span = tracing::debug_span!("request",
                         method = %request.method(),
                         uri = %request.uri(),
                         version = ?request.version(),
