@@ -241,6 +241,28 @@ impl DBPools {
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.write_pool.writer_conn().await
     }
+
+    /// Performas an explicit, non-passive WAL checkpoint
+    /// We use the 'TRUNCATE' strategy, which will do the most work but will briefly block the writer *and* all readers
+    ///
+    /// c.f. https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
+    pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
+        let mut conn = self.writer_conn().await?;
+        let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
+            .fetch_one(conn.get_inner())
+            .await?;
+        tracing::warn!("WAL checkpoint completed {res:?}");
+        Ok(())
+    }
+
+    pub async fn periodically_checkpoint_wal(&self) {
+        const EXPLICIT_WAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+        let mut interval = tokio::time::interval(EXPLICIT_WAL_CHECK_INTERVAL);
+        loop {
+            let _ = self.perform_explicit_wal_checkpoint().await;
+            interval.tick().await;
+        }
+    }
 }
 
 /// A connection pool.
@@ -366,9 +388,14 @@ fn db_options(database_filename: &str) -> SqliteConnectOptions {
         .synchronous(SqliteSynchronous::Normal) // Full is not needed because we use WAL mode
         .busy_timeout(Duration::from_secs(5)) // No query should ever lock for more than 5 seconds
         .foreign_keys(true) // By default SQLite does not do foreign key checks; we want them to ensure data consistency
-        .pragma("mmap_size", "134217728")
+        // Caching:
+        .pragma("mmap_size", format!("{}", 128 * 1024 * 1024))
         .pragma("cache_size", "-1000000") // Cache size of 10⁶ KiB AKA 1GiB (negative value means measured in KiB rather than in multiples of the page size)
-                                          // NOTE: we do _not_ set PRAGMA temp_store = 2 (MEMORY) because as long as the page cache has room those will use memory anyway (and if it is full we need the disk)
+        // NOTE: we do _not_ set PRAGMA temp_store = 2 (MEMORY) because as long as the page cache has room those will use memory anyway (and if it is full we need the disk)
+        // WAL checkpointing
+        .busy_timeout(Duration::from_secs(5)) // Matches the SQLx default (*not* the sqlite-on-its-own default, which is 'error immediately'), but made explicit as it is subject to change
+        .pragma("wal_autocheckpoint", "0") // Turn the passive autocheckpointing _off_, as we do our own explicit active checkpointing
+        .pragma("journal_size_limit", format!("{}", 4 * 1024 * 1024)) // Truncate WAL file down to 4 MiB after checkpointing
 }
 
 async fn ensure_db_exists(database_filename: &str) {
@@ -412,6 +439,9 @@ async fn db_connect_read_pool(
 }
 
 /// Connect the writer pool.
+///
+/// It intentionally only contains a single connection
+/// as SQLite only allows a single write at a time
 async fn db_connect_write_pool(database_filename: &str) -> WriterPool {
     SqlitePoolOptions::new()
         .min_connections(1)

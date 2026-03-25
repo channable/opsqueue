@@ -47,6 +47,8 @@ pub async fn async_main() {
     .expect("Timed out while initiating the database");
 
     moro_local::async_scope!(|scope| {
+        scope.spawn(db_pool.periodically_checkpoint_wal());
+
         scope.spawn(opsqueue::server::serve_producer_and_consumer(
             config,
             &server_addr,
