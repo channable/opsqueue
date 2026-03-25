@@ -110,7 +110,7 @@ impl MetaStateField {
     }
 
     pub fn too_high_counts(&self, max: usize) -> impl Iterator<Item = MetaStateVal> + '_ {
-        tracing::warn!("metastate: {self:?}");
+        tracing::debug!("metastate: {self:?}");
         self.counts_to_vals
             .range((max, 0)..)
             .map(|entry| entry.value().1)
