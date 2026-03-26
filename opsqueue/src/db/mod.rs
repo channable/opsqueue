@@ -243,7 +243,7 @@ impl DBPools {
     }
 
     /// Performas an explicit, non-passive WAL checkpoint
-    /// We use the 'TRUNCATE' strategy, which will do the most work but will briefly block the writer *and* all readers
+    /// We use the 'RESTART' strategy, which will do the most work but will briefly block the writer *and* all readers
     ///
     /// c.f. https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
     pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
@@ -251,7 +251,7 @@ impl DBPools {
         let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
             .fetch_one(conn.get_inner())
             .await?;
-        tracing::warn!("WAL checkpoint completed {res:?}");
+        tracing::debug!("WAL checkpoint completed {res:?}");
         Ok(())
     }
 
