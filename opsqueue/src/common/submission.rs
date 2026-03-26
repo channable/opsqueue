@@ -251,7 +251,6 @@ pub mod db {
     };
     use chunk::ChunkSize;
     use sqlx::{query, query_as, Sqlite};
-    use tracing::{info, warn};
 
     use axum_prometheus::metrics::{counter, histogram};
 
@@ -422,12 +421,18 @@ pub mod db {
                 // Forward our database errors to the caller.
                 Err(E::L(e)) => return Err(e),
                 // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
-                Err(E::R(_)) => warn!(%submission_id, "Presumed zero-length submission not found"),
+                Err(E::R(_)) => {
+                    tracing::warn!(%submission_id, "Presumed zero-length submission not found")
+                }
                 // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
                 // Our future selves might thank us.
-                Ok(true) => info!(%submission_id, "Zero-length submission marked as completed"),
+                Ok(true) => {
+                    tracing::debug!(%submission_id, "Zero-length submission marked as completed")
+                }
                 // This should never happen. If it does, better log it.
-                Ok(false) => warn!(%submission_id, "Zero-length submission wasn't zero-length?!"),
+                Ok(false) => {
+                    tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!")
+                }
             }
         }
         Ok(submission_id)
