@@ -99,7 +99,7 @@ pub fn build_router(
             let _ = span.set_parent(crate::tracing::context_from_headers(request.headers()));
             span
         })
-        .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO));
+        .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::DEBUG));
 
     let traced_routes = routes.layer(tracing_middleware).layer(prometheus_config.0);
 
