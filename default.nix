@@ -48,6 +48,9 @@ let
       pkgs.cargo-edit
       pkgs.cargo-nextest
       pkgs.maturin
+
+      # sqlite3 binary, for easy debugging/introspection
+      pkgs.sqlite
     ];
   };
   environments = {
