@@ -198,8 +198,8 @@ impl Completer {
                     () = cancellation_token.cancelled() => break,
                     Some(msg) = self.mailbox.recv() => self.handle_message(msg).await,
                 }
-                // Log some indication of progress every so often:
                 self.count = self.count.saturating_add(1);
+                // Log some indication of progress every so often:
                 if self.count.is_multiple_of(1000) {
                     tracing::info!("Processed {} chunks", self.count);
                 }
@@ -237,6 +237,13 @@ impl Completer {
                     }
                     histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION)
                         .record(start.elapsed());
+
+                    // And while we have the connection already,
+                    // let's make an extra WAL checkpoint every so often
+                    if self.count.is_multiple_of(100) {
+                        let _ = db::perform_explicit_wal_checkpoint(conn).await;
+                    }
+
                     db_res?;
                     Ok(())
                 }

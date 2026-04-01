@@ -67,6 +67,7 @@ use sqlx::{
 use conn::{Conn, NoTransaction, Reader, Tx, Writer};
 
 pub use magic::{False, True};
+use tokio::time::MissedTickBehavior;
 
 /// A [`Pool`] that can produce [`Writer`]s.
 pub type WriterPool = Pool<True>;
@@ -242,24 +243,12 @@ impl DBPools {
         self.write_pool.writer_conn().await
     }
 
-    /// Performas an explicit, non-passive WAL checkpoint
-    /// We use the 'RESTART' strategy, which will do the most work but will briefly block the writer *and* all readers
-    ///
-    /// c.f. https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
-    pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
-        let mut conn = self.writer_conn().await?;
-        let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
-            .fetch_one(conn.get_inner())
-            .await?;
-        tracing::debug!("WAL checkpoint completed {res:?}");
-        Ok(())
-    }
-
     pub async fn periodically_checkpoint_wal(&self) {
         const EXPLICIT_WAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
         let mut interval = tokio::time::interval(EXPLICIT_WAL_CHECK_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
-            let _ = self.perform_explicit_wal_checkpoint().await;
+            let _ = self.write_pool.perform_explicit_wal_checkpoint().await;
             interval.tick().await;
         }
     }
@@ -302,6 +291,23 @@ impl WriterPool {
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.acquire().await
     }
+
+    pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
+        let conn = self.writer_conn().await?;
+        perform_explicit_wal_checkpoint(conn).await
+    }
+}
+
+/// Performs an explicit, non-passive WAL checkpoint
+/// We use the 'RESTART' strategy, which will do the most work but will briefly block the writer *and* all readers
+///
+/// c.f. https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
+pub async fn perform_explicit_wal_checkpoint(mut conn: impl WriterConnection) -> sqlx::Result<()> {
+    let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
+        .fetch_one(conn.get_inner())
+        .await?;
+    tracing::debug!("WAL checkpoint completed {res:?}");
+    Ok(())
 }
 
 impl ReaderPool {
