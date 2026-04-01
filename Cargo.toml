@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.34.3"
+version = "0.34.4"
 
 
 [workspace.lints.clippy]
