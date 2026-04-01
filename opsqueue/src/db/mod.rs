@@ -256,7 +256,7 @@ impl DBPools {
     }
 
     pub async fn periodically_checkpoint_wal(&self) {
-        const EXPLICIT_WAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+        const EXPLICIT_WAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
         let mut interval = tokio::time::interval(EXPLICIT_WAL_CHECK_INTERVAL);
         loop {
             let _ = self.perform_explicit_wal_checkpoint().await;
