@@ -4,11 +4,16 @@
 
 from collections.abc import Iterator, Sequence
 from opsqueue.producer import (
+    SubmissionId,
     ProducerClient,
     SubmissionCompleted,
     SubmissionFailed,
     ChunkFailed,
+    SubmissionStatus,
     SubmissionFailedError,
+    SubmissionNotFoundError,
+    SubmissionNotCancellable,
+    SubmissionNotCancellableError,
 )
 from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.common import SerializationFormat
@@ -302,7 +307,7 @@ def test_metadata_in_submission_complete(
         strategy = strategy_from_description(any_consumer_strategy)
         consumer_client.run_each_op(lambda x: x, strategy=strategy)
 
-    with background_process(run_consumer) as _consumer:
+    with background_process(run_consumer):
         # Wait for the submission to complete.
         producer_client.blocking_stream_completed_submission(submission_id)
         submission = producer_client.get_submission_status(submission_id)
@@ -339,7 +344,7 @@ def test_metadata_in_submission_failed(
         strategy = strategy_from_description(any_consumer_strategy)
         consumer_client.run_each_op(consume, strategy=strategy)
 
-    with background_process(run_consumer) as _consumer:
+    with background_process(run_consumer):
 
         def assert_submission_failed_has_metadata(x: SubmissionFailed) -> None:
             assert isinstance(x, SubmissionFailed)
@@ -354,3 +359,124 @@ def test_metadata_in_submission_failed(
         submission = producer_client.get_submission_status(submission_id)
         assert submission is not None
         assert_submission_failed_has_metadata(submission.submission)
+
+
+def test_cancel_submission_not_found(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """Attempting to cancel a submission that doesn't exist raises a
+    SubmissionNotFoundError.
+
+    """
+    url = "file:///tmp/opsqueue/test_cancel_submission_not_found"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = 0
+    with pytest.raises(SubmissionNotFoundError) as exc_info:
+        producer_client.cancel_submission(SubmissionId(0))
+    assert exc_info.value.submission_id == submission_id
+
+
+def test_cancel_in_progress(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """Cancelling a submission that is in progress succeeds and returns none.
+    Attempting to cancel a submission that is already cancelled should raise a
+    SubmissionNotCancellableError.
+
+    """
+
+    url = "file:///tmp/opsqueue/test_cancel_in_progress"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
+    status = producer_client.get_submission_status(submission_id)
+    # Sanity check submission is in progress before proceeding to cancel.
+    assert isinstance(status, SubmissionStatus.InProgress)
+    # Cancelling an in progress submission should change submission status to
+    # cancelled.
+    producer_client.cancel_submission(submission_id)
+    assert isinstance(
+        producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
+    )
+
+
+def test_cancel_already_cancelled(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """Attempting to cancel a submission that is already cancelled should raise
+    a SubmissionNotCancellableError.
+
+    """
+
+    url = "file:///tmp/opsqueue/test_cancel_already_cancelled"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
+    # Cancelling an in progress submission should change submission status to
+    # cancelled.
+    producer_client.cancel_submission(submission_id)
+    # Confirm test pre-requisite, that the submission is indeed cancelled.
+    assert isinstance(
+        producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
+    )
+    # Cancelling an already cancelled submission should raise an exception.
+    with pytest.raises(SubmissionNotCancellableError) as exc_info:
+        producer_client.cancel_submission(submission_id)
+    assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Cancelled)
+
+
+def test_cancel_complete_submission(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """Attempting to cancel a submission that has already completed should raise
+    a SubmissionNotCancellableError.
+
+    """
+    url = "file:///tmp/opsqueue/test_cancel_complete_submission"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(lambda x: x, strategy=strategy)
+
+    with background_process(run_consumer):
+        # Wait for the submission to complete.
+        producer_client.blocking_stream_completed_submission(submission_id)
+        submission = producer_client.get_submission_status(submission_id)
+        assert submission is not None
+        assert isinstance(submission.submission, SubmissionCompleted)
+        # Cancelling the already completed submission should fail.
+        with pytest.raises(SubmissionNotCancellableError) as exc_info:
+            producer_client.cancel_submission(submission_id)
+        assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Completed)
+        assert exc_info.value.chunk is None
+
+
+def test_cancel_failed_submission(
+    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+) -> None:
+    """Attempting to cancel a submission that has failed should raise a
+    SubmissionNotCancellableError.
+
+    """
+    url = "file:///tmp/opsqueue/test_cancel_failed_submission"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission((1, 2, 3), chunk_size=1)
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+
+        def consume(x: int) -> None:
+            raise ValueError(f"Couldn't consume {x}")
+
+        strategy = strategy_from_description(any_consumer_strategy)
+        consumer_client.run_each_op(consume, strategy=strategy)
+
+    with background_process(run_consumer):
+        with pytest.raises(SubmissionFailedError):
+            producer_client.blocking_stream_completed_submission(submission_id)
+        # Cancelling the failed submission should fail.
+        with pytest.raises(SubmissionNotCancellableError) as exc_info:
+            producer_client.cancel_submission(submission_id)
+        assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Failed)
+        assert isinstance(exc_info.value.chunk, ChunkFailed)
