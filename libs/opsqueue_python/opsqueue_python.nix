@@ -23,9 +23,12 @@
   opentelemetry-api,
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
+
+  # Downstream users can override which precise Python version is used.
+  # This is opt-in; by default we will use whatever 'python3' is in scope.
+  python ? (pkgs.python3),
 }:
 let
-  python = pkgs.python3;
   sources = import ../../nix/sources.nix;
   crane = import sources.crane { pkgs = pkgs; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
