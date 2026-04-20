@@ -23,9 +23,9 @@
   opentelemetry-api,
   opentelemetry-exporter-otlp,
   opentelemetry-sdk,
+  python ? (pkgs.python3),
 }:
 let
-  python = pkgs.python3;
   sources = import ../../nix/sources.nix;
   crane = import sources.crane { pkgs = pkgs; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
