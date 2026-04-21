@@ -30,7 +30,7 @@ let
 
       # For linting and formatting
       pkgs.biome
-      pkgs.nixfmt-rfc-style
+      pkgs.nixfmt
       pkgs.pre-commit
       pkgs.python3Packages.pre-commit-hooks
       pkgs.ruff
