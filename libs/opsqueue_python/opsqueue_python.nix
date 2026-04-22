@@ -78,7 +78,7 @@ let
     )).overrideAttrs
       (old: {
         nativeBuildInputs = old.nativeBuildInputs ++ [ maturin ];
-        env.PYO3_PYTHON = python.interpreter;
+        env.PYO3_PYTHON = python3.interpreter;
 
         # We intentionally _override_ rather than extend the buildPhase
         # as Maturin itself calls `cargo build`, no need to call it twice.
