@@ -123,12 +123,12 @@ opsqueue_client = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/op
 ```
 
 - If you want to override which Rust version is used, you can set the `rustToolchain` either in an overlay or by passing it as parameter directly to `callPackage`.
-- If you want to override which Python version is used for the Python client, you can set `python3` either in an overlay or by passing it as parameter directly to `callPackage`.
+- If you want to override which Python version is used for the Python client, you can set `python` either in an overlay or by passing it as parameter directly to `callPackage`.
 
 For example:
 
 ```nix
-opsqueue_client = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/opsqueue_python.nix") { python3 = mySpecialPython; };
+opsqueue_client = self.callPackage (sources.opsqueue + "/libs/opsqueue_python/opsqueue_python.nix") { python = mySpecialPython; };
 ```
 
 ## For devs modifying Opsqueue: Building, running, testing
