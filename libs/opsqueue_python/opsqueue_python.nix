@@ -26,7 +26,7 @@
 
   # Downstream users can override which precise Python version is used.
   # This is opt-in; by default we will use whatever 'python3' is in scope.
-  python3 ? (pkgs.python3),
+  python ? (pkgs.python3),
 }:
 let
   sources = import ../../nix/sources.nix;
@@ -59,7 +59,7 @@ let
     inherit version pname;
     src = depsSrc;
     strictDeps = true;
-    nativeBuildInputs = [ python3 ];
+    nativeBuildInputs = [ python ];
     cargoExtraArgs = "--package opsqueue_python";
     doCheck = false;
   };
@@ -78,7 +78,7 @@ let
     )).overrideAttrs
       (old: {
         nativeBuildInputs = old.nativeBuildInputs ++ [ maturin ];
-        env.PYO3_PYTHON = python3.interpreter;
+        env.PYO3_PYTHON = python.interpreter;
 
         # We intentionally _override_ rather than extend the buildPhase
         # as Maturin itself calls `cargo build`, no need to call it twice.
