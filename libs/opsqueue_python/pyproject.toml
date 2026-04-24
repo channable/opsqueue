@@ -35,6 +35,7 @@ Issues="https://github.com/channable/opsqueue/issues"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "opsqueue.opsqueue_internal"
+include = ["**/py.typed"]
 
 # We specify test-dependencies here (and have them loaded through `.setup_local_venv.sh`)
 # because otherwise `pytest` won't be able to see the locally build python package!

@@ -44,7 +44,7 @@ let
   };
 
   # Full set of files to build the Python wheel on top
-  pythonFileFilter = path: _type: builtins.match "^.*\.(py|md)$" path != null;
+  pythonFileFilter = path: _type: builtins.match "^.*(py.typed|\.(py|md))$" path != null;
   wheelFileFilter = path: type: (pythonFileFilter path type) || (rustCrateFileFilter path type);
   wheelSrc = lib.cleanSourceWith {
     src = ../../.;
