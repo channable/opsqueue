@@ -101,3 +101,36 @@ nix-build-python: (_nix-build "python.pkgs.opsqueue_python")
 
 _nix-build +TARGETS:
   nix build --file nix/nixpkgs-pinned.nix --print-out-paths --print-build-logs --no-link --option sandbox true {{TARGETS}}
+
+# Verify `cargo package` for the opsqueue crate contains every file the lib +
+# bin + embedded migrations need at compile time. Catches regressions where the
+# `include` allow-list in opsqueue/Cargo.toml strips required files from the
+# published / vendored crate (broke downstream git-source consumers in the past).
+[group('test')]
+package-check:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  files=$(cargo package -p opsqueue --list --allow-dirty)
+  required=(
+    "src/lib.rs"
+    "app/main.rs"
+    "build.rs"
+    "LICENSE"
+    "opsqueue_example_database_schema.db"
+  )
+  missing=()
+  for f in "${required[@]}"; do
+    if ! grep -qxF "$f" <<<"$files"; then
+      missing+=("$f")
+    fi
+  done
+  if ! grep -qE '^migrations/.*\.sql$' <<<"$files"; then
+    missing+=("migrations/*.sql")
+  fi
+  if ((${#missing[@]})); then
+    echo "package-check: missing from cargo package output:" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
+  cargo package -p opsqueue --no-verify --allow-dirty >/dev/null
+  echo "package-check: OK"
