@@ -137,3 +137,16 @@ package-check:
   fi
   cargo package -p opsqueue --no-verify --allow-dirty >/dev/null
   echo "package-check: OK"
+
+# Verify the sqlx offline query cache (`opsqueue/.sqlx/`) is in sync with the
+# `query!`/`query_as!` invocations in the source tree. Required so downstream
+# offline (Crane/Nix) builds of the published crate that enable `server-logic`
+# can compile without a live SQLite database.
+[group('lint')]
+sqlx-check:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd opsqueue
+  DATABASE_URL="sqlite://$PWD/opsqueue_example_database_schema.db" \
+    cargo sqlx prepare --check -- --all-targets
+  echo "sqlx-check: OK"

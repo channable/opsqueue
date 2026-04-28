@@ -31,6 +31,12 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: sqlx-prepare-check
+        name: sqlx prepare --check (offline query cache fresh)
+        entry: just sqlx-check
+        language: system
+        files: ^opsqueue/(src/.*\.rs|migrations/.*\.sql|\.sqlx/.*)$
+        pass_filenames: false
       - id: nixfmt
         name: nixfmt
         entry: nixfmt --strict
