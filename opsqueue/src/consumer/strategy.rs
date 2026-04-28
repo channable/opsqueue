@@ -76,7 +76,7 @@ impl Strategy {
                     Some(field) => {
                         let taken_values: Vec<_> = field.too_high_counts(1).collect();
                         let taken_values_string =
-                            serde_json::to_string(&taken_values).expect("Always valid JSO");
+                            serde_json::to_string(&taken_values).expect("Always valid JSON");
                         tracing::trace!("Taken values that are left out of PreferDistinct: {taken_values_string:?}");
                         qb.push_bind(taken_values_string);
                     }
