@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.35.1"
+version = "0.35.2"
 
 [workspace.lints.clippy]
 cargo =  { level = "warn", priority = -1 }

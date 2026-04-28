@@ -5,7 +5,17 @@ edition = "2021"
 description = "lightweight batch processing queue for heavy loads"
 repository = "https://github.com/channable/opsqueue"
 license = "MIT"
-include=["opsqueue_example_database_schema.db"]
+# Cargo's `include` is an exhaustive allow-list: anything not listed here is
+# stripped from `cargo package` / `cargo vendor` output. Make sure every file
+# the lib + bin need at compile time is covered.
+include = [
+    "src/**/*",
+    "app/**/*",
+    "migrations/**/*.sql",
+    "build.rs",
+    "opsqueue_example_database_schema.db",
+    "README.md",
+]
 
 [lib]
 name="opsqueue"
