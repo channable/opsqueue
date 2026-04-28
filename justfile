@@ -127,6 +127,9 @@ package-check:
   if ! grep -qE '^migrations/.*\.sql$' <<<"$files"; then
     missing+=("migrations/*.sql")
   fi
+  if ! grep -qE '^\.sqlx/query-.*\.json$' <<<"$files"; then
+    missing+=(".sqlx/query-*.json")
+  fi
   if ((${#missing[@]})); then
     echo "package-check: missing from cargo package output:" >&2
     printf '  - %s\n' "${missing[@]}" >&2

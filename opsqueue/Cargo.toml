@@ -12,6 +12,9 @@ include = [
     "src/**/*",
     "app/**/*",
     "migrations/**/*.sql",
+    # sqlx offline query metadata; required for offline (e.g. Crane / Nix)
+    # builds of downstream consumers that enable the `server-logic` feature.
+    ".sqlx/**/*.json",
     "build.rs",
     "opsqueue_example_database_schema.db",
     "README.md",
