@@ -5,10 +5,10 @@
         "homepage": "https://crane.dev",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "0bda7e7d005ccb5522a76d11ccfbf562b71953ca",
-        "sha256": "1ndhiw867qiwr3kswm2mb81y3xcfdwz92xvs00r6jd4blxsv7z09",
+        "rev": "5e0fb2f64edff2822249f21293b8304dedaaf676",
+        "sha256": "0mqw6ibknf1845ygfq28h16655a4zd2r18bigqr0n0rih333jj3c",
         "type": "tarball",
-        "url": "https://github.com/ipetkov/crane/archive/0bda7e7d005ccb5522a76d11ccfbf562b71953ca.tar.gz",
+        "url": "https://github.com/ipetkov/crane/archive/5e0fb2f64edff2822249f21293b8304dedaaf676.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs": {
