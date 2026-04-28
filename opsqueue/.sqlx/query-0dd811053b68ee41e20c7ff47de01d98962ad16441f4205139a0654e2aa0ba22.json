@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM submissions_metadata\n                    WHERE submission_id IN (\n                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)\n                    );",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0dd811053b68ee41e20c7ff47de01d98962ad16441f4205139a0654e2aa0ba22"
+}
