@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::common::errors::E::{L, R};
 use crate::common::submission::{self, SubmissionId};
-use crate::db::DBPools;
+use crate::db::{self, DBPools};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -155,6 +155,11 @@ async fn insert_submission(
         &mut conn,
     )
     .await?;
+
+    // As we already have access to the write checkpoint
+    // and submission inserts result in large DB mutations from time to time
+    // this is the moment to perform an extra WAL checkpoint
+    let _ = db::perform_explicit_wal_checkpoint(conn).await;
 
     // We've done a new insert! Let's tell any waiting consumers!
     state.notify_on_insert.notify_waiters();
