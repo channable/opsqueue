@@ -5,7 +5,6 @@ edition = "2021"
 description = "lightweight batch processing queue for heavy loads"
 repository = "https://github.com/channable/opsqueue"
 license = "MIT"
-include=["opsqueue_example_database_schema.db"]
 
 [lib]
 name="opsqueue"
