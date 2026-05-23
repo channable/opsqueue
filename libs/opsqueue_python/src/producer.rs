@@ -123,6 +123,7 @@ impl ProducerClient {
     ///
     /// Will return an error if the submission is already complete, failed, or
     /// cancelled, or if the submission could not be found.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn cancel_submission(
         &self,
         py: Python<'_>,
@@ -284,7 +285,7 @@ impl ProducerClient {
         })
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn try_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
@@ -313,7 +314,7 @@ impl ProducerClient {
     }
 
     #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
@@ -364,7 +365,7 @@ impl ProducerClient {
     /// to reduce the latency of tiny submissions.
     /// This interval is then doubled for each subsequent poll,
     /// until we check every few seconds.
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn blocking_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
