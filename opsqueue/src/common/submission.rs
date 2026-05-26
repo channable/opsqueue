@@ -176,6 +176,7 @@ pub struct SubmissionFailed {
     pub id: SubmissionId,
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
+    pub chunks_done: Option<ChunkCount>,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     pub strategic_metadata: Option<StrategicMetadataMap>,
@@ -595,6 +596,7 @@ pub mod db {
               id AS "id: SubmissionId"
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
             , chunk_size AS "chunk_size!: ChunkSize"
             , metadata
             , ( SELECT json_group_object(metadata_key, metadata_value)
@@ -615,6 +617,7 @@ pub mod db {
                 id: row.id,
                 prefix: row.prefix,
                 chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
                 chunk_size: row.chunk_size,
                 metadata: row.metadata,
                 strategic_metadata: row.strategic_metadata.map(|json| json.0),
@@ -816,8 +819,8 @@ pub mod db {
         query!(
             "
     INSERT INTO submissions_failed
-    (id, chunks_total, prefix, metadata, failed_at, failed_chunk_id)
-    SELECT id, chunks_total, prefix, metadata, julianday($1), $2 FROM submissions WHERE id = $3;
+    (id, chunks_total, chunks_done, prefix, metadata, failed_at, failed_chunk_id)
+    SELECT id, chunks_total, chunks_done, prefix, metadata, julianday($1), $2 FROM submissions WHERE id = $3;
 
     DELETE FROM submissions WHERE id = $4 RETURNING *;
     ",

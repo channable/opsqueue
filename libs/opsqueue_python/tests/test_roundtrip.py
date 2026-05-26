@@ -480,3 +480,31 @@ def test_cancel_failed_submission(
             producer_client.cancel_submission(submission_id)
         assert isinstance(exc_info.value.submission, SubmissionNotCancellable.Failed)
         assert isinstance(exc_info.value.chunk, ChunkFailed)
+
+
+def test_failed_submission_includes_chunks_done(opsqueue: OpsqueueProcess) -> None:
+    """The SubmissionFailed (in a SubmissionFailedError) includes the count of
+    chunks done.
+
+    """
+    url = "file:///tmp/opsqueue/test_failed_submission_includes_chunks_done"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    chunks = [1, 2, 3]
+    submission_id = producer_client.insert_submission(chunks, chunk_size=1)
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+
+        def consume(x: int) -> int | None:
+            if x == chunks[-1]:
+                raise ValueError(f"Couldn't consume {x}")
+            return x
+
+        consumer_client.run_each_op(
+            consume, strategy=strategy_from_description("Oldest")
+        )
+
+    with background_process(run_consumer):
+        with pytest.raises(SubmissionFailedError) as exc_info:
+            producer_client.blocking_stream_completed_submission(submission_id)
+        assert exc_info.value.submission.chunks_done == len(chunks) - 1
