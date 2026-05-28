@@ -41,7 +41,7 @@ where
 pub fn future_into_py<T, F>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
-    T: for<'py> IntoPyObject<'py>,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
     pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, F, T>(py, fut)
 }
@@ -71,6 +71,13 @@ impl pyo3_async_runtimes::generic::Runtime for TokioRuntimeThatIsInScope {
             fut.await;
         })
     }
+
+    fn spawn_blocking<F>(f: F) -> Self::JoinHandle
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        tokio::task::spawn_blocking(f)
+    }
 }
 
 impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
@@ -89,10 +96,7 @@ impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
 
     fn get_task_locals() -> Option<TaskLocals> {
         TASK_LOCALS
-            .try_with(|c| {
-                c.get()
-                    .map(|locals| Python::attach(|py| locals.clone_ref(py)))
-            })
+            .try_with(|c| { c.get().cloned() })
             .unwrap_or_default()
     }
 }
