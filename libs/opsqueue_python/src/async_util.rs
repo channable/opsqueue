@@ -31,9 +31,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker = cx.waker();
-        Python::attach(|py| {
-            py.detach(|| pin!(&mut self.0).poll(&mut Context::from_waker(waker)))
-        })
+        Python::attach(|py| py.detach(|| pin!(&mut self.0).poll(&mut Context::from_waker(waker))))
     }
 }
 
@@ -96,7 +94,7 @@ impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
 
     fn get_task_locals() -> Option<TaskLocals> {
         TASK_LOCALS
-            .try_with(|c| { c.get().cloned() })
+            .try_with(|c| c.get().cloned())
             .unwrap_or_default()
     }
 }

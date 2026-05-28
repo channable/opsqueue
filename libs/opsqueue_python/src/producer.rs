@@ -34,7 +34,7 @@ create_exception!(opsqueue_internal, ProducerClientError, PyException);
 const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(5000);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
-#[pyclass(module = "opsqueue")]
+#[pyclass(from_py_object, module = "opsqueue")]
 #[derive(Debug, Clone)]
 pub struct ProducerClient {
     producer_client: ActualClient,
