@@ -41,7 +41,7 @@ include = ["**/py.typed"]
 # because otherwise `pytest` won't be able to see the locally build python package!
 [project.optional-dependencies]
 test = [
-    "pytest==9.0.2",
+    "pytest==9.0.3",
     "pytest-xdist==3.8.0",
     "multiprocess==0.70.19",
     "pytest-timeout==2.4.0",
