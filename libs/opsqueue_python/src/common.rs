@@ -386,6 +386,7 @@ pub struct Submission {
     pub chunks_total: u64,
     pub chunks_done: u64,
     pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: StrategicMetadataMap,
 }
 
 impl From<opsqueue::common::submission::Submission> for Submission {
@@ -395,6 +396,7 @@ impl From<opsqueue::common::submission::Submission> for Submission {
             chunks_total: value.chunks_total.into(),
             chunks_done: value.chunks_done.into(),
             metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
         }
     }
 }
@@ -403,11 +405,12 @@ impl From<opsqueue::common::submission::Submission> for Submission {
 impl Submission {
     fn __repr__(&self) -> String {
         format!(
-            "Submission(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?})",
+            "Submission(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?})",
             self.id.__repr__(),
             self.chunks_total,
             self.chunks_done,
-            self.metadata
+            self.metadata,
+            self.strategic_metadata
         )
     }
 }
@@ -448,7 +451,7 @@ pub struct SubmissionCompleted {
     pub id: SubmissionId,
     pub chunks_total: u64,
     pub metadata: Option<submission::Metadata>,
-    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub strategic_metadata: StrategicMetadataMap,
     pub completed_at: DateTime<Utc>,
 }
 
@@ -459,7 +462,7 @@ pub struct SubmissionFailed {
     pub chunks_total: u64,
     pub chunks_done: Option<u64>,
     pub metadata: Option<submission::Metadata>,
-    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub strategic_metadata: StrategicMetadataMap,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: u64,
 }
@@ -471,7 +474,7 @@ pub struct SubmissionCancelled {
     pub chunks_total: u64,
     pub chunks_done: u64,
     pub metadata: Option<submission::Metadata>,
-    pub strategic_metadata: Option<StrategicMetadataMap>,
+    pub strategic_metadata: StrategicMetadataMap,
     pub cancelled_at: DateTime<Utc>,
 }
 
