@@ -7,6 +7,7 @@ use crate::common::{chunk, submission::Metadata};
 pub struct InsertSubmission {
     pub chunk_contents: ChunkContents,
     pub metadata: Option<Metadata>,
+    #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub chunk_size: Option<chunk::ChunkSize>,
 }
