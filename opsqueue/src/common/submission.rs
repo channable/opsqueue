@@ -1493,22 +1493,29 @@ pub mod test {
         value
     }
 
-    /// Ensures that submissions serialized by an older peer (which did not include
-    /// the `strategic_metadata` field) can still be deserialized, defaulting the
-    /// field to an empty map rather than failing with a "missing field" error.
+    /// Ensures that a `Submission` serialized by an older peer (which did not
+    /// include the `strategic_metadata` field) can still be deserialized,
+    /// defaulting the field to an empty map rather than failing with a
+    /// "missing field" error.
     #[test]
-    fn strategic_metadata_is_optional_when_deserializing() {
-        // `Submission`
+    fn strategic_metadata_is_optional_when_deserializing_submission() {
         let submission = Submission::new();
         let json = without_key(
             serde_json::to_value(&submission).unwrap(),
             "strategic_metadata",
         );
         let deserialized: Submission = serde_json::from_value(json).unwrap();
-        assert_eq!(deserialized.strategic_metadata, StrategicMetadataMap::default());
+        assert_eq!(
+            deserialized.strategic_metadata,
+            StrategicMetadataMap::default()
+        );
         assert_eq!(deserialized, submission);
+    }
 
-        // `SubmissionCompleted`
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionCompleted`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_completed() {
         let completed = SubmissionCompleted {
             id: SubmissionId(u63::new(1)),
             prefix: None,
@@ -1525,8 +1532,12 @@ pub mod test {
         );
         let deserialized: SubmissionCompleted = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, completed);
+    }
 
-        // `SubmissionFailed`
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionFailed`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_failed() {
         let failed = SubmissionFailed {
             id: SubmissionId(u63::new(2)),
             prefix: None,
@@ -1542,8 +1553,12 @@ pub mod test {
         let json = without_key(serde_json::to_value(&failed).unwrap(), "strategic_metadata");
         let deserialized: SubmissionFailed = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, failed);
+    }
 
-        // `SubmissionCancelled`
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionCancelled`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_cancelled() {
         let cancelled = SubmissionCancelled {
             id: SubmissionId(u63::new(3)),
             prefix: None,
