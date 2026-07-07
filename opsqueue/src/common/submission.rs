@@ -151,6 +151,7 @@ pub struct Submission {
     pub chunks_done: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
+    #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub otel_trace_carrier: String,
 }
@@ -167,6 +168,7 @@ pub struct SubmissionCompleted {
     pub chunks_total: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
+    #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub completed_at: DateTime<Utc>,
     pub otel_trace_carrier: String,
@@ -180,6 +182,7 @@ pub struct SubmissionFailed {
     pub chunks_done: Option<ChunkCount>,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
+    #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub failed_at: DateTime<Utc>,
     pub failed_chunk_id: ChunkIndex,
@@ -197,6 +200,7 @@ pub struct SubmissionCancelled {
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
     pub metadata: Option<Metadata>,
+    #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub cancelled_at: DateTime<Utc>,
 }
@@ -1474,5 +1478,101 @@ pub mod test {
         assert_matches!(count_submissions(&mut conn).await, Ok(0));
         assert_matches!(count_submissions_completed(&mut conn).await, Ok(1));
         assert_matches!(count_submissions_failed(&mut conn).await, Ok(0));
+    }
+
+    /// Removes the given top-level key from a JSON object, panicking if it was not present.
+    ///
+    /// Used to simulate a JSON payload coming from an older peer that did not
+    /// yet include the `strategic_metadata` field.
+    fn without_key(value: serde_json::Value, key: &str) -> serde_json::Value {
+        let mut value = value;
+        let object = value.as_object_mut().expect("expected a JSON object");
+        object
+            .remove(key)
+            .unwrap_or_else(|| panic!("expected key {key:?} to be present"));
+        value
+    }
+
+    /// Ensures that a `Submission` serialized by an older peer (which did not
+    /// include the `strategic_metadata` field) can still be deserialized,
+    /// defaulting the field to an empty map rather than failing with a
+    /// "missing field" error.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission() {
+        let submission = Submission::new();
+        let json = without_key(
+            serde_json::to_value(&submission).unwrap(),
+            "strategic_metadata",
+        );
+        let deserialized: Submission = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            deserialized.strategic_metadata,
+            StrategicMetadataMap::default()
+        );
+        assert_eq!(deserialized, submission);
+    }
+
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionCompleted`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_completed() {
+        let completed = SubmissionCompleted {
+            id: SubmissionId(u63::new(1)),
+            prefix: None,
+            chunks_total: ChunkCount::zero(),
+            chunk_size: ChunkSize::default(),
+            metadata: None,
+            strategic_metadata: StrategicMetadataMap::default(),
+            completed_at: Utc::now(),
+            otel_trace_carrier: String::new(),
+        };
+        let json = without_key(
+            serde_json::to_value(&completed).unwrap(),
+            "strategic_metadata",
+        );
+        let deserialized: SubmissionCompleted = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, completed);
+    }
+
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionFailed`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_failed() {
+        let failed = SubmissionFailed {
+            id: SubmissionId(u63::new(2)),
+            prefix: None,
+            chunks_total: ChunkCount::zero(),
+            chunks_done: None,
+            chunk_size: ChunkSize::default(),
+            metadata: None,
+            strategic_metadata: StrategicMetadataMap::default(),
+            failed_at: Utc::now(),
+            failed_chunk_id: ChunkIndex::zero(),
+            otel_trace_carrier: String::new(),
+        };
+        let json = without_key(serde_json::to_value(&failed).unwrap(), "strategic_metadata");
+        let deserialized: SubmissionFailed = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, failed);
+    }
+
+    /// Same as [`strategic_metadata_is_optional_when_deserializing_submission`],
+    /// but for `SubmissionCancelled`.
+    #[test]
+    fn strategic_metadata_is_optional_when_deserializing_submission_cancelled() {
+        let cancelled = SubmissionCancelled {
+            id: SubmissionId(u63::new(3)),
+            prefix: None,
+            chunks_total: ChunkCount::zero(),
+            chunks_done: ChunkCount::zero(),
+            metadata: None,
+            strategic_metadata: StrategicMetadataMap::default(),
+            cancelled_at: Utc::now(),
+        };
+        let json = without_key(
+            serde_json::to_value(&cancelled).unwrap(),
+            "strategic_metadata",
+        );
+        let deserialized: SubmissionCancelled = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, cancelled);
     }
 }
