@@ -39,6 +39,9 @@ pub mod prometheus;
 #[cfg(feature = "server-logic")]
 pub mod config;
 
+#[cfg(feature = "server-logic")]
+pub mod delegation;
+
 /// The Opsqueue library's semantic version
 /// as written in the Rust packages's `Cargo.toml`
 pub const VERSION_CARGO_SEMVER: &str = env!("CARGO_PKG_VERSION");

@@ -846,6 +846,7 @@ pub mod db {
         failure: String,
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
+        // TODO: Update JM Master at /delegation/complete
         conn.transaction(move |mut tx| {
             Box::pin(
                 async move { fail_submission_notx(id, failed_chunk_index, failure, &mut tx).await },
