@@ -67,6 +67,8 @@ def opsqueue_service(
     # temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
     command = [
+        "setpriv",
+        "--pdeathsig=SIGKILL",
         str(opsqueue_bin_location()),
         "--port",
         str(port),
@@ -78,9 +80,11 @@ def opsqueue_service(
         env["RUST_LOG"] = "off"
 
     with subprocess.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
+        assert process.poll() is None, "Opsqueue process failed to start"
         try:
             wrapper = OpsqueueProcess(port=port, process=process)
             yield wrapper
+            assert process.poll() is None, "Opsqueue process failed during run"
         finally:
             process.terminate()
 
