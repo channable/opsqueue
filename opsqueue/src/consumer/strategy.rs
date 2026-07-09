@@ -29,7 +29,6 @@ impl Strategy {
         metastate: &MetaState,
     ) -> &'a mut QueryBuilder<'a, Sqlite> {
         let qb = self.build_query_snippet(qb, metastate);
-        let qb = self.build_sort_order_query_snippet(qb);
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
@@ -41,8 +40,8 @@ impl Strategy {
     ) -> &'a mut QueryBuilder<'a, Sqlite> {
         use Strategy::*;
         match self {
-            Oldest => qb.push("SELECT * FROM chunks"),
-            Newest => qb.push("SELECT * FROM chunks"),
+            Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
+            Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
             Random => {
                 let random_offset: u16 = rand::random();
                 qb.push("SELECT * FROM chunks WHERE random_order >= ")
@@ -57,7 +56,6 @@ impl Strategy {
             } => {
                 let qb = qb.push(format_args!("WITH inner_{meta_key} AS NOT MATERIALIZED ("));
                 let qb = underlying.build_query_snippet(qb, metastate);
-                let qb = underlying.build_sort_order_query_snippet(qb);
                 qb.push(format_args!(
                     r#"),
                 taken_{meta_key} AS (
@@ -76,7 +74,7 @@ impl Strategy {
                     Some(field) => {
                         let taken_values: Vec<_> = field.too_high_counts(1).collect();
                         let taken_values_string =
-                            serde_json::to_string(&taken_values).expect("Always valid JSO");
+                            serde_json::to_string(&taken_values).expect("Always valid JSON");
                         tracing::trace!("Taken values that are left out of PreferDistinct: {taken_values_string:?}");
                         qb.push_bind(taken_values_string);
                     }
@@ -87,27 +85,6 @@ impl Strategy {
                 UNION ALL
                 SELECT * FROM inner_{meta_key} WHERE EXISTS (SELECT 1 FROM taken_{meta_key} WHERE inner_{meta_key}.submission_id = taken_{meta_key}.submission_id)
                 "))
-            }
-        }
-    }
-
-    fn build_sort_order_query_snippet<'a>(
-        &'a self,
-        qb: &'a mut QueryBuilder<'a, Sqlite>,
-    ) -> &'a mut QueryBuilder<'a, Sqlite> {
-        use Strategy::*;
-        match self {
-            Oldest => qb.push("\nORDER BY submission_id ASC"),
-            Newest => qb.push("\nORDER BY submission_id DESC"),
-            Random => {
-                // It is **very** important that we do not apply extra sorting here.
-                // For the implementation of the 'cutting the deck' technique
-                // we rely on the order being 'whatever comes out of the UNION ALL'
-                qb
-            }
-            PreferDistinct { .. } => {
-                // **no** change in sort order. PreferDistinct passes the sort order on to the inner strategies that it unions.
-                qb
             }
         }
     }
