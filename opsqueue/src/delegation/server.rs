@@ -276,49 +276,26 @@ async fn job_return(
     for task_id in &request {
         let task_id = &task_id.0;
 
-        // Only return submissions that are still paused (not yet delegated / running).
-        // This request is non-binding: skip tasks that are already active.
-        let row = sqlx::query!(
-            r#"SELECT id AS "id: SubmissionId" FROM submissions WHERE jm_task_id = $1 AND paused"#,
+        // Re-pause the submission and clear jm_task_id so the background reporting loop
+        // does not pick it up, and so consumers stop dispatching its chunks.
+        // If the submission is not in the active table (already terminal or unknown), skip it.
+        let rows_affected = sqlx::query!(
+            "UPDATE submissions SET paused = 1, jm_task_id = NULL WHERE jm_task_id = $1",
             task_id,
-        )
-        .fetch_optional(conn.get_inner())
-        .await
-        .map_err(|e| {
-            tracing::error!(%task_id, "DB error looking up submission for return: {e:?}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-        let Some(row) = row else {
-            tracing::debug!(%task_id, "job_return: submission not paused or not found, skipping");
-            continue;
-        };
-
-        // Clear jm_task_id before cancelling so the cancelled row is not picked up by the
-        // background reporting loop.
-        sqlx::query!(
-            "UPDATE submissions SET jm_task_id = NULL WHERE id = $1",
-            row.id,
         )
         .execute(conn.get_inner())
         .await
         .map_err(|e| {
-            tracing::error!(%task_id, submission_id = %row.id, "DB error clearing jm_task_id for return: {e:?}");
+            tracing::error!(%task_id, "DB error pausing submission for return: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        })?
+        .rows_affected();
 
-        match crate::common::submission::db::cancel_submission(row.id, &mut conn).await {
-            Ok(()) => {
-                tracing::info!(%task_id, submission_id = %row.id, "Returned paused submission");
-                returned_task_ids.push(task_id.clone());
-            }
-            Err(E::R(_)) => {
-                tracing::debug!(%task_id, submission_id = %row.id, "job_return: submission already terminal");
-            }
-            Err(E::L(e)) => {
-                tracing::error!(%task_id, submission_id = %row.id, "DB error cancelling submission for return: {e:?}");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
+        if rows_affected > 0 {
+            tracing::info!(%task_id, "Returned (re-paused) submission");
+            returned_task_ids.push(task_id.clone());
+        } else {
+            tracing::debug!(%task_id, "job_return: submission not active or not found, skipping");
         }
     }
 
