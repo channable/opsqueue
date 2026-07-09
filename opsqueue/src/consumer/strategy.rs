@@ -41,14 +41,15 @@ impl Strategy {
     ) -> &'a mut QueryBuilder<'a, Sqlite> {
         use Strategy::*;
         match self {
-            Oldest => qb.push("SELECT * FROM chunks"),
-            Newest => qb.push("SELECT * FROM chunks"),
+            Oldest => qb.push("SELECT * FROM chunks WHERE submission_id NOT IN (SELECT id FROM submissions WHERE paused)"),
+            Newest => qb.push("SELECT * FROM chunks WHERE submission_id NOT IN (SELECT id FROM submissions WHERE paused)"),
             Random => {
                 let random_offset: u16 = rand::random();
                 qb.push("SELECT * FROM chunks WHERE random_order >= ")
                     .push_bind(random_offset)
-                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
+                    .push(" AND submission_id NOT IN (SELECT id FROM submissions WHERE paused) UNION ALL SELECT * FROM chunks WHERE random_order < ")
                     .push_bind(random_offset)
+                    .push(" AND submission_id NOT IN (SELECT id FROM submissions WHERE paused)")
             }
 
             PreferDistinct {
@@ -161,7 +162,10 @@ pub mod test {
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_eq!(
+            explained,
+            "3, 0, SCAN chunks\n8, 0, LIST SUBQUERY 1\n10, 8, SCAN submissions"
+        );
     }
 
     #[sqlx::test]
@@ -174,7 +178,10 @@ pub mod test {
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_eq!(
+            explained,
+            "3, 0, SCAN chunks\n8, 0, LIST SUBQUERY 1\n10, 8, SCAN submissions"
+        );
     }
 
     #[sqlx::test]
@@ -191,8 +198,12 @@ pub mod test {
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
         5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        22, 1, UNION ALL
-        25, 22, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        16, 2, LIST SUBQUERY 1
+        18, 16, SCAN submissions
+        45, 1, UNION ALL
+        48, 45, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        60, 45, LIST SUBQUERY 3
+        62, 60, SCAN submissions
         ");
     }
 
@@ -215,16 +226,20 @@ pub mod test {
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
         5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        18, 8, LIST SUBQUERY 2
-        20, 18, SCAN json_each VIRTUAL TABLE INDEX 0:
-        63, 1, UNION ALL
-        66, 63, SCAN chunks
-        69, 63, CORRELATED SCALAR SUBQUERY 6
-        73, 69, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        79, 69, LIST SUBQUERY 2
-        81, 79, SCAN json_each VIRTUAL TABLE INDEX 0:
+        10, 2, LIST SUBQUERY 1
+        12, 10, SCAN submissions
+        31, 2, CORRELATED SCALAR SUBQUERY 5
+        35, 31, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        41, 31, LIST SUBQUERY 3
+        43, 41, SCAN json_each VIRTUAL TABLE INDEX 0:
+        86, 1, UNION ALL
+        89, 86, SCAN chunks
+        94, 86, LIST SUBQUERY 1
+        96, 94, SCAN submissions
+        115, 86, CORRELATED SCALAR SUBQUERY 7
+        119, 115, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        125, 115, LIST SUBQUERY 3
+        127, 125, SCAN json_each VIRTUAL TABLE INDEX 0:
         ");
     }
 
@@ -248,16 +263,20 @@ pub mod test {
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
         5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        18, 8, LIST SUBQUERY 2
-        20, 18, SCAN json_each VIRTUAL TABLE INDEX 0:
-        63, 1, UNION ALL
-        66, 63, SCAN chunks
-        69, 63, CORRELATED SCALAR SUBQUERY 6
-        73, 69, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        79, 69, LIST SUBQUERY 2
-        81, 79, SCAN json_each VIRTUAL TABLE INDEX 0:
+        10, 2, LIST SUBQUERY 1
+        12, 10, SCAN submissions
+        31, 2, CORRELATED SCALAR SUBQUERY 5
+        35, 31, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        41, 31, LIST SUBQUERY 3
+        43, 41, SCAN json_each VIRTUAL TABLE INDEX 0:
+        86, 1, UNION ALL
+        89, 86, SCAN chunks
+        94, 86, LIST SUBQUERY 1
+        96, 94, SCAN submissions
+        115, 86, CORRELATED SCALAR SUBQUERY 7
+        119, 115, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        125, 115, LIST SUBQUERY 3
+        127, 125, SCAN json_each VIRTUAL TABLE INDEX 0:
         ");
     }
 
@@ -282,30 +301,38 @@ pub mod test {
         3, 2, COMPOUND QUERY
         4, 3, LEFT-MOST SUBQUERY
         7, 4, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        16, 4, CORRELATED SCALAR SUBQUERY 5
-        20, 16, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        26, 16, LIST SUBQUERY 3
-        28, 26, SCAN json_each VIRTUAL TABLE INDEX 0:
-        63, 3, UNION ALL
-        66, 63, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        76, 63, CORRELATED SCALAR SUBQUERY 5
-        80, 76, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        86, 76, LIST SUBQUERY 3
-        88, 86, SCAN json_each VIRTUAL TABLE INDEX 0:
-        123, 3, UNION ALL
-        124, 123, COMPOUND QUERY
-        125, 124, LEFT-MOST SUBQUERY
-        128, 125, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        137, 125, CORRELATED SCALAR SUBQUERY 7
-        141, 137, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        147, 137, LIST SUBQUERY 3
-        149, 147, SCAN json_each VIRTUAL TABLE INDEX 0:
-        184, 124, UNION ALL
-        187, 184, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        197, 184, CORRELATED SCALAR SUBQUERY 7
-        201, 197, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        207, 197, LIST SUBQUERY 3
-        209, 207, SCAN json_each VIRTUAL TABLE INDEX 0:
+        18, 4, LIST SUBQUERY 1
+        20, 18, SCAN submissions
+        39, 4, CORRELATED SCALAR SUBQUERY 7
+        43, 39, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        49, 39, LIST SUBQUERY 5
+        51, 49, SCAN json_each VIRTUAL TABLE INDEX 0:
+        86, 3, UNION ALL
+        89, 86, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        101, 86, LIST SUBQUERY 3
+        103, 101, SCAN submissions
+        122, 86, CORRELATED SCALAR SUBQUERY 7
+        126, 122, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        132, 122, LIST SUBQUERY 5
+        134, 132, SCAN json_each VIRTUAL TABLE INDEX 0:
+        169, 3, UNION ALL
+        170, 169, COMPOUND QUERY
+        171, 170, LEFT-MOST SUBQUERY
+        174, 171, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        185, 171, LIST SUBQUERY 1
+        187, 185, SCAN submissions
+        206, 171, CORRELATED SCALAR SUBQUERY 9
+        210, 206, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        216, 206, LIST SUBQUERY 5
+        218, 216, SCAN json_each VIRTUAL TABLE INDEX 0:
+        253, 170, UNION ALL
+        256, 253, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        268, 253, LIST SUBQUERY 3
+        270, 268, SCAN submissions
+        289, 253, CORRELATED SCALAR SUBQUERY 9
+        293, 289, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        299, 289, LIST SUBQUERY 5
+        301, 299, SCAN json_each VIRTUAL TABLE INDEX 0:
         ");
     }
 
@@ -338,92 +365,108 @@ pub mod test {
         5, 4, COMPOUND QUERY
         6, 5, LEFT-MOST SUBQUERY
         9, 6, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        18, 6, CORRELATED SCALAR SUBQUERY 5
-        22, 18, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        28, 18, LIST SUBQUERY 3
-        30, 28, SCAN json_each VIRTUAL TABLE INDEX 0:
-        57, 6, CORRELATED SCALAR SUBQUERY 11
-        61, 57, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        67, 57, LIST SUBQUERY 9
-        69, 67, SCAN json_each VIRTUAL TABLE INDEX 0:
-        104, 5, UNION ALL
-        107, 104, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        117, 104, CORRELATED SCALAR SUBQUERY 5
-        121, 117, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        127, 117, LIST SUBQUERY 3
-        129, 127, SCAN json_each VIRTUAL TABLE INDEX 0:
-        156, 104, CORRELATED SCALAR SUBQUERY 11
-        160, 156, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        166, 156, LIST SUBQUERY 9
-        168, 166, SCAN json_each VIRTUAL TABLE INDEX 0:
-        203, 5, UNION ALL
-        204, 203, COMPOUND QUERY
-        205, 204, LEFT-MOST SUBQUERY
-        208, 205, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        217, 205, CORRELATED SCALAR SUBQUERY 7
-        221, 217, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        227, 217, LIST SUBQUERY 3
-        229, 227, SCAN json_each VIRTUAL TABLE INDEX 0:
-        256, 205, CORRELATED SCALAR SUBQUERY 11
-        260, 256, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        266, 256, LIST SUBQUERY 9
-        268, 266, SCAN json_each VIRTUAL TABLE INDEX 0:
-        303, 204, UNION ALL
-        306, 303, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        316, 303, CORRELATED SCALAR SUBQUERY 7
-        320, 316, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        326, 316, LIST SUBQUERY 3
-        328, 326, SCAN json_each VIRTUAL TABLE INDEX 0:
-        355, 303, CORRELATED SCALAR SUBQUERY 11
-        359, 355, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        365, 355, LIST SUBQUERY 9
-        367, 365, SCAN json_each VIRTUAL TABLE INDEX 0:
-        402, 204, UNION ALL
-        403, 402, COMPOUND QUERY
-        404, 403, LEFT-MOST SUBQUERY
-        405, 404, COMPOUND QUERY
-        406, 405, LEFT-MOST SUBQUERY
-        409, 406, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        418, 406, CORRELATED SCALAR SUBQUERY 5
-        422, 418, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        428, 418, LIST SUBQUERY 3
-        430, 428, SCAN json_each VIRTUAL TABLE INDEX 0:
-        457, 406, CORRELATED SCALAR SUBQUERY 13
-        461, 457, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        467, 457, LIST SUBQUERY 9
-        469, 467, SCAN json_each VIRTUAL TABLE INDEX 0:
-        504, 405, UNION ALL
-        507, 504, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        517, 504, CORRELATED SCALAR SUBQUERY 5
-        521, 517, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        527, 517, LIST SUBQUERY 3
-        529, 527, SCAN json_each VIRTUAL TABLE INDEX 0:
-        556, 504, CORRELATED SCALAR SUBQUERY 13
-        560, 556, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        566, 556, LIST SUBQUERY 9
-        568, 566, SCAN json_each VIRTUAL TABLE INDEX 0:
-        603, 405, UNION ALL
-        604, 603, COMPOUND QUERY
-        605, 604, LEFT-MOST SUBQUERY
-        608, 605, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        617, 605, CORRELATED SCALAR SUBQUERY 7
-        621, 617, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        627, 617, LIST SUBQUERY 3
-        629, 627, SCAN json_each VIRTUAL TABLE INDEX 0:
-        656, 605, CORRELATED SCALAR SUBQUERY 13
-        660, 656, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        666, 656, LIST SUBQUERY 9
-        668, 666, SCAN json_each VIRTUAL TABLE INDEX 0:
-        703, 604, UNION ALL
-        706, 703, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        716, 703, CORRELATED SCALAR SUBQUERY 7
-        720, 716, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        726, 716, LIST SUBQUERY 3
-        728, 726, SCAN json_each VIRTUAL TABLE INDEX 0:
-        755, 703, CORRELATED SCALAR SUBQUERY 13
-        759, 755, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
-        765, 755, LIST SUBQUERY 9
-        767, 765, SCAN json_each VIRTUAL TABLE INDEX 0:
+        20, 6, LIST SUBQUERY 1
+        22, 20, SCAN submissions
+        41, 6, CORRELATED SCALAR SUBQUERY 7
+        45, 41, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        51, 41, LIST SUBQUERY 5
+        53, 51, SCAN json_each VIRTUAL TABLE INDEX 0:
+        80, 6, CORRELATED SCALAR SUBQUERY 13
+        84, 80, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        90, 80, LIST SUBQUERY 11
+        92, 90, SCAN json_each VIRTUAL TABLE INDEX 0:
+        127, 5, UNION ALL
+        130, 127, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        142, 127, LIST SUBQUERY 3
+        144, 142, SCAN submissions
+        163, 127, CORRELATED SCALAR SUBQUERY 7
+        167, 163, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        173, 163, LIST SUBQUERY 5
+        175, 173, SCAN json_each VIRTUAL TABLE INDEX 0:
+        202, 127, CORRELATED SCALAR SUBQUERY 13
+        206, 202, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        212, 202, LIST SUBQUERY 11
+        214, 212, SCAN json_each VIRTUAL TABLE INDEX 0:
+        249, 5, UNION ALL
+        250, 249, COMPOUND QUERY
+        251, 250, LEFT-MOST SUBQUERY
+        254, 251, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        265, 251, LIST SUBQUERY 1
+        267, 265, SCAN submissions
+        286, 251, CORRELATED SCALAR SUBQUERY 9
+        290, 286, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        296, 286, LIST SUBQUERY 5
+        298, 296, SCAN json_each VIRTUAL TABLE INDEX 0:
+        325, 251, CORRELATED SCALAR SUBQUERY 13
+        329, 325, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        335, 325, LIST SUBQUERY 11
+        337, 335, SCAN json_each VIRTUAL TABLE INDEX 0:
+        372, 250, UNION ALL
+        375, 372, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        387, 372, LIST SUBQUERY 3
+        389, 387, SCAN submissions
+        408, 372, CORRELATED SCALAR SUBQUERY 9
+        412, 408, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        418, 408, LIST SUBQUERY 5
+        420, 418, SCAN json_each VIRTUAL TABLE INDEX 0:
+        447, 372, CORRELATED SCALAR SUBQUERY 13
+        451, 447, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        457, 447, LIST SUBQUERY 11
+        459, 457, SCAN json_each VIRTUAL TABLE INDEX 0:
+        494, 250, UNION ALL
+        495, 494, COMPOUND QUERY
+        496, 495, LEFT-MOST SUBQUERY
+        497, 496, COMPOUND QUERY
+        498, 497, LEFT-MOST SUBQUERY
+        501, 498, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        512, 498, LIST SUBQUERY 1
+        514, 512, SCAN submissions
+        533, 498, CORRELATED SCALAR SUBQUERY 7
+        537, 533, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        543, 533, LIST SUBQUERY 5
+        545, 543, SCAN json_each VIRTUAL TABLE INDEX 0:
+        572, 498, CORRELATED SCALAR SUBQUERY 15
+        576, 572, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        582, 572, LIST SUBQUERY 11
+        584, 582, SCAN json_each VIRTUAL TABLE INDEX 0:
+        619, 497, UNION ALL
+        622, 619, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        634, 619, LIST SUBQUERY 3
+        636, 634, SCAN submissions
+        655, 619, CORRELATED SCALAR SUBQUERY 7
+        659, 655, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        665, 655, LIST SUBQUERY 5
+        667, 665, SCAN json_each VIRTUAL TABLE INDEX 0:
+        694, 619, CORRELATED SCALAR SUBQUERY 15
+        698, 694, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        704, 694, LIST SUBQUERY 11
+        706, 704, SCAN json_each VIRTUAL TABLE INDEX 0:
+        741, 497, UNION ALL
+        742, 741, COMPOUND QUERY
+        743, 742, LEFT-MOST SUBQUERY
+        746, 743, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        757, 743, LIST SUBQUERY 1
+        759, 757, SCAN submissions
+        778, 743, CORRELATED SCALAR SUBQUERY 9
+        782, 778, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        788, 778, LIST SUBQUERY 5
+        790, 788, SCAN json_each VIRTUAL TABLE INDEX 0:
+        817, 743, CORRELATED SCALAR SUBQUERY 15
+        821, 817, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        827, 817, LIST SUBQUERY 11
+        829, 827, SCAN json_each VIRTUAL TABLE INDEX 0:
+        864, 742, UNION ALL
+        867, 864, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        879, 864, LIST SUBQUERY 3
+        881, 879, SCAN submissions
+        900, 864, CORRELATED SCALAR SUBQUERY 9
+        904, 900, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        910, 900, LIST SUBQUERY 5
+        912, 910, SCAN json_each VIRTUAL TABLE INDEX 0:
+        939, 864, CORRELATED SCALAR SUBQUERY 15
+        943, 939, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=? AND submission_id=?)
+        949, 939, LIST SUBQUERY 11
+        951, 949, SCAN json_each VIRTUAL TABLE INDEX 0:
         ");
     }
 
@@ -447,6 +490,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await

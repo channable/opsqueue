@@ -152,6 +152,9 @@ pub struct Submission {
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     pub otel_trace_carrier: String,
+    /// When `true`, the submission's chunks are not dispatched to consumers.
+    /// Used by the delegation protocol to hold a submission until a JM master delegates it.
+    pub paused: bool,
 }
 
 /// A submission that has been completed successfully.
@@ -225,6 +228,7 @@ impl Submission {
             chunk_size: ChunkSize::default(),
             metadata: None,
             otel_trace_carrier,
+            paused: false,
         }
     }
 
@@ -244,6 +248,7 @@ impl Submission {
             chunk_size,
             metadata,
             otel_trace_carrier,
+            paused: false,
         };
         let chunks = chunks
             .into_iter()
@@ -319,8 +324,8 @@ pub mod db {
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
-        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO submissions (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size, paused)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ",
             submission.id,
             submission.prefix,
@@ -329,6 +334,7 @@ pub mod db {
             submission.metadata,
             submission.otel_trace_carrier,
             submission.chunk_size.0,
+            submission.paused,
         )
         .execute(conn.get_inner())
         .await?;
@@ -409,6 +415,7 @@ pub mod db {
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
         chunk_size: ChunkSize,
+        paused: bool,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = SubmissionId::new();
@@ -422,6 +429,7 @@ pub mod db {
             chunk_size,
             metadata,
             otel_trace_carrier,
+            paused,
         };
         let iter = chunks_contents
             .into_iter()
@@ -471,6 +479,7 @@ pub mod db {
             , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , otel_trace_carrier
+            , paused AS "paused: bool"
             FROM submissions WHERE id = $1
             "#,
             id
@@ -546,6 +555,7 @@ pub mod db {
             , chunk_size AS "chunk_size: ChunkSize"
             , metadata
             , otel_trace_carrier
+            , paused AS "paused: bool"
         FROM submissions WHERE id = $1
         "#,
             id
@@ -1077,6 +1087,7 @@ pub mod test {
             None,
             strategic_metadata.clone(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1169,6 +1180,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1179,6 +1191,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1189,6 +1202,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1199,6 +1213,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1231,6 +1246,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1241,6 +1257,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1251,6 +1268,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1300,6 +1318,8 @@ pub mod test {
             StrategicMetadataMap::default(),
             // chunk size
             ChunkSize::default(),
+            // paused
+            false,
             &mut conn,
         )
         .await

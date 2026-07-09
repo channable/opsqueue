@@ -18,15 +18,18 @@ pub struct ServerState {
     /// Notified whenever a submission transitions to a terminal state (completed/failed/cancelled),
     /// so the background loop can promptly report it to the JM master.
     pub notify_on_submission_change: Arc<Notify>,
+    /// Notified when new chunks become available for dispatch (e.g. after unpausing a submission).
+    pub notify_on_insert: Arc<Notify>,
     http_client: reqwest::Client,
 }
 
 impl ServerState {
-    pub fn new(pool: DBPools, config: &'static Config) -> Self {
+    pub fn new(pool: DBPools, config: &'static Config, notify_on_insert: Arc<Notify>) -> Self {
         Self {
             pool,
             config,
             notify_on_submission_change: Arc::new(Notify::new()),
+            notify_on_insert,
             http_client: reqwest::Client::new(),
         }
     }
@@ -98,8 +101,9 @@ async fn job_delegate(
     // Attempt to set jm_task_id on the submission, in whichever table it currently lives.
     // The AND jm_task_id IS NULL guard makes this idempotent: if the master retries the
     // same request after an already-successful response, we simply skip the update.
+    // For active submissions, also clear the paused flag so consumers can pick up the chunks.
     let n1 = sqlx::query!(
-        "UPDATE submissions SET jm_task_id = $1 WHERE id = $2 AND jm_task_id IS NULL",
+        "UPDATE submissions SET jm_task_id = $1, paused = 0 WHERE id = $2 AND jm_task_id IS NULL",
         task_id,
         submission_id,
     )
@@ -155,6 +159,10 @@ async fn job_delegate(
     if updated > 0 {
         // Trigger the background loop in case the submission already reached a terminal state.
         state.notify_on_submission_change.notify_one();
+        // If n1 > 0, an active submission was unpaused; wake consumers so they can pick up its chunks.
+        if n1 > 0 {
+            state.notify_on_insert.notify_waiters();
+        }
         return Ok(());
     }
 
@@ -252,9 +260,93 @@ async fn job_kill(
 async fn job_return(
     State(state): State<ServerState>,
     Json(request): Json<Vec<TaskId>>,
-) -> Result<(), ()> {
-    let _ = (state, request);
-    todo!()
+) -> Result<(), StatusCode> {
+    let Some(jm_master_url) = &state.config.jm_master_url else {
+        tracing::warn!("job_return called but jm_master_url is not configured");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+
+    let mut conn = state.pool.writer_conn().await.map_err(|e| {
+        tracing::error!("DB error acquiring writer connection: {e:?}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut returned_task_ids: Vec<String> = Vec::new();
+
+    for task_id in &request {
+        let task_id = &task_id.0;
+
+        // Only return submissions that are still paused (not yet delegated / running).
+        // This request is non-binding: skip tasks that are already active.
+        let row = sqlx::query!(
+            r#"SELECT id AS "id: SubmissionId" FROM submissions WHERE jm_task_id = $1 AND paused"#,
+            task_id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await
+        .map_err(|e| {
+            tracing::error!(%task_id, "DB error looking up submission for return: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        let Some(row) = row else {
+            tracing::debug!(%task_id, "job_return: submission not paused or not found, skipping");
+            continue;
+        };
+
+        // Clear jm_task_id before cancelling so the cancelled row is not picked up by the
+        // background reporting loop.
+        sqlx::query!(
+            "UPDATE submissions SET jm_task_id = NULL WHERE id = $1",
+            row.id,
+        )
+        .execute(conn.get_inner())
+        .await
+        .map_err(|e| {
+            tracing::error!(%task_id, submission_id = %row.id, "DB error clearing jm_task_id for return: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        match crate::common::submission::db::cancel_submission(row.id, &mut conn).await {
+            Ok(()) => {
+                tracing::info!(%task_id, submission_id = %row.id, "Returned paused submission");
+                returned_task_ids.push(task_id.clone());
+            }
+            Err(E::R(_)) => {
+                tracing::debug!(%task_id, submission_id = %row.id, "job_return: submission already terminal");
+            }
+            Err(E::L(e)) => {
+                tracing::error!(%task_id, submission_id = %row.id, "DB error cancelling submission for return: {e:?}");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    }
+
+    if returned_task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let url = format!(
+        "{}/delegation/return",
+        jm_master_url.as_str().trim_end_matches('/')
+    );
+    state
+        .http_client
+        .put(&url)
+        .json(&returned_task_ids)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("HTTP error reporting returned tasks: {e:?}");
+            StatusCode::BAD_GATEWAY
+        })?
+        .error_for_status()
+        .map_err(|e| {
+            tracing::error!("JM master rejected returned tasks: {e:?}");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    Ok(())
 }
 
 const JOBMACHINE_DELEGATION_BACKGROUND_LOOP: std::time::Duration =

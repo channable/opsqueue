@@ -359,6 +359,7 @@ mod tests {
             metadata: None,
             strategic_metadata: Default::default(),
             chunk_size: None,
+            paused: false,
         };
         client
             .insert_submission(&submission, &Default::default())
@@ -402,6 +403,7 @@ mod tests {
             metadata: None,
             strategic_metadata: Default::default(),
             chunk_size: None,
+            paused: false,
         };
         let submission_id = client
             .insert_submission(&submission, &Default::default())

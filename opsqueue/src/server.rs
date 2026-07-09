@@ -81,8 +81,8 @@ pub fn build_router(
     .run_background()
     .build_router();
     let producer_routes =
-        crate::producer::server::ServerState::new(pool.clone(), notify_on_insert).build_router();
-    let delegation_routes = crate::delegation::server::ServerState::new(pool, config)
+        crate::producer::server::ServerState::new(pool.clone(), notify_on_insert.clone()).build_router();
+    let delegation_routes = crate::delegation::server::ServerState::new(pool, config, notify_on_insert)
         .run_background(cancellation_token.clone())
         .build_router();
 

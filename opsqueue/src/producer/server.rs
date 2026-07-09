@@ -152,6 +152,7 @@ async fn insert_submission(
         request.metadata,
         request.strategic_metadata,
         request.chunk_size.unwrap_or_default(),
+        request.paused,
         &mut conn,
     )
     .await?;
