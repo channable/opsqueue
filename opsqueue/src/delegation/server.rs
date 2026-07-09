@@ -159,7 +159,8 @@ async fn job_delegate(
     if updated > 0 {
         // Trigger the background loop in case the submission already reached a terminal state.
         state.notify_on_submission_change.notify_one();
-        // If n1 > 0, an active submission was unpaused; wake consumers so they can pick up its chunks.
+        // If n1 > 0, an active submission might have been unpaused; wake consumers so they can pick
+        // up its chunks.
         if n1 > 0 {
             state.notify_on_insert.notify_waiters();
         }
@@ -261,26 +262,21 @@ async fn job_return(
     State(state): State<ServerState>,
     Json(request): Json<Vec<TaskId>>,
 ) -> Result<(), StatusCode> {
-    let Some(jm_master_url) = &state.config.jm_master_url else {
-        tracing::warn!("job_return called but jm_master_url is not configured");
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    };
-
     let mut conn = state.pool.writer_conn().await.map_err(|e| {
         tracing::error!("DB error acquiring writer connection: {e:?}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let mut returned_task_ids: Vec<String> = Vec::new();
+    let mut any_paused = false;
 
     for task_id in &request {
         let task_id = &task_id.0;
 
-        // Re-pause the submission and clear jm_task_id so the background reporting loop
-        // does not pick it up, and so consumers stop dispatching its chunks.
+        // Re-pause the submission and keep jm_task_id set so the background loop can
+        // report it to the JM master via /delegation/return.
         // If the submission is not in the active table (already terminal or unknown), skip it.
         let rows_affected = sqlx::query!(
-            "UPDATE submissions SET paused = 1, jm_task_id = NULL WHERE jm_task_id = $1",
+            "UPDATE submissions SET paused = 1 WHERE jm_task_id = $1",
             task_id,
         )
         .execute(conn.get_inner())
@@ -292,36 +288,16 @@ async fn job_return(
         .rows_affected();
 
         if rows_affected > 0 {
-            tracing::info!(%task_id, "Returned (re-paused) submission");
-            returned_task_ids.push(task_id.clone());
+            tracing::info!(%task_id, "Queued submission for return (re-paused)");
+            any_paused = true;
         } else {
             tracing::debug!(%task_id, "job_return: submission not active or not found, skipping");
         }
     }
 
-    if returned_task_ids.is_empty() {
-        return Ok(());
+    if any_paused {
+        state.notify_on_submission_change.notify_one();
     }
-
-    let url = format!(
-        "{}/delegation/return",
-        jm_master_url.as_str().trim_end_matches('/')
-    );
-    state
-        .http_client
-        .put(&url)
-        .json(&returned_task_ids)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!("HTTP error reporting returned tasks: {e:?}");
-            StatusCode::BAD_GATEWAY
-        })?
-        .error_for_status()
-        .map_err(|e| {
-            tracing::error!("JM master rejected returned tasks: {e:?}");
-            StatusCode::BAD_GATEWAY
-        })?;
 
     Ok(())
 }
@@ -360,8 +336,11 @@ async fn run_in_background(
 }
 
 /// Queries all terminal submissions with `jm_task_id IS NOT NULL`, reports them to the
-/// JM master via `/delegation/complete`, then deletes the rows (along with their
-/// associated chunks and metadata) on success.
+/// JM master via `/delegation/complete`, then clears `jm_task_id` on success.
+///
+/// Also queries paused active submissions with `jm_task_id IS NOT NULL` (queued for return
+/// via `job_return`), reports them to the JM master via `/delegation/return`, then clears
+/// `jm_task_id` on success.
 async fn report_delegated_submissions(
     state: &ServerState,
     jm_master_url: &url::Url,
@@ -390,9 +369,17 @@ async fn report_delegated_submissions(
     .fetch_all(conn.get_inner())
     .await?;
 
+    // Paused active submissions queued for return via job_return.
+    let to_return = sqlx::query!(
+        r#"SELECT id AS "id: SubmissionId", jm_task_id
+        FROM submissions WHERE paused AND jm_task_id IS NOT NULL"#
+    )
+    .fetch_all(conn.get_inner())
+    .await?;
+
     drop(conn);
 
-    let tasks_to_report: Vec<DelegatedJobCompletion> = completed
+    let tasks_to_complete: Vec<DelegatedJobCompletion> = completed
         .iter()
         .map(|r| DelegatedJobCompletion {
             task_id: r.jm_task_id.clone().unwrap(),
@@ -414,36 +401,61 @@ async fn report_delegated_submissions(
         }))
         .collect();
 
-    if tasks_to_report.is_empty() {
+    let tasks_to_return: Vec<String> = to_return
+        .iter()
+        .map(|r| r.jm_task_id.clone().unwrap())
+        .collect();
+
+    if tasks_to_complete.is_empty() && tasks_to_return.is_empty() {
         return Ok(());
     }
 
     if triggered_by_timeout {
         tracing::warn!(
-            n_tasks = tasks_to_report.len(),
+            n_complete = tasks_to_complete.len(),
+            n_return = tasks_to_return.len(),
             "Delegation background loop triggered by timeout with pending tasks; \
              possible missing notify_on_submission_change call"
         );
     }
 
-    let url = format!(
-        "{}/delegation/complete",
-        jm_master_url.as_str().trim_end_matches('/')
-    );
-    state
-        .http_client
-        .put(&url)
-        .json(&tasks_to_report)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    // Report succeeded; clear jm_task_id on all reported rows so the periodic cleanup
-    // worker can delete them in due course.
     let mut conn = state.pool.writer_conn().await?;
-    clear_jm_task_id("submissions_completed", &completed.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
-    clear_jm_task_id("submissions_failed", &failed.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
-    clear_jm_task_id("submissions_cancelled", &cancelled.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
+
+    if !tasks_to_complete.is_empty() {
+        let url = format!(
+            "{}/delegation/complete",
+            jm_master_url.as_str().trim_end_matches('/')
+        );
+        state
+            .http_client
+            .put(&url)
+            .json(&tasks_to_complete)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        // Report succeeded; clear jm_task_id so the periodic cleanup worker can delete them.
+        clear_jm_task_id("submissions_completed", &completed.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
+        clear_jm_task_id("submissions_failed", &failed.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
+        clear_jm_task_id("submissions_cancelled", &cancelled.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
+    }
+
+    if !tasks_to_return.is_empty() {
+        let url = format!(
+            "{}/delegation/return",
+            jm_master_url.as_str().trim_end_matches('/')
+        );
+        state
+            .http_client
+            .put(&url)
+            .json(&tasks_to_return)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        // Return reported; clear jm_task_id so these submissions are no longer tracked.
+        clear_jm_task_id("submissions", &to_return.iter().map(|r| r.id).collect::<Vec<_>>(), &mut conn).await?;
+    }
 
     Ok(())
 }
