@@ -94,11 +94,15 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
+        paused: bool = False,
     ) -> Iterator[Any]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
 
         Chunking is done automatically, based on the provided chunk size.
+
+        If `paused` is True, the submission will not be dispatched to consumers until
+        it is explicitly unpaused (e.g. via the delegation `job_delegate` endpoint).
 
         If the submission fails, an exception will be raised.
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
@@ -114,6 +118,7 @@ class ProducerClient:
                 metadata=metadata,
                 strategic_metadata=strategic_metadata,
                 chunk_size=chunk_size,
+                paused=paused,
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
@@ -125,6 +130,7 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
+        paused: bool = False,
     ) -> AsyncIterator[Any]:
         tracer = trace.get_tracer("opsqueue.producer")
         with tracer.start_as_current_span("run_submission"):
@@ -133,6 +139,7 @@ class ProducerClient:
                 metadata=metadata,
                 strategic_metadata=strategic_metadata,
                 chunk_size=chunk_size,
+                paused=paused,
             )
             return _async_unchunk_iterator(results_iter, serialization_format)
 
@@ -144,12 +151,16 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
+        paused: bool = False,
     ) -> SubmissionId:
         """
         Inserts a submission into the queue,
         returning an ID you can use to track the submission's progress afterwards.
 
         Chunking is done automatically, based on the provided chunk size.
+
+        If `paused` is True, the submission will not be dispatched to consumers until
+        it is explicitly unpaused (e.g. via the delegation `job_delegate` endpoint).
 
         Raises:
         - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
@@ -160,6 +171,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
+            paused=paused,
         )
 
     def blocking_stream_completed_submission(
@@ -209,9 +221,13 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
+        paused: bool = False,
     ) -> Iterator[bytes]:
         """
         Inserts an already-chunked submission into the queue, and blocks until it is completed.
+
+        If `paused` is True, the submission will not be dispatched to consumers until
+        it is explicitly unpaused (e.g. via the delegation `job_delegate` endpoint).
 
         If the submission fails, an exception will be raised.
         (If opsqueue or the object storage cannot be reached, exceptions will also be raised).
@@ -226,6 +242,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
+            paused=paused,
         )
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
@@ -236,6 +253,7 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
+        paused: bool = False,
     ) -> AsyncIterator[bytes]:
         # NOTE: the insertion is not currently async.
         # Why? Simplicity. This is unlikely to be the bottleneck
@@ -246,6 +264,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
+            paused=paused,
         )
 
         return await self.async_stream_completed_submission_chunks(submission_id)
@@ -257,10 +276,14 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
+        paused: bool = False,
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
         returning an ID you can use to track the submission's progress afterwards.
+
+        If `paused` is True, the submission will not be dispatched to consumers until
+        it is explicitly unpaused (e.g. via the delegation `job_delegate` endpoint).
 
         Raises:
         - `InternalProducerClientError` if there is a low-level internal error.
@@ -272,6 +295,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
+            paused=paused,
             otel_trace_carrier=otel_trace_carrier,
         )
 

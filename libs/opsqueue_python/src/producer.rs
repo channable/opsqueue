@@ -192,13 +192,14 @@ impl ProducerClient {
     /// Directly inserts a submission without sending the chunks to GCS
     /// (but immediately embedding them in the DB).
     /// NOTE: This does not support StrategicMetadata currently
-    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, paused=false, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
         chunk_size: Option<u64>,
+        paused: bool,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         let strategic_metadata = Default::default();
@@ -211,6 +212,7 @@ impl ProducerClient {
                 },
                 metadata,
                 strategic_metadata,
+                paused,
             };
             self.block_unless_interrupted(async move {
                 self.producer_client
@@ -222,7 +224,7 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, paused=false, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn insert_submission_chunks(
         &self,
@@ -231,6 +233,7 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<i64>,
+        paused: bool,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         SubmissionId,
@@ -271,6 +274,7 @@ impl ProducerClient {
                     },
                     metadata,
                     strategic_metadata: strategic_metadata.unwrap_or_default(),
+                    paused,
                 };
                 self.producer_client
                     .insert_submission(&submission, &otel_trace_carrier)
@@ -312,7 +316,7 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, paused=false, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
     pub fn run_submission_chunks(
         &self,
@@ -321,6 +325,7 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<i64>,
+        paused: bool,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<
         PyChunksIter,
@@ -338,6 +343,7 @@ impl ProducerClient {
                 metadata,
                 strategic_metadata,
                 chunk_size,
+                paused,
                 otel_trace_carrier,
             )
             .map_err(|CError(e)| {
