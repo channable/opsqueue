@@ -81,11 +81,15 @@ pub fn build_router(
     .run_background()
     .build_router();
     let producer_routes =
-        crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
+        crate::producer::server::ServerState::new(pool.clone(), notify_on_insert).build_router();
+    let delegation_routes = crate::delegation::server::ServerState::new(pool, config)
+        .run_background(cancellation_token.clone())
+        .build_router();
 
     let routes = Router::new()
         .nest("/producer", producer_routes)
-        .nest("/consumer", consumer_routes);
+        .nest("/consumer", consumer_routes)
+        .nest("/", delegation_routes);
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(|request: &http::Request<_>| {

@@ -102,7 +102,8 @@ server-logic = [
     "dep:tower-http",
     "dep:axum-prometheus",
     "dep:sentry",
-    "dep:sentry-tracing"
+    "dep:sentry-tracing",
+    "dep:reqwest",
     ]
 # Dependencies only in use by the client libraries:
 client-logic = [

@@ -748,8 +748,8 @@ pub mod db {
         let submission_opt = query!(
             "
     INSERT INTO submissions_cancelled
-    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
-    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
+    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done, jm_task_id)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done, jm_task_id FROM submissions WHERE id = $2;
 
     DELETE FROM submissions WHERE id = $3 RETURNING *;
     ",
@@ -783,8 +783,8 @@ pub mod db {
     SAVEPOINT complete_submission_raw;
 
     INSERT INTO submissions_completed
-    (id, chunks_total, prefix, metadata, completed_at)
-    SELECT id, chunks_total, prefix, metadata, julianday($1) FROM submissions WHERE id = $2;
+    (id, chunks_total, prefix, metadata, completed_at, jm_task_id)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), jm_task_id FROM submissions WHERE id = $2;
 
     DELETE FROM submissions WHERE id = $3 RETURNING *;
 
@@ -819,8 +819,8 @@ pub mod db {
         query!(
             "
     INSERT INTO submissions_failed
-    (id, chunks_total, chunks_done, prefix, metadata, failed_at, failed_chunk_id)
-    SELECT id, chunks_total, chunks_done, prefix, metadata, julianday($1), $2 FROM submissions WHERE id = $3;
+    (id, chunks_total, chunks_done, prefix, metadata, failed_at, failed_chunk_id, jm_task_id)
+    SELECT id, chunks_total, chunks_done, prefix, metadata, julianday($1), $2, jm_task_id FROM submissions WHERE id = $3;
 
     DELETE FROM submissions WHERE id = $4 RETURNING *;
     ",
@@ -909,11 +909,14 @@ pub mod db {
         tracing::info!("Cleaning up old completed/failed submissions...");
         conn.transaction(move |mut tx| {
             Box::pin(async move {
-                // Clean up old submissions_metadata
+                // Clean up old submissions_metadata.
+                // Skip metadata for submissions with jm_task_id set; those are cleaned up by
+                // the delegation background loop after reporting to the JM master.
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
-                        SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
+                        SELECT id FROM submissions_completed
+                        WHERE completed_at < julianday($1) AND jm_task_id IS NULL
                     );",
                     older_than
                 )
@@ -922,7 +925,8 @@ pub mod db {
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
-                        SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
+                        SELECT id FROM submissions_failed
+                        WHERE failed_at < julianday($1) AND jm_task_id IS NULL
                     );",
                     older_than
                 )
@@ -931,33 +935,40 @@ pub mod db {
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
-                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
+                        SELECT id FROM submissions_cancelled
+                        WHERE cancelled_at < julianday($1) AND jm_task_id IS NULL
                     );",
                     older_than
                 )
                 .execute(tx.get_inner())
                 .await?;
 
-                // Clean up old submissions:
+                // Clean up old submissions. Skip rows with jm_task_id set; the delegation
+                // background loop is responsible for reporting those to the JM master and
+                // deleting them afterwards.
                 let n_submissions_completed = query!(
-                    "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
+                    "DELETE FROM submissions_completed
+                    WHERE completed_at < julianday($1) AND jm_task_id IS NULL;",
                     older_than
                 )
                 .execute(tx.get_inner())
                 .await?.rows_affected();
                 let n_submissions_failed = query!(
-                    "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
+                    "DELETE FROM submissions_failed
+                    WHERE failed_at < julianday($1) AND jm_task_id IS NULL;",
                     older_than
                 )
                 .execute(tx.get_inner())
                 .await?.rows_affected();
                 let n_submissions_cancelled = query!(
-                    "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
+                    "DELETE FROM submissions_cancelled
+                    WHERE cancelled_at < julianday($1) AND jm_task_id IS NULL;",
                     older_than
                 )
                 .execute(tx.get_inner())
                 .await?.rows_affected();
 
+                // Clean up old chunks.
                 let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
                     older_than

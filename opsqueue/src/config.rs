@@ -77,6 +77,14 @@ pub struct Config {
 
     #[arg(long, default_value = "1 hour")]
     pub max_submission_age: humantime::Duration,
+
+    /// Base URL of the Jobmachine master, used by the delegation server to report
+    /// completed/failed/cancelled tasks back to the master via `/delegation/complete`.
+    ///
+    /// When not set, the delegation endpoints (`/job/delegate`, `/job/kill`, `/job/return`)
+    /// still accept requests but completed tasks are never reported back to the master.
+    #[arg(long)]
+    pub jm_master_url: Option<url::Url>,
 }
 
 impl Default for Config {
@@ -101,6 +109,7 @@ impl Default for Config {
             max_missable_heartbeats,
             max_chunk_retries,
             max_submission_age,
+            jm_master_url: None,
         }
     }
 }
