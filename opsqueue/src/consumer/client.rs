@@ -1,7 +1,11 @@
 use std::{
     collections::HashMap,
+    error::Error,
     str::FromStr,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -39,12 +43,6 @@ use super::{
 
 use backon::{BackoffBuilder, FibonacciBuilder, Retryable};
 
-type InFlightRequests = Arc<
-    Mutex<(
-        usize,
-        HashMap<usize, oneshot::Sender<SyncServerToClientResponse>>,
-    )>,
->;
 type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// A wrapper around the actual client,
@@ -158,6 +156,60 @@ fn retry_policy() -> impl BackoffBuilder {
         .without_max_times()
 }
 
+/// A shared tuple of:
+///
+/// * A nonce counter
+/// * A map of nonce -> oneshot sender for the response of the request
+///
+/// Asynchronous requests are sent to the server with a nonce but we don't expect a response for
+/// them.
+///
+/// Synchronous requests are sent to the server with a nonce and we expect a response for them. The
+/// nonce is used to match the response to the request.
+#[allow(clippy::type_complexity)]
+#[derive(Debug, Clone)]
+struct InFlightRequests(
+    Arc<(
+        AtomicUsize,
+        Mutex<HashMap<usize, oneshot::Sender<SyncServerToClientResponse>>>,
+    )>,
+);
+
+impl InFlightRequests {
+    fn next_nonce(&self) -> usize {
+        self.0 .0.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn next_nonce_with_oneshot(
+        &self,
+    ) -> (usize, oneshot::Receiver<SyncServerToClientResponse>) {
+        let (oneshot_sender, oneshot_receiver) = oneshot::channel();
+        let mut guard = self.0 .1.lock().await;
+        // This is called within the lock, so we know the nonce and the oneshot_sender are inserted atomically.
+        let nonce = self.next_nonce();
+        guard.insert(nonce, oneshot_sender);
+        (nonce, oneshot_receiver)
+    }
+
+    async fn send(
+        &self,
+        envelop: Envelope<SyncServerToClientResponse>,
+    ) -> Result<(), SyncServerToClientResponse> {
+        let mut in_flight_requests = self.0 .1.lock().await;
+        let oneshot_sender = in_flight_requests
+            .remove(&envelop.nonce)
+            .expect("Received response with nonce that matches none of the open requests");
+        oneshot_sender.send(envelop.contents)
+    }
+
+    async fn clear(&self) {
+        let mut in_flight_requests = self.0 .1.lock().await;
+        // This is called within the lock, so we know the nonce and the `onceshot_sender`s are cleared atomically.
+        self.0 .0.store(0, Ordering::SeqCst);
+        in_flight_requests.clear();
+    }
+}
+
 #[derive(Debug)]
 pub struct Client {
     in_flight_requests: InFlightRequests,
@@ -177,7 +229,8 @@ impl Client {
         let endpoint_uri = Uri::from_str(&endpoint_url)?;
         tracing::debug!("Connecting to: {}", endpoint_uri);
 
-        let in_flight_requests: InFlightRequests = Arc::new(Mutex::new((0, HashMap::new())));
+        let in_flight_requests =
+            InFlightRequests(Arc::new((AtomicUsize::new(0), Mutex::new(HashMap::new()))));
 
         let (websocket_conn, _resp) = tokio_tungstenite::connect_async(endpoint_uri).await?;
         let (ws_sink, mut ws_stream) = websocket_conn.split();
@@ -282,16 +335,52 @@ impl Client {
                                 let msg: ServerToClientMessage = msg.try_into().expect("Unparsable ServerToClientMessage");
                                 match msg {
                                     ServerToClientMessage::Sync(envelope) => {
-                                        let mut in_flight_requests = in_flight_requests.lock().await;
-                                        // Handle the response to some earlier request
-                                        let oneshot_receiver = in_flight_requests.1.remove(&envelope.nonce).expect("Received response with nonce that matches none of the open requests");
-                                        let _ = oneshot_receiver.send(envelope.contents);
-
+                                        let Err(contents) = in_flight_requests.send(envelope).await else { continue; };
+                                        tracing::warn!("Failed to send envelope to in-flight requests");
+                                        match contents {
+                                            SyncServerToClientResponse::ChunksReserved(reservation) => {
+                                                let Ok(chunks) = reservation else { continue; };
+                                                for chunk in chunks.iter() {
+                                                    let chunk_id = ChunkId::from((chunk.0.submission_id, chunk.0.chunk_index));
+                                                    // Send message to the server to indicate that we are no longer
+                                                    // reserving this chunk, so that it can be re-reserved by other
+                                                    // consumers.
+                                                    let Err(internal_error): Result<_, InternalConsumerClientError> = Self::async_request(
+                                                        &in_flight_requests,
+                                                        &ws_sink,
+                                                        ClientToServerMessage::FailChunk {
+                                                            id: chunk_id,
+                                                            failure: "Requester disappeared".into(),
+                                                        },
+                                                    ).await else { continue; };
+                                                    tracing::error!(error = &internal_error as &dyn Error, chunk_id = ?chunk_id, "Failed to return unhandled reservation to server");
+                                                }
+                                            },
+                                        }
                                     },
                                     ServerToClientMessage::Async(msg) => {
                                         match msg {
                                             AsyncServerToClientMessage::ChunkReservationExpired(chunk_id) => {
                                                 tracing::info!("Server indicated that we took too long with {chunk_id:?}, and now our reservation has expired.");
+                                                // Send message to the server to indicate that we are no longer
+                                                // reserving this chunk, so that it can be re-reserved by other
+                                                // consumers. This round-trip is necessary to avoid a race condition
+                                                // where we sent the success or failure of the chunk to the server,
+                                                // while we lost the reservation window.
+                                                //
+                                                // In a race where a chunk success was already sent to the server, this
+                                                // change allows that chunk to succeed and not be spuriously retried.
+                                                // Connection ordering guarantees the round-trip of the reservation
+                                                // expiry will come after the success.
+                                                let Err(internal_error): Result<_, InternalConsumerClientError> = Self::async_request(
+                                                    &in_flight_requests,
+                                                    &ws_sink,
+                                                    ClientToServerMessage::FailChunk {
+                                                        id: chunk_id,
+                                                        failure: "Reservation expired".into(),
+                                                    },
+                                                ).await else { continue; };
+                                                tracing::error!(error = &internal_error as &dyn Error, chunk_id = ?chunk_id, "Failed to return expired reservation to server");
                                             },
                                         }
                                     }
@@ -305,43 +394,34 @@ impl Client {
         }
         // Clear any and all in-flight requests on exit of the background task.
         // This ensures that any waiting requests immediately return with an error as well.
-        let mut in_flight_requests = in_flight_requests.lock().await;
-        in_flight_requests.1.clear();
-        in_flight_requests.0 = 0;
+        in_flight_requests.clear().await;
     }
 
     async fn sync_request(
         &self,
         request: ClientToServerMessage,
     ) -> Result<SyncServerToClientResponse, InternalConsumerClientError> {
-        let (oneshot_sender, oneshot_receiver) = oneshot::channel();
-        {
-            let mut in_flight_requests = self.in_flight_requests.lock().await;
-            let nonce = in_flight_requests.0;
-            in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
-            let envelope = Envelope {
-                nonce,
-                contents: request,
-            };
-            in_flight_requests.1.insert(nonce, oneshot_sender);
-            let () = self.ws_sink.lock().await.send(envelope.into()).await?;
-        }
-        let resp = oneshot_receiver.await?;
-        Ok(resp)
-    }
-
-    async fn async_request(
-        &self,
-        request: ClientToServerMessage,
-    ) -> Result<(), InternalConsumerClientError> {
-        let mut in_flight_requests = self.in_flight_requests.lock().await;
-        let nonce = in_flight_requests.0;
-        in_flight_requests.0 = in_flight_requests.0.wrapping_add(1);
+        let (nonce, oneshot_receiver) = self.in_flight_requests.next_nonce_with_oneshot().await;
         let envelope = Envelope {
             nonce,
             contents: request,
         };
         let () = self.ws_sink.lock().await.send(envelope.into()).await?;
+        let resp = oneshot_receiver.await?;
+        Ok(resp)
+    }
+
+    async fn async_request(
+        in_flight_requests: &InFlightRequests,
+        ws_sink: &Mutex<SplitSink<WebsocketTcpStream, Message>>,
+        request: ClientToServerMessage,
+    ) -> Result<(), InternalConsumerClientError> {
+        let nonce = in_flight_requests.next_nonce();
+        let envelope = Envelope {
+            nonce,
+            contents: request,
+        };
+        let () = ws_sink.lock().await.send(envelope.into()).await?;
         Ok(())
     }
 
@@ -363,8 +443,12 @@ impl Client {
         id: ChunkId,
         output_content: chunk::Content,
     ) -> Result<(), InternalConsumerClientError> {
-        self.async_request(ClientToServerMessage::CompleteChunk { id, output_content })
-            .await
+        Self::async_request(
+            &self.in_flight_requests,
+            &self.ws_sink,
+            ClientToServerMessage::CompleteChunk { id, output_content },
+        )
+        .await
     }
 
     pub async fn fail_chunk(
@@ -372,8 +456,12 @@ impl Client {
         id: ChunkId,
         failure: String,
     ) -> Result<(), InternalConsumerClientError> {
-        self.async_request(ClientToServerMessage::FailChunk { id, failure })
-            .await
+        Self::async_request(
+            &self.in_flight_requests,
+            &self.ws_sink,
+            ClientToServerMessage::FailChunk { id, failure },
+        )
+        .await
     }
 }
 
