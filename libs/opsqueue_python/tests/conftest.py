@@ -121,11 +121,12 @@ def background_process(
 @contextmanager
 def multiple_background_processes(
     function: Callable[[int], None], count: int
-) -> Generator[None, None, None]:
+) -> Generator[list[multiprocess.Process], None, None]:
     with ExitStack() as stack:
-        for p in range(count):
+        yield [
             stack.enter_context(background_process(function, args=(p,)))
-        yield
+            for p in range(count)
+        ]
 
 
 type StrategyDescription = str | tuple[str, str, StrategyDescription]
