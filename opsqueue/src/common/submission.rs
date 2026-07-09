@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::common::StrategicMetadataMap;
+#[cfg(feature = "server-logic")]
 use crate::E;
 use chrono::{DateTime, Utc};
 use ux::u63;
