@@ -230,8 +230,7 @@ impl Chunk {
                 tracing::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
                 let res = object_store_client
                     .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
-                    .await?
-                    .to_vec();
+                    .await?;
                 tracing::debug!("Fetched chunk content: {res:?}");
                 (res, Some(prefix))
             }
