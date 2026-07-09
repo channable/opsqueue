@@ -1,6 +1,7 @@
 use crate::common::submission::SubmissionId;
 use crate::config::Config;
 use crate::db::{Connection as _, DBPools};
+use crate::common::errors::E;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -195,9 +196,56 @@ async fn job_delegate(
 async fn job_kill(
     State(state): State<ServerState>,
     Json(request): Json<Vec<TaskId>>,
-) -> Result<(), ()> {
-    let _ = (state, request);
-    todo!()
+) -> Result<(), StatusCode> {
+    let mut conn = state.pool.writer_conn().await.map_err(|e| {
+        tracing::error!("DB error acquiring writer connection: {e:?}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut any_cancelled = false;
+
+    for task_id in &request {
+        let task_id = &task_id.0;
+        // Find the submission ID for this task, if it is still active.
+        let row = sqlx::query!(
+            r#"SELECT id AS "id: SubmissionId" FROM submissions WHERE jm_task_id = $1"#,
+            task_id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await
+        .map_err(|e| {
+            tracing::error!(%task_id, "DB error looking up submission for kill: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        let Some(row) = row else {
+            // Either already in a terminal table (background loop will report it) or unknown.
+            // Both are fine — kill is best-effort.
+            tracing::debug!(%task_id, "job_kill: submission not active, skipping");
+            continue;
+        };
+
+        match crate::common::submission::db::cancel_submission(row.id, &mut conn).await {
+            Ok(()) => {
+                tracing::info!(%task_id, submission_id = %row.id, "Cancelled submission on kill request");
+                any_cancelled = true;
+            }
+            // Already in a terminal state — nothing to do.
+            Err(E::R(_)) => {
+                tracing::debug!(%task_id, submission_id = %row.id, "job_kill: submission already terminal");
+            }
+            Err(E::L(e)) => {
+                tracing::error!(%task_id, submission_id = %row.id, "DB error cancelling submission: {e:?}");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    }
+
+    if any_cancelled {
+        state.notify_on_submission_change.notify_one();
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip(state))]
