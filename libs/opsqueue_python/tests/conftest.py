@@ -31,11 +31,8 @@ class OpsqueueProcess:
 
 @functools.cache
 def opsqueue_bin_location() -> Path:
-    if os.environ.get("OPSQUEUE_VIA_NIX"):
-        deriv_path = (
-            subprocess.check_output(["just", "nix-build-bin"]).decode("utf-8").strip()
-        )
-        return Path(deriv_path) / "bin" / "opsqueue"
+    if explicit_bin := os.environ.get("OPSQUEUE_BIN", "").strip():
+        return Path(explicit_bin)
     else:
         subprocess.run(
             ["cargo", "build", "--quiet", "--bin", "opsqueue"],
