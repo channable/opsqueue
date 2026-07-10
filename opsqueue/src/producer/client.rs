@@ -313,7 +313,7 @@ mod tests {
         tokio::task::yield_now().await;
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn test_count_submissions(pool: sqlx::SqlitePool) {
         let url = "0.0.0.0:4002";
         start_server_in_background(&pool, url).await;
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn test_insert_submission(pool: sqlx::SqlitePool) {
         let url = "0.0.0.0:4000";
         start_server_in_background(&pool, url).await;
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(count, 4);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn test_get_submission(pool: sqlx::SqlitePool) {
         let url = "0.0.0.0:4001";
         start_server_in_background(&pool, url).await;

@@ -37,3 +37,8 @@ repos:
         language: system
         types: [nix]
         exclude: extra
+      - id: sqlx-test-needs-migrator
+        name: Require `#[sqlx::test(migrator = "crate::MIGRATOR")]` for test-build speed
+        entry: '#\[sqlx::test\]'
+        language: pygrep
+        types: [rust]

@@ -1070,7 +1070,7 @@ pub mod test {
         );
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_in_progress(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let query = r#"
@@ -1098,7 +1098,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_completed(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let query = r#"
@@ -1126,7 +1126,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_failed(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let query = r#"
@@ -1156,7 +1156,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_cancelled(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let query = r#"
@@ -1183,7 +1183,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_insert_submission(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -1203,7 +1203,7 @@ pub mod test {
         assert_matches!(count_submissions(&mut conn).await, Ok(1));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_get_submission(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -1226,7 +1226,7 @@ pub mod test {
         assert_eq!(fetched_submission, submission);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_submission_strategic_metadata(db: sqlx::SqlitePool) {
         let strategic_metadata: StrategicMetadataMap =
             [("company_id".to_string(), 123), ("flavour".to_string(), 42)]
@@ -1253,7 +1253,7 @@ pub mod test {
         assert_eq!(fetched_metadata, strategic_metadata);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_complete_submission_raw(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -1278,7 +1278,7 @@ pub mod test {
         assert_matches!(count_submissions_failed(&mut conn).await, Ok(0));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fail_submission_raw(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -1305,7 +1305,7 @@ pub mod test {
         assert_matches!(count_submissions_failed(&mut conn).await, Ok(1));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_cleanup_old(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -1432,7 +1432,7 @@ pub mod test {
         let _sub2 = submission_status(old_four_unfailed, &mut conn).await;
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     /// Test whether empty submissions are marked as completed right away by `insert_submission_from_chunks`.
     pub async fn auto_complete_empty_submission(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
