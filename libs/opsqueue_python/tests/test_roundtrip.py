@@ -124,16 +124,16 @@ def test_complete_then_fail_chunks(
         input_iter = range(0, n_ops)
 
         output_iter: Iterator[int] = producer_client.run_submission(
-            input_iter, chunk_size=chunk_size, strategic_metadata={"id": 42}
+            input_iter,
+            chunk_size=chunk_size,
+            strategic_metadata={"id": 42, "second_id": 69},
         )
         res = sum(output_iter)
 
         assert res == sum(range(0, n_ops))
 
 
-def test_empty_submission(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
-) -> None:
+def test_empty_submission(opsqueue: OpsqueueProcess) -> None:
     """
     Empty submissions ought to be supported without problems.
     Opsqueue should immediately consider these 'completed'
@@ -431,7 +431,7 @@ def test_metadata_in_submission_failed(
 
 
 def test_cancel_submission_not_found(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Attempting to cancel a submission that doesn't exist raises a
     SubmissionNotFoundError.
@@ -446,7 +446,7 @@ def test_cancel_submission_not_found(
 
 
 def test_cancel_in_progress(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Cancelling a submission that is in progress succeeds and returns none.
     Attempting to cancel a submission that is already cancelled should raise a
@@ -469,7 +469,7 @@ def test_cancel_in_progress(
 
 
 def test_cancel_already_cancelled(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Attempting to cancel a submission that is already cancelled should raise
     a SubmissionNotCancellableError.

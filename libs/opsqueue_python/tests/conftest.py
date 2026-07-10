@@ -135,7 +135,13 @@ type StrategyDescription = str | tuple[str, str, StrategyDescription]
 basic_strategies: Iterable[StrategyDescription] = ("Random", "Newest", "Oldest")
 any_strategies: Iterable[StrategyDescription] = (
     *(basic_strategies),
-    *(("PreferDistinct", "id", s) for s in basic_strategies),
+    *(
+        ("PreferDistinct", "id", s)
+        for s in (
+            *basic_strategies,
+            *(("PreferDistinct", "second_id", s) for s in basic_strategies),
+        )
+    ),
 )
 
 
