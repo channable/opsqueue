@@ -46,6 +46,7 @@ let
       # Rust build tools
       pkgs.cargo-audit
       pkgs.cargo-edit
+      pkgs.cargo-insta
       pkgs.cargo-nextest
       pkgs.maturin
 
