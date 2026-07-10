@@ -80,6 +80,7 @@ lint-heavy: clippy mypy
 [group('lint')]
 clippy:
   cargo clippy --no-deps --fix --allow-dirty --allow-staged -- -Dwarnings
+  cargo clippy --no-deps -- -Dwarnings
 
 # Python static analysis type-checker
 [group('lint')]
