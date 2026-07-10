@@ -101,6 +101,7 @@ pub mod test {
 
     use super::*;
     use itertools::Itertools;
+    use sqlformat::{format, FormatOptions, QueryParams};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
@@ -108,10 +109,12 @@ pub mod test {
         qb: &mut sqlx::QueryBuilder<'_, Sqlite>,
         conn: &mut SqliteConnection,
     ) -> String {
-        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", qb.sql()))
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+
+        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", formatted_query))
             .fetch_all(&mut *conn)
             .await
-            .unwrap_or_else(|_| panic!("Invalid query: \n{}\n", qb.sql()))
+            .unwrap_or_else(|_| panic!("Invalid query: \n{}\n", formatted_query))
             .into_iter()
             .map(|row| {
                 let id = row.get::<i64, &str>("id");
@@ -135,6 +138,16 @@ pub mod test {
         let metastate = MetaState::default();
 
         let qb = Strategy::Oldest.build_query(&mut qb, &metastate);
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          *
+        FROM
+          chunks
+        ORDER BY
+          submission_id ASC
+        ");
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
@@ -148,6 +161,16 @@ pub mod test {
         let metastate = MetaState::default();
 
         let qb = Strategy::Newest.build_query(&mut qb, &metastate);
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          *
+        FROM
+          chunks
+        ORDER BY
+          submission_id DESC
+        ");
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
@@ -161,8 +184,25 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
 
         let qb = Strategy::Random.build_query(&mut qb, &metastate);
-        let explained = explain(qb, &mut conn).await;
 
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          *
+        FROM
+          chunks
+        WHERE
+          random_order >= ?
+        UNION ALL
+        SELECT
+          *
+        FROM
+          chunks
+        WHERE
+          random_order < ?
+        ");
+
+        let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @r"
         1, 0, COMPOUND QUERY
@@ -185,8 +225,62 @@ pub mod test {
         };
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
-        let explained = explain(qb, &mut conn).await;
 
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        insta::assert_snapshot!(formatted_query, @"
+        WITH
+        inner_company_id AS NOT MATERIALIZED (
+          SELECT
+            *
+          FROM
+            chunks
+          ORDER BY
+            submission_id ASC
+        ),
+        taken_company_id AS (
+          SELECT
+            *
+          FROM
+            submissions_metadata
+          WHERE
+            submissions_metadata.metadata_key = ?
+            AND submissions_metadata.metadata_value IN (
+              SELECT
+                value
+              FROM
+                json_each()
+            )
+        )
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          NOT EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        UNION ALL
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        ");
+
+        let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @r"
         1, 0, COMPOUND QUERY
@@ -217,9 +311,62 @@ pub mod test {
         };
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
-        dbg!(qb.sql());
-        let explained = explain(qb, &mut conn).await;
 
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        insta::assert_snapshot!(formatted_query, @"
+        WITH
+        inner_company_id AS NOT MATERIALIZED (
+          SELECT
+            *
+          FROM
+            chunks
+          ORDER BY
+            submission_id DESC
+        ),
+        taken_company_id AS (
+          SELECT
+            *
+          FROM
+            submissions_metadata
+          WHERE
+            submissions_metadata.metadata_key = ?
+            AND submissions_metadata.metadata_value IN (
+              SELECT
+                value
+              FROM
+                json_each()
+            )
+        )
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          NOT EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        UNION ALL
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        ");
+
+        let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @r"
         1, 0, COMPOUND QUERY
@@ -250,8 +397,69 @@ pub mod test {
         };
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
-        let explained = explain(qb, &mut conn).await;
 
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        insta::assert_snapshot!(formatted_query, @"
+        WITH
+        inner_company_id AS NOT MATERIALIZED (
+          SELECT
+            *
+          FROM
+            chunks
+          WHERE
+            random_order >= ?
+          UNION ALL
+          SELECT
+            *
+          FROM
+            chunks
+          WHERE
+            random_order < ?
+        ),
+        taken_company_id AS (
+          SELECT
+            *
+          FROM
+            submissions_metadata
+          WHERE
+            submissions_metadata.metadata_key = ?
+            AND submissions_metadata.metadata_value IN (
+              SELECT
+                value
+              FROM
+                json_each()
+            )
+        )
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          NOT EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        UNION ALL
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        ");
+
+        let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @r"
         1, 0, COMPOUND QUERY
@@ -302,11 +510,114 @@ pub mod test {
 
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
+
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        insta::assert_snapshot!(formatted_query, @"
+        WITH
+        inner_company_id AS NOT MATERIALIZED (
+          WITH
+          inner_priority AS NOT MATERIALIZED (
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              random_order >= ?
+            UNION ALL
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              random_order < ?
+          ),
+          taken_priority AS (
+            SELECT
+              *
+            FROM
+              submissions_metadata
+            WHERE
+              submissions_metadata.metadata_key = ?
+              AND submissions_metadata.metadata_value IN (
+                SELECT
+                  value
+                FROM
+                  json_each()
+              )
+          )
+          SELECT
+            *
+          FROM
+            inner_priority
+          WHERE
+            NOT EXISTS (
+              SELECT
+                1
+              FROM
+                taken_priority
+              WHERE
+                inner_priority.submission_id = taken_priority.submission_id
+            )
+          UNION ALL
+          SELECT
+            *
+          FROM
+            inner_priority
+          WHERE
+            EXISTS (
+              SELECT
+                1
+              FROM
+                taken_priority
+              WHERE
+                inner_priority.submission_id = taken_priority.submission_id
+            )
+        ),
+        taken_company_id AS (
+          SELECT
+            *
+          FROM
+            submissions_metadata
+          WHERE
+            submissions_metadata.metadata_key = ?
+            AND submissions_metadata.metadata_value IN (
+              SELECT
+                value
+              FROM
+                json_each()
+            )
+        )
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          NOT EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        UNION ALL
+        SELECT
+          *
+        FROM
+          inner_company_id
+        WHERE
+          EXISTS (
+            SELECT
+              1
+            FROM
+              taken_company_id
+            WHERE
+              inner_company_id.submission_id = taken_company_id.submission_id
+          )
+        ");
+
         let explained = explain(qb, &mut conn).await;
-        assert!(
-            !explained.contains("B-TREE"),
-            "Query should contain no materialization, but it did: {explained}"
-        );
+        assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @r"
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
