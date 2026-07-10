@@ -25,9 +25,9 @@ pub enum Strategy {
 impl Strategy {
     pub fn build_query<'a>(
         &'a self,
-        qb: &'a mut QueryBuilder<'a, Sqlite>,
+        qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
-    ) -> &'a mut QueryBuilder<'a, Sqlite> {
+    ) -> &'a mut QueryBuilder<Sqlite> {
         let qb = self.build_query_snippet(qb, metastate);
         tracing::trace!("sql: {:?}", qb.sql());
         qb
@@ -35,9 +35,9 @@ impl Strategy {
 
     fn build_query_snippet<'a>(
         &'a self,
-        qb: &'a mut QueryBuilder<'a, Sqlite>,
+        qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
-    ) -> &'a mut QueryBuilder<'a, Sqlite> {
+      ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
             Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
@@ -107,28 +107,32 @@ pub mod test {
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
-    async fn explain(
-        qb: &mut sqlx::QueryBuilder<'_, Sqlite>,
-        conn: &mut SqliteConnection,
-    ) -> String {
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+    async fn explain(qb: &mut sqlx::QueryBuilder<Sqlite>, conn: &mut SqliteConnection) -> String {
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
 
-        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {formatted_query}"))
-            .fetch_all(&mut *conn)
-            .await
-            .unwrap_or_else(|_| panic!("Invalid query: \n{formatted_query}\n"))
-            .into_iter()
-            .map(|row| {
-                let id = row.get::<i64, &str>("id");
-                let parent = row.get::<i64, &str>("parent");
-                let detail = row.get::<String, &str>("detail");
-                format!("{id}, {parent}, {detail}")
-            })
-            .join("\n")
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {formatted_query}"
+        )))
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_else(|_| panic!("Invalid query: \n{formatted_query}\n"))
+        .into_iter()
+        .map(|row| {
+            let id = row.get::<i64, &str>("id");
+            let parent = row.get::<i64, &str>("parent");
+            let detail = row.get::<String, &str>("detail");
+            format!("{id}, {parent}, {detail}")
+        })
+        .join("\n")
     }
 
-    fn assert_streaming_query(qb: &sqlx::QueryBuilder<'_, Sqlite>, explained: &str) {
-        let query = qb.sql();
+    fn assert_streaming_query(qb: &sqlx::QueryBuilder<Sqlite>, explained: &str) {
+        let query_binding = qb.sql();
+        let query = query_binding.as_str();
         assert!(
             !explained.contains("MATERIALIZED"),
             "Query should contain no materialization, but it did\n\nQuery: {query}\n\nPlan: \n\n {explained}"
@@ -147,7 +151,7 @@ pub mod test {
 
         let qb = Strategy::Oldest.build_query(&mut qb, &metastate);
         let options = FormatOptions::default();
-        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
         SELECT
           *
@@ -170,7 +174,7 @@ pub mod test {
 
         let qb = Strategy::Newest.build_query(&mut qb, &metastate);
         let options = FormatOptions::default();
-        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
         SELECT
           *
@@ -193,7 +197,11 @@ pub mod test {
 
         let qb = Strategy::Random.build_query(&mut qb, &metastate);
 
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
         insta::assert_snapshot!(formatted_query, @"
         SELECT
           *
@@ -234,7 +242,11 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
 
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
         insta::assert_snapshot!(formatted_query, @"
         WITH
         inner_company_id AS NOT MATERIALIZED (
@@ -320,7 +332,11 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
 
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
         insta::assert_snapshot!(formatted_query, @"
         WITH
         inner_company_id AS NOT MATERIALIZED (
@@ -406,7 +422,11 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
 
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
         insta::assert_snapshot!(formatted_query, @"
         WITH
         inner_company_id AS NOT MATERIALIZED (
@@ -519,7 +539,11 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
         let qb = strategy.build_query(&mut qb, &metastate);
 
-        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
         insta::assert_snapshot!(formatted_query, @"
         WITH
         inner_company_id AS NOT MATERIALIZED (

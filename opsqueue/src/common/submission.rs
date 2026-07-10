@@ -300,14 +300,14 @@ pub mod db {
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
         fn encode_by_ref(
             &self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
         }
 
         fn encode(
             self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
         where
             Self: Sized,
@@ -633,7 +633,7 @@ pub mod db {
     pub fn lookup_ids_by_strategic_metadata_query(
         strategic_metadata: &StrategicMetadataMap,
         limit: i64,
-    ) -> QueryBuilder<'_, Sqlite> {
+    ) -> QueryBuilder<Sqlite> {
         let mut query_builder: QueryBuilder<Sqlite> =
             QueryBuilder::new("SELECT id FROM submissions");
         // Inner join for each piece of strategic metadata.
@@ -1202,7 +1202,7 @@ pub mod test {
     use super::*;
 
     async fn explain_query_plan(query: &str, conn: &mut SqliteConnection) -> String {
-        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {query}"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {query}")))
             .fetch_all(&mut *conn)
             .await
             .unwrap_or_else(|_| panic!("Invalid query: \n{query}\n"))
@@ -1236,7 +1236,7 @@ pub mod test {
                 .collect();
         let qb = lookup_ids_by_strategic_metadata_query(&strategic_metadata, 100_000);
         let options = FormatOptions::default();
-        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
         SELECT
           id
