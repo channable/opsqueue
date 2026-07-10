@@ -219,7 +219,6 @@ impl Chunk {
 pub mod db {
     use super::*;
     use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
-    use crate::common::StrategicMetadataMap;
     use crate::db::{Connection, True, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};
     use sqlx::{query, query_as};
@@ -274,33 +273,6 @@ pub mod db {
         .execute(conn.get_inner())
         .await?;
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).increment(1);
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(conn))]
-    pub async fn insert_chunk_metadata(
-        chunk: Chunk,
-        metadata_key: &[u8],
-        metadata_value: &[u8],
-        mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
-        query!(
-            "
-            INSERT INTO chunks_metadata
-            ( submission_id
-            , chunk_index
-            , metadata_key
-            , metadata_value
-            )
-            VALUES ($1, $2, $3, $4)
-            ",
-            chunk.submission_id,
-            chunk.chunk_index,
-            metadata_key,
-            metadata_value,
-        )
-        .execute(conn.get_inner())
-        .await?;
         Ok(())
     }
 
@@ -530,33 +502,6 @@ pub mod db {
         .await
     }
 
-    /// Retrieves the earlier stored strategic metadata.
-    ///
-    /// Primarily for testing and introspection.
-    ///
-    /// Be aware that the strategic metadata for individual chunks
-    /// is cleaned up once the chunk is marked as completed or failed.
-    /// (At that time it is still available on the submission level).
-    pub async fn get_chunk_strategic_metadata(
-        full_chunk_id: ChunkId,
-        mut conn: impl Connection,
-    ) -> Result<StrategicMetadataMap, DatabaseError> {
-        use futures::{future, TryStreamExt};
-        let metadata = query!(
-            r#"
-        SELECT metadata_key, metadata_value FROM chunks_metadata
-        WHERE submission_id = $1 AND chunk_index = $2
-        "#,
-            full_chunk_id.submission_id,
-            full_chunk_id.chunk_index,
-        )
-        .fetch(conn.get_inner())
-        .and_then(|row| future::ok((row.metadata_key, row.metadata_value)))
-        .try_collect()
-        .await?;
-        Ok(metadata)
-    }
-
     #[tracing::instrument(skip(chunks, conn))]
     pub async fn insert_many_chunks(
         chunks: &[Chunk],
@@ -581,40 +526,6 @@ pub mod db {
             query.execute(conn.get_inner()).await?;
         }
 
-        Ok(())
-    }
-
-    pub async fn insert_many_chunks_metadata(
-        chunks: &[Chunk],
-        metadata: &StrategicMetadataMap,
-        mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
-        use itertools::Itertools;
-        const ROWS_PER_QUERY: usize = 1000;
-
-        let mut iter = chunks.iter().cartesian_product(metadata).peekable();
-        while iter.peek().is_some() {
-            let query_rows = iter.by_ref().take(ROWS_PER_QUERY);
-
-            let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
-                "
-            INSERT INTO chunks_metadata
-            ( submission_id
-            , chunk_index
-            , metadata_key
-            , metadata_value
-            )
-            ",
-            );
-            query_builder.push_values(query_rows, |mut b, (chunk, metadata)| {
-                b.push_bind(chunk.submission_id)
-                    .push_bind(chunk.chunk_index)
-                    .push_bind(metadata.0)
-                    .push_bind(metadata.1);
-            });
-            let query = query_builder.build();
-            query.execute(conn.get_inner()).await?;
-        }
         Ok(())
     }
 

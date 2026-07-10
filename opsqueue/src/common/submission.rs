@@ -392,12 +392,6 @@ pub mod db {
                     )
                     .await?;
                     super::chunk::db::insert_many_chunks(&chunks, &mut tx).await?;
-                    super::chunk::db::insert_many_chunks_metadata(
-                        &chunks,
-                        &submission.strategic_metadata,
-                        &mut tx,
-                    )
-                    .await?;
                     Ok(())
                 }
                 .boxed()
@@ -1255,24 +1249,7 @@ pub mod test {
         let fetched_metadata = get_submission_strategic_metadata(submission_id, &mut conn)
             .await
             .unwrap();
-        assert!(fetched_metadata == strategic_metadata);
-
-        let res = sqlx::query!("SELECT * FROM chunks_metadata;")
-            .fetch_all(conn.get_inner())
-            .await
-            .unwrap();
-        dbg!(res);
-
-        let chunk_id = (submission_id, ChunkIndex::zero()).into();
-        let chunk_fetched_metadata = chunk::db::get_chunk_strategic_metadata(chunk_id, &mut conn)
-            .await
-            .unwrap();
-
-        dbg!(&strategic_metadata);
-        dbg!(&fetched_metadata);
-        dbg!(&chunk_fetched_metadata);
-
-        assert_eq!(chunk_fetched_metadata, strategic_metadata);
+        assert_eq!(fetched_metadata, strategic_metadata);
     }
 
     #[sqlx::test]
