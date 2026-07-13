@@ -269,7 +269,11 @@ impl InternalProducerClientError {
             Self::HTTPClientError(inner) => {
                 // Failures in which a connection could not be established are ephemeral,
                 // as these can be caused by network failures, so we want to retry:
-                if inner.is_connect() || inner.is_timeout() || inner.is_decode() {
+                if inner.is_connect()
+                    || inner.is_timeout()
+                    || inner.is_decode()
+                    || inner.is_request()
+                {
                     true
                 } else if inner.is_status() {
                     // Failures where the server returns a 5xx status code might indicate the server is (temporarily!) unhealthy,
