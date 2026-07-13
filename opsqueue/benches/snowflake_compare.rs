@@ -7,6 +7,7 @@ use snowflaked::sync::Generator;
 
 static ORACLE_GENERATOR: Generator = Generator::new(0);
 
+/// Benchmarks single-thread snowflake generation for custom and oracle implementations.
 fn bench_single_thread(c: &mut Criterion) {
     let mut group = c.benchmark_group("snowflake_single_thread");
 
@@ -26,6 +27,7 @@ fn bench_single_thread(c: &mut Criterion) {
     group.finish();
 }
 
+/// Generates custom submission IDs concurrently across worker threads.
 fn generate_custom_parallel(threads: usize, ids_per_thread: usize) {
     let workers: Vec<_> = (0..threads)
         .map(|_| {
@@ -44,6 +46,7 @@ fn generate_custom_parallel(threads: usize, ids_per_thread: usize) {
     }
 }
 
+/// Generates oracle `snowflaked` IDs concurrently across worker threads.
 fn generate_oracle_parallel(threads: usize, ids_per_thread: usize) {
     let workers: Vec<_> = (0..threads)
         .map(|_| {
@@ -63,6 +66,7 @@ fn generate_oracle_parallel(threads: usize, ids_per_thread: usize) {
     }
 }
 
+/// Benchmarks parallel snowflake generation throughput for custom and oracle implementations.
 fn bench_parallel(c: &mut Criterion) {
     let mut group = c.benchmark_group("snowflake_parallel");
     let threads = 4;
