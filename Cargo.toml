@@ -35,6 +35,7 @@ http = { version = "1.4.0", default-features = false }
 humantime = { version = "2.1.0", default-features = false }
 insta = { version = "1.47.2", default-features = false }
 itertools = { version = "0.15.0", default-features = false }
+libsqlite3-sys = { version = "0.30.1", default-features = false }
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 moro-local = { version = "0.4.0", default-features = false }
 object_store = { version = "0.14.0", default-features = false, features = ["gcp", "http", "fs"] }
