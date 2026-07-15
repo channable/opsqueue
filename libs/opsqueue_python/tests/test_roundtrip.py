@@ -62,9 +62,78 @@ def test_roundtrip(
         assert res == sum(range(1, 101))
 
 
-def test_empty_submission(
+def test_complete_then_fail_chunks(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
+    """
+    A most test that round-trips all chunks as completed and failed.
+    This simulates the consumer completing chunks while the server released the reservation.
+
+    Each consumer completes 1/n_consumers chunks before the reservation expired
+    Each consumer receives a reservation expiration for each chunk
+    Each consumer completes 1/n_consumers chunks after the reservation expired
+
+    Registration expirations are looped via the client to allow in-flight completions to still be registered
+    """
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}",
+        "file:///tmp/opsqueue/test_complete_then_fail_chunks",
+    )
+    n_ops = 100
+    chunk_size = 10
+    n_chunks = n_ops // chunk_size
+    n_consumers = 3
+    assert n_chunks // n_consumers > 1, (
+        "Need more than one chunk per consumer for this test"
+    )
+
+    def run_consumer(_consumer_id: int) -> None:
+        consumer_client = ConsumerClient(
+            f"localhost:{opsqueue.port}",
+            "file:///tmp/opsqueue/test_complete_then_fail_chunks",
+        )
+        strategy = strategy_from_description(any_consumer_strategy)
+
+        for i in range(n_chunks):
+            [chunk] = consumer_client.reserve_chunks(strategy=strategy)
+            if i % n_consumers == 0:
+                # Each consumers completes 1/n_consumers chunks before the reservation expired.
+                consumer_client.complete_chunk(
+                    chunk.submission_id,
+                    chunk.submission_prefix,
+                    chunk.chunk_index,
+                    chunk.input_content,
+                )
+            # Simulate the reservation expiring while the consumer's completion wasn't registered.
+            consumer_client.fail_chunk(
+                chunk.submission_id,
+                chunk.submission_prefix,
+                chunk.chunk_index,
+                "Simulated failure",
+            )
+            if i % n_consumers == 1:
+                # Each consumers completes 1/n_consumers chunks after its reservation expired.
+                consumer_client.complete_chunk(
+                    chunk.submission_id,
+                    chunk.submission_prefix,
+                    chunk.chunk_index,
+                    chunk.input_content,
+                )
+
+    with multiple_background_processes(run_consumer, n_consumers) as _consumers:
+        input_iter = range(0, n_ops)
+
+        output_iter: Iterator[int] = producer_client.run_submission(
+            input_iter,
+            chunk_size=chunk_size,
+            strategic_metadata={"id": 42, "second_id": 69},
+        )
+        res = sum(output_iter)
+
+        assert res == sum(range(0, n_ops))
+
+
+def test_empty_submission(opsqueue: OpsqueueProcess) -> None:
     """
     Empty submissions ought to be supported without problems.
     Opsqueue should immediately consider these 'completed'
@@ -208,8 +277,8 @@ def test_many_consumers(
     opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
 ) -> None:
     """
-    Ensure the system still works if we have many consumers concurrently
-    working on thes same submission
+    Ensure the system still works if we have many consumers concurrently working
+    on the same submission
     """
     producer_client = ProducerClient(
         f"localhost:{opsqueue.port}", "file:///tmp/opsqueue/test_many_consumers"
@@ -362,7 +431,7 @@ def test_metadata_in_submission_failed(
 
 
 def test_cancel_submission_not_found(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Attempting to cancel a submission that doesn't exist raises a
     SubmissionNotFoundError.
@@ -377,7 +446,7 @@ def test_cancel_submission_not_found(
 
 
 def test_cancel_in_progress(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Cancelling a submission that is in progress succeeds and returns none.
     Attempting to cancel a submission that is already cancelled should raise a
@@ -400,7 +469,7 @@ def test_cancel_in_progress(
 
 
 def test_cancel_already_cancelled(
-    opsqueue: OpsqueueProcess, any_consumer_strategy: StrategyDescription
+    opsqueue: OpsqueueProcess,
 ) -> None:
     """Attempting to cancel a submission that is already cancelled should raise
     a SubmissionNotCancellableError.

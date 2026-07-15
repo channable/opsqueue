@@ -20,17 +20,28 @@ impl MetaState {
 
     pub fn decrement(&self, key: &str, val: &MetaStateVal) {
         let ripe_for_removal = {
-            let meta_state_field = self
-                .0
-                .get(key)
-                .expect("decrements should be paired with increments.");
-            meta_state_field.decrement(val);
-            meta_state_field.is_empty()
+            if let Some(meta_state_field) = self.0.get(key) {
+                meta_state_field.decrement(val);
+                meta_state_field.is_empty()
+            } else {
+                // The decrement is called unconditionally after `finish_reservation` happened. An
+                // expired reservation always sends a chunk failure via the client, regardless of
+                // whether `finish_reservation` succeeded or not. In other words, the `decrement` is
+                // not always part of the same atomic state transition as removing the reservation
+                // from the reserver. This means that if a reservation is finished by multiple
+                // different racing paths we can get multiple decrements.
+                tracing::error!(
+                    key = key,
+                    val = val,
+                    "decrements should be paired with increments."
+                );
+                false
+            }
         };
         if ripe_for_removal {
-            // The actual removal happens after the main code
-            // to ensure we don't take out two locks on the DashMap at the same time.
-            // To handle with the case of a concurrent increment, we use `remove_if` and repeat the `is_empty` check.
+            // The actual removal happens after the main code to ensure we don't take out two locks
+            // on the DashMap at the same time. To handle with the case of a concurrent increment,
+            // we use `remove_if` and repeat the `is_empty` check.
             self.0.remove_if(key, |_k, v| v.is_empty());
         }
     }

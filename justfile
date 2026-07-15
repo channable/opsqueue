@@ -2,6 +2,10 @@
 _default:
   just --list --unsorted
 
+# Timeout (seconds) for Python integration test recipes.
+# Override with OPSQUEUE_PYTEST_TIMEOUT, e.g. OPSQUEUE_PYTEST_TIMEOUT=600 just nix-test-integration
+pytest_timeout_seconds := env_var_or_default("OPSQUEUE_PYTEST_TIMEOUT", "60")
+
 # Build-and-run the opsqueue binary (development profile)
 [group('run')]
 run *OPSQUEUE_ARGS:
@@ -44,10 +48,12 @@ test-unit *TEST_ARGS:
 test-integration *TEST_ARGS: build-bin build-python
   #!/usr/bin/env bash
   set -euo pipefail
+  export OPSQUEUE_BIN="$PWD/target/debug/opsqueue"
+
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  timeout 600 pytest --color=yes {{TEST_ARGS}}
+  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
@@ -55,13 +61,14 @@ nix-test-integration *TEST_ARGS: nix-build-bin
   #!/usr/bin/env bash
   set -euo pipefail
   nix_build_python_library_dir=$(just nix-build-python)
+  nix_build_bin_dir=$(just nix-build-bin)
 
   cd libs/opsqueue_python/tests
   export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.13/site-packages"
-  export OPSQUEUE_VIA_NIX=true
+  export OPSQUEUE_BIN="${nix_build_bin_dir}/bin/opsqueue"
   export RUST_LOG="opsqueue=debug"
 
-  timeout 600 pytest --color=yes {{TEST_ARGS}}
+  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
 # Run all linters, fast and slow
 [group('lint')]
@@ -81,6 +88,10 @@ lint-heavy: clippy mypy
 clippy:
   cargo clippy --no-deps --fix --allow-dirty --allow-staged -- -Dwarnings
   cargo clippy --no-deps -- -Dwarnings
+  cargo clippy --no-deps --fix --allow-dirty --allow-staged --no-default-features -- -Dwarnings
+  cargo clippy --no-deps --no-default-features -- -Dwarnings
+  cargo clippy --no-deps --fix --allow-dirty --allow-staged --all-features -- -Dwarnings
+  cargo clippy --no-deps --all-features -- -Dwarnings
 
 # Python static analysis type-checker
 [group('lint')]

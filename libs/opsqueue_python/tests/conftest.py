@@ -31,11 +31,8 @@ class OpsqueueProcess:
 
 @functools.cache
 def opsqueue_bin_location() -> Path:
-    if os.environ.get("OPSQUEUE_VIA_NIX"):
-        deriv_path = (
-            subprocess.check_output(["just", "nix-build-bin"]).decode("utf-8").strip()
-        )
-        return Path(deriv_path) / "bin" / "opsqueue"
+    if explicit_bin := os.environ.get("OPSQUEUE_BIN", "").strip():
+        return Path(explicit_bin)
     else:
         subprocess.run(
             ["cargo", "build", "--quiet", "--bin", "opsqueue"],
@@ -70,6 +67,8 @@ def opsqueue_service(
     # temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
     command = [
+        "setpriv",
+        "--pdeathsig=SIGKILL",
         str(opsqueue_bin_location()),
         "--port",
         str(port),
@@ -81,9 +80,11 @@ def opsqueue_service(
         env["RUST_LOG"] = "off"
 
     with subprocess.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
+        assert process.poll() is None, "Opsqueue process failed to start"
         try:
             wrapper = OpsqueueProcess(port=port, process=process)
             yield wrapper
+            assert process.poll() is None, "Opsqueue process failed during run"
         finally:
             process.terminate()
 
@@ -121,11 +122,12 @@ def background_process(
 @contextmanager
 def multiple_background_processes(
     function: Callable[[int], None], count: int
-) -> Generator[None, None, None]:
+) -> Generator[list[multiprocess.Process], None, None]:
     with ExitStack() as stack:
-        for p in range(count):
+        yield [
             stack.enter_context(background_process(function, args=(p,)))
-        yield
+            for p in range(count)
+        ]
 
 
 type StrategyDescription = str | tuple[str, str, StrategyDescription]
@@ -133,7 +135,13 @@ type StrategyDescription = str | tuple[str, str, StrategyDescription]
 basic_strategies: Iterable[StrategyDescription] = ("Random", "Newest", "Oldest")
 any_strategies: Iterable[StrategyDescription] = (
     *(basic_strategies),
-    *(("PreferDistinct", "id", s) for s in basic_strategies),
+    *(
+        ("PreferDistinct", "id", s)
+        for s in (
+            *basic_strategies,
+            *(("PreferDistinct", "second_id", s) for s in basic_strategies),
+        )
+    ),
 )
 
 
