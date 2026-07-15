@@ -1,6 +1,6 @@
 //! Dealing with `Submission`s: Collections of (`Chunks`s of) operations.
 use std::fmt::Display;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::common::StrategicMetadataMap;
 use crate::E;
@@ -9,10 +9,9 @@ use ux::u63;
 
 use super::chunk::{self, Chunk, ChunkFailed, ChunkSize};
 use super::chunk::{ChunkCount, ChunkIndex};
+use super::snowflake::{generate_submission_snowflake, snowflake_timestamp_ms};
 
 pub type Metadata = Vec<u8>;
-
-static ID_GENERATOR: snowflaked::sync::Generator = snowflaked::sync::Generator::new(0);
 
 /// Uniquely identifies a [`Submission`].
 ///
@@ -50,20 +49,18 @@ impl Default for SubmissionId {
 impl SubmissionId {
     /// Generate a new [`SubmissionId`].
     pub fn new() -> SubmissionId {
-        let inner: u64 = ID_GENERATOR.generate();
+        let inner: u64 = generate_submission_snowflake();
         SubmissionId(u63::new(inner))
     }
     /// Access the [`std::time::SystemTime`] at which the ID was generated.
     pub fn system_time(self) -> std::time::SystemTime {
-        use snowflaked::Snowflake;
         let inner: u64 = self.0.into();
 
-        let unix_timestamp_ms = inner.timestamp();
+        let unix_timestamp_ms = snowflake_timestamp_ms(inner);
         let unix_timestamp = Duration::from_millis(unix_timestamp_ms);
-        ID_GENERATOR
-            .epoch()
+        UNIX_EPOCH
             .checked_add(unix_timestamp)
-            .expect("Invalid timestamp extracted from snowflake ID")
+            .expect("Invalid timestamp extracted from submission ID")
     }
     /// Get the time at which the submission ID was generated as a [`chrono::DateTime`].
     pub fn timestamp(self) -> chrono::DateTime<Utc> {

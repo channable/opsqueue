@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap;
 
 pub mod chunk;
 pub mod errors;
+pub mod snowflake;
 pub mod submission;
 
 /// As values, we support the largest number value SQLite supports by itself,
