@@ -13,6 +13,7 @@ use libsqlite3_sys as ffi;
 use metastate::MetaState;
 use reserver::Reserver;
 use sqlx::QueryBuilder;
+use std::ffi::CStr;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -81,6 +82,61 @@ unsafe extern "C" fn sqlite_reserved_chunk_lookup_destructor(ptr: *mut std::ffi:
     let _boxed: Box<Reserver<ChunkId, ChunkId>> = unsafe { Box::from_raw(ptr.cast()) };
 }
 
+unsafe extern "C" fn sqlite_metadata_count_lookup(
+    context: *mut ffi::sqlite3_context,
+    n_args: i32,
+    args: *mut *mut ffi::sqlite3_value,
+) {
+    if n_args != 2 {
+        tracing::error!(
+            n_args,
+            "opsqueue_metadata_count called with unexpected argument count"
+        );
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let user_data = unsafe { ffi::sqlite3_user_data(context) }
+        .cast_const()
+        .cast::<Arc<MetaState>>();
+    if user_data.is_null() {
+        tracing::error!("opsqueue_metadata_count called without registered metastate user_data");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let metadata_key_ptr = unsafe { ffi::sqlite3_value_text(*args.add(0)) };
+    if metadata_key_ptr.is_null() {
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+    let Ok(metadata_key) = unsafe { CStr::from_ptr(metadata_key_ptr.cast()) }.to_str() else {
+        tracing::error!("opsqueue_metadata_count got non-utf8 metadata_key");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    };
+
+    let metadata_value = unsafe { ffi::sqlite3_value_int64(*args.add(1)) };
+
+    if let Some(meta_count) = unsafe { &*user_data }
+        .get(metadata_key)
+        .and_then(|meta_keys| meta_keys.get(&metadata_value))
+    {
+        unsafe {
+            ffi::sqlite3_result_int64(context, i64::try_from(meta_count).unwrap_or(i64::MAX));
+        };
+    } else {
+        unsafe { ffi::sqlite3_result_null(context) };
+    }
+}
+
+unsafe extern "C" fn sqlite_metadata_count_lookup_destructor(ptr: *mut std::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    let _boxed: Box<Arc<MetaState>> = unsafe { Box::from_raw(ptr.cast()) };
+}
+
 #[derive(Debug, Clone)]
 pub struct Dispatcher {
     reserver: Reserver<ChunkId, ChunkId>,
@@ -134,11 +190,10 @@ impl Dispatcher {
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         let mut conn = pool.reader_conn().await?;
-        self.register_reserved_chunk_lookup(conn.get_inner())
-            .await?;
+        self.register_lookups(conn.get_inner()).await?;
         let mut query_builder = QueryBuilder::new("");
         let stream = strategy
-            .build_query(&mut query_builder, &self.metastate)
+            .build_query(&mut query_builder)
             .build_query_as()
             .fetch(conn.get_inner());
         stream
@@ -151,13 +206,11 @@ impl Dispatcher {
             .await
     }
 
-    async fn register_reserved_chunk_lookup(
-        &self,
-        conn: &mut sqlx::SqliteConnection,
-    ) -> Result<(), sqlx::Error> {
+    async fn register_lookups(&self, conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Error> {
         let mut handle = conn.lock_handle().await?;
         let sqlite = handle.as_raw_handle().as_ptr();
-        let function_name = b"opsqueue_is_reserved\0";
+        let reserved_function_name = b"opsqueue_is_reserved\0";
+        let metadata_count_function_name = b"opsqueue_metadata_count\0";
 
         // Register the current reserver state on this connection.
         // Re-registering replaces any previous callback on this handle.
@@ -167,7 +220,7 @@ impl Dispatcher {
         let rc = unsafe {
             ffi::sqlite3_create_function_v2(
                 sqlite,
-                function_name.as_ptr().cast(),
+                reserved_function_name.as_ptr().cast(),
                 2,
                 ffi::SQLITE_UTF8,
                 user_data,
@@ -175,6 +228,33 @@ impl Dispatcher {
                 None,
                 None,
                 Some(sqlite_reserved_chunk_lookup_destructor),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
+            // We don't need to explicitly call the destructor.
+            // c.f. https://sqlite.org/c3ref/create_function.html
+            return Err(sqlx::Error::Protocol(format!(
+                "sqlite3_create_function_v2 failed with rc={rc}"
+            )));
+        }
+
+        // Register metadata count lookup backed by current metastate.
+        // Re-registering replaces any previous callback on this handle.
+        let user_data = Box::new(self.metastate.clone());
+        let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
+
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                metadata_count_function_name.as_ptr().cast(),
+                2,
+                ffi::SQLITE_UTF8,
+                user_data,
+                Some(sqlite_metadata_count_lookup),
+                None,
+                None,
+                Some(sqlite_metadata_count_lookup_destructor),
             )
         };
 

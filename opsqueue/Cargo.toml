@@ -70,7 +70,6 @@ clap.workspace = true
 humantime.workspace = true
 
 dashmap.workspace = true
-crossbeam-skiplist.workspace = true
 sqlformat.workspace = true
 workspace-hack.workspace = true
 
