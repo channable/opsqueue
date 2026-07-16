@@ -6,13 +6,13 @@ use backon::Retryable;
 use http::StatusCode;
 
 use crate::{
+    E,
     common::{
         errors::E::{L, R},
         errors::{SubmissionNotCancellable, SubmissionNotFound},
         submission::{SubmissionId, SubmissionStatus},
     },
     tracing::CarrierMap,
-    E,
 };
 
 use super::common::InsertSubmission;
@@ -293,9 +293,9 @@ impl InternalProducerClientError {
 mod tests {
     use crate::{
         common::{
+            StrategicMetadataMap,
             chunk::ChunkSize,
             submission::{self, SubmissionStatus},
-            StrategicMetadataMap,
         },
         db::{DBPools, WriterPool},
         producer::common::ChunkContents,

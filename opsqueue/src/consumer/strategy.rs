@@ -75,7 +75,9 @@ impl Strategy {
                         let taken_values: Vec<_> = field.too_high_counts(1).collect();
                         let taken_values_string =
                             serde_json::to_string(&taken_values).expect("Always valid JSON");
-                        tracing::trace!("Taken values that are left out of PreferDistinct: {taken_values_string:?}");
+                        tracing::trace!(
+                            "Taken values that are left out of PreferDistinct: {taken_values_string:?}"
+                        );
                         qb.push_bind(taken_values_string);
                     }
                 }
@@ -96,12 +98,12 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use crate::common::chunk::ChunkSize;
     use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::ChunkSize;
 
     use super::*;
     use itertools::Itertools;
-    use sqlformat::{format, FormatOptions, QueryParams};
+    use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
@@ -127,8 +129,14 @@ pub mod test {
 
     fn assert_streaming_query(qb: &sqlx::QueryBuilder<'_, Sqlite>, explained: &str) {
         let query = qb.sql();
-        assert!(!explained.contains("MATERIALIZED"), "Query should contain no materialization, but it did\n\nQuery: {query}\n\nPlan: \n\n {explained}");
-        assert!(!explained.contains("B-TREE"), "Query should contain no temporary B-tree construction, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}");
+        assert!(
+            !explained.contains("MATERIALIZED"),
+            "Query should contain no materialization, but it did\n\nQuery: {query}\n\nPlan: \n\n {explained}"
+        );
+        assert!(
+            !explained.contains("B-TREE"),
+            "Query should contain no temporary B-tree construction, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
     }
 
     #[sqlx::test]

@@ -4,11 +4,11 @@ use std::error::Error;
 
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
-    UnexpectedOpsqueueConsumerServerResponse, E,
+    ChunkNotFound, E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
+    UnexpectedOpsqueueConsumerServerResponse,
 };
 use pyo3::exceptions::PyBaseException;
-use pyo3::{import_exception, Bound, PyErr, Python};
+use pyo3::{Bound, PyErr, Python, import_exception};
 
 use crate::common;
 use crate::common::{ChunkIndex, SubmissionId};
@@ -74,7 +74,7 @@ pub struct FatalPythonException(#[from] pub PyErr);
 
 impl From<CError<FatalPythonException>> for PyErr {
     fn from(value: CError<FatalPythonException>) -> Self {
-        value.0 .0
+        value.0.0
     }
 }
 
@@ -141,7 +141,7 @@ impl From<CError<SubmissionNotCancellable>> for PyErr {
 
 impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
-        let submission_id = value.0 .0;
+        let submission_id = value.0.0;
         SubmissionNotFoundError::new_err(u64::from(submission_id))
     }
 }
@@ -153,15 +153,15 @@ pub struct SubmissionFailed(
 
 impl From<CError<SubmissionFailed>> for PyErr {
     fn from(value: CError<SubmissionFailed>) -> Self {
-        let submission: crate::common::SubmissionFailed = value.0 .0;
-        let chunk: crate::common::ChunkFailed = value.0 .1;
+        let submission: crate::common::SubmissionFailed = value.0.0;
+        let chunk: crate::common::ChunkFailed = value.0.1;
         SubmissionFailedError::new_err((submission, chunk))
     }
 }
 
 impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
     fn from(value: CError<crate::producer::SubmissionNotCompletedYetError>) -> Self {
-        let submission_id = value.0 .0;
+        let submission_id = value.0.0;
         SubmissionNotCompletedYetError::new_err((value.0.to_string(), submission_id))
     }
 }
@@ -171,7 +171,7 @@ impl From<CError<ChunkNotFound>> for PyErr {
         let ChunkId {
             submission_id,
             chunk_index,
-        } = value.0 .0;
+        } = value.0.0;
         ChunkNotFoundError::new_err((
             value.0.to_string(),
             (

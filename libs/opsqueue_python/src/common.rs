@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::errors::TryFromIntError;
 use opsqueue::common::submission::Metadata;
-use opsqueue::common::StrategicMetadataMap;
 use opsqueue::object_store::{ChunkRetrievalError, ChunkType, ObjectStoreClient};
 use opsqueue::tracing::CarrierMap;
 use pyo3::prelude::*;
@@ -227,7 +227,12 @@ impl Chunk {
             Some(bytes) => (bytes, None),
             None => {
                 let prefix = s.prefix.unwrap();
-                tracing::debug!("Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}", c.submission_id, prefix, c.chunk_index);
+                tracing::debug!(
+                    "Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}",
+                    c.submission_id,
+                    prefix,
+                    c.chunk_index
+                );
                 let res = object_store_client
                     .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
                     .await?;
@@ -431,16 +436,30 @@ impl SubmissionCompleted {
 #[pymethods]
 impl SubmissionFailed {
     fn __repr__(&self) -> String {
-        format!("SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?}, strategic_metadata={5:?})",
-        self.id.__repr__(), self.chunks_total, self.failed_at, self.failed_chunk_id, self.metadata, self.strategic_metadata)
+        format!(
+            "SubmissionFailed(id={0}, chunks_total={1}, failed_at={2}, failed_chunk_id={3}, metadata={4:?}, strategic_metadata={5:?})",
+            self.id.__repr__(),
+            self.chunks_total,
+            self.failed_at,
+            self.failed_chunk_id,
+            self.metadata,
+            self.strategic_metadata
+        )
     }
 }
 
 #[pymethods]
 impl SubmissionCancelled {
     fn __repr__(&self) -> String {
-        format!("SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?}, cancelled_at={5})",
-        self.id.__repr__(), self.chunks_total, self.chunks_done, self.metadata, self.strategic_metadata, self.cancelled_at)
+        format!(
+            "SubmissionCancelled(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?}, cancelled_at={5})",
+            self.id.__repr__(),
+            self.chunks_total,
+            self.chunks_done,
+            self.metadata,
+            self.strategic_metadata,
+            self.cancelled_at
+        )
     }
 }
 

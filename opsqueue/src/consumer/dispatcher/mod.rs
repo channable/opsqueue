@@ -6,7 +6,7 @@ use crate::{
         chunk::{Chunk, ChunkId},
         submission::Submission,
     },
-    db::{magic::Bool, Connection, Pool, ReaderPool},
+    db::{Connection, Pool, ReaderPool, magic::Bool},
 };
 use futures::stream::{StreamExt as _, TryStreamExt as _};
 use metastate::MetaState;

@@ -7,7 +7,7 @@ use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
     error::Error,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;

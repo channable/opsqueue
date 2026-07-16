@@ -1,6 +1,6 @@
 //! Helpers to read/write OpenTelemetry Tracing contexts from inside submissions stored in the queue
 use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::{propagation::TextMapCompositePropagator, Context};
+use opentelemetry::{Context, propagation::TextMapCompositePropagator};
 use opentelemetry_http::{HeaderExtractor, HeaderInjector};
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use rustc_hash::FxHashMap;

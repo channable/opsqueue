@@ -1,7 +1,7 @@
 use std::{
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -11,8 +11,8 @@ use futures::SinkExt;
 use tokio::{
     select,
     sync::{
-        mpsc::{UnboundedReceiver, UnboundedSender},
         Notify,
+        mpsc::{UnboundedReceiver, UnboundedSender},
     },
 };
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-use super::{state::ConsumerState, ServerState};
+use super::{ServerState, state::ConsumerState};
 
 #[derive(Debug, Clone)]
 pub struct RetryReservation {
@@ -192,7 +192,7 @@ impl ConsumerConn {
             _ => {
                 return Err(ConsumerConnError::UnexpectedWSMessageType(
                     anyhow::format_err!("Unexpected message format  {:?}", msg),
-                ))
+                ));
             }
         }
 

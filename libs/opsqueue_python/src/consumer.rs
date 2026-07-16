@@ -2,18 +2,18 @@ use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use opsqueue::{
+    E,
     common::errors::{
-        IncorrectUsage, LimitIsZero,
         E::{self, L, R},
+        IncorrectUsage, LimitIsZero,
     },
     consumer::client::InternalConsumerClientError,
     object_store::{
         ChunkRetrievalError, ChunkStorageError, ChunkType, NewObjectStoreClientError,
         ObjectStoreClient,
     },
-    E,
 };
 use pyo3::{
     create_exception,
@@ -350,18 +350,23 @@ impl ConsumerClient {
             let submission_prefix = chunk.submission_prefix.clone();
             let chunk_index = chunk.chunk_index;
             tracing::debug!(
-            "Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
-            submission_id,
-            chunk_index,
-            &submission_prefix
-        );
+                "Running fun for chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                submission_id,
+                chunk_index,
+                &submission_prefix
+            );
             let res = Python::attach(|py| {
                 let res = unbound_fun.bind(py).call1((chunk,))?;
                 res.extract()
             });
             match res {
                 Ok(res) => {
-                    tracing::debug!("Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}", submission_id, chunk_index, &submission_prefix);
+                    tracing::debug!(
+                        "Completing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                        submission_id,
+                        chunk_index,
+                        &submission_prefix
+                    );
                     self.complete_chunk_gilless(
                         submission_id,
                         submission_prefix.clone(),
@@ -374,15 +379,20 @@ impl ConsumerClient {
                         CError(R(R(e))) => CError(R(R(R(L(e))))),
                     })?;
                     tracing::debug!(
-                    "Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
-                    submission_id,
-                    chunk_index,
-                    &submission_prefix
-                );
+                        "Completed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                        submission_id,
+                        chunk_index,
+                        &submission_prefix
+                    );
                 }
                 Err(failure) => {
                     let failure_str = crate::common::format_pyerr(&failure);
-                    tracing::warn!("Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}", submission_id, chunk_index, &submission_prefix);
+                    tracing::warn!(
+                        "Failing chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}, reason: {failure_str}",
+                        submission_id,
+                        chunk_index,
+                        &submission_prefix
+                    );
                     self.fail_chunk_gilless(
                         submission_id,
                         submission_prefix.clone(),
@@ -394,11 +404,11 @@ impl ConsumerClient {
                         CError(R(e)) => CError(R(R(R(L(e))))),
                     })?;
                     tracing::warn!(
-                    "Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
-                    submission_id,
-                    chunk_index,
-                    &submission_prefix
-                );
+                        "Failed chunk: submission_id={:?}, chunk_index={:?}, submission_prefix={:?}",
+                        submission_id,
+                        chunk_index,
+                        &submission_prefix
+                    );
 
                     // On exceptions that are not PyExceptions (but PyBaseExceptions), like KeyboardInterrupt etc, return.
                     if !Python::attach(|py| failure.is_instance_of::<PyException>(py)) {

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::common::chunk;
 use futures::stream::{self, TryStreamExt};
-use object_store::path::Path;
 use object_store::DynObjectStore;
 use object_store::ObjectStoreExt;
+use object_store::path::Path;
 use reqwest::Url;
 use ux::u63;
 
@@ -49,7 +49,9 @@ impl std::fmt::Display for ChunkType {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ChunkRetrievalError {
-    #[error("Failed to retrieve chunk ({submission_prefix}, {chunk_index}, {chunk_type}) from object store: {source}")]
+    #[error(
+        "Failed to retrieve chunk ({submission_prefix}, {chunk_index}, {chunk_type}) from object store: {source}"
+    )]
     ObjectStoreError {
         source: object_store::Error,
         submission_prefix: Box<str>,
@@ -60,7 +62,9 @@ pub enum ChunkRetrievalError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ChunkStorageError {
-    #[error("Failed to store chunk ({submission_prefix}, {chunk_index}, {chunk_type}) to object store: {source}")]
+    #[error(
+        "Failed to store chunk ({submission_prefix}, {chunk_index}, {chunk_type}) to object store: {source}"
+    )]
     ObjectStoreError {
         source: object_store::Error,
         submission_prefix: Box<str>,

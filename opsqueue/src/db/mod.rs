@@ -58,10 +58,10 @@ use std::{marker::PhantomData, num::NonZero, time::Duration};
 use futures::future::BoxFuture;
 use magic::Bool;
 use sqlx::{
+    Connection as _, Sqlite, SqliteConnection, SqlitePool,
     migrate::MigrateDatabase,
     sqlite::SqlitePoolOptions,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-    Connection as _, Sqlite, SqliteConnection, SqlitePool,
 };
 
 use conn::{Conn, NoTransaction, Reader, Tx, Writer};
