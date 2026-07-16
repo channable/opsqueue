@@ -82,6 +82,11 @@ where
         }
     }
 
+    /// Returns whether a key currently has an active reservation.
+    pub fn is_reserved(&self, key: &K) -> bool {
+        self.reservations.contains_key(key)
+    }
+
     /// Removes a particular key-val from the reserver.
     /// Afterwards, it is possible to reserve it again.
     ///

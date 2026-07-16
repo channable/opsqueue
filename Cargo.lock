@@ -2274,6 +2274,7 @@ dependencies = [
  "humantime",
  "insta",
  "itertools 0.14.0",
+ "libsqlite3-sys",
  "moka",
  "moro-local",
  "object_store",

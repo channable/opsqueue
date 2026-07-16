@@ -532,12 +532,10 @@ pub mod db {
             r#"
             SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $2
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $3
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $1
             "#,
-            prefix,
-            prefix,
             prefix
         )
         .fetch_optional(conn.get_inner())
