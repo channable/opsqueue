@@ -2,7 +2,13 @@
 //!
 //! We make use of the excellent `clap` crate to make customizing the configuration
 //! with command-line args easier.
-use std::num::NonZero;
+use std::{
+    fs::File,
+    io::{self, Write},
+    num::NonZero,
+    os::fd::FromRawFd,
+    sync::{Arc, Mutex},
+};
 
 use clap::Parser;
 
@@ -16,6 +22,16 @@ pub struct Config {
     /// as well as the `/metrics` and `/ping` endpoints.
     #[arg(short, long, default_value_t = 3999)]
     pub port: u16,
+
+    /// File descriptor where the final bound TCP port is written.
+    ///
+    /// This is useful when `--port 0` is used and a parent process wants to receive the assigned
+    /// port without filesystem IO.
+    ///
+    /// The port is written as a 16-bit (u16) big-endian integer to the given file descriptor which
+    /// is then closed. On error the file descriptor is closed without writing anything.
+    #[arg(long, value_parser = parse_report_bound_port_fd, default_value = "-1")]
+    pub report_bound_port_pipe: ReportBoundPortPipe,
 
     /// Name of the SQLite database file used by this opsqueue.
     ///
@@ -83,6 +99,7 @@ impl Default for Config {
     fn default() -> Self {
         use std::str::FromStr;
         let port = 3999;
+        let report_bound_port_pipe = ReportBoundPortPipe::default();
         let database_filename = "opsqueue.db".to_string();
         let reservation_expiration =
             humantime::Duration::from_str("10 minutes").expect("valid humantime");
@@ -94,6 +111,7 @@ impl Default for Config {
         let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
         Config {
             port,
+            report_bound_port_pipe,
             database_filename,
             reservation_expiration,
             max_read_pool_size,
@@ -103,4 +121,44 @@ impl Default for Config {
             max_submission_age,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReportBoundPortPipe(Arc<Mutex<Option<BoundPortPipe>>>);
+
+impl ReportBoundPortPipe {
+    pub fn take(&self) -> Option<BoundPortPipe> {
+        self.0.lock().expect("No poison").take()
+    }
+}
+
+#[derive(Debug)]
+pub struct BoundPortPipe(File);
+
+impl BoundPortPipe {
+    pub fn write_port(mut self, port: u16) -> io::Result<()> {
+        self.0.write_all(&u16::to_be_bytes(port))?;
+        self.0.flush()
+    }
+}
+
+fn parse_report_bound_port_fd(value: &str) -> Result<ReportBoundPortPipe, String> {
+    let fd = value
+        .parse::<i32>()
+        .map_err(|err| format!("invalid file descriptor {value:?}: {err}"))?;
+
+    if fd == -1 {
+        return Ok(ReportBoundPortPipe::default());
+    }
+
+    if fd < 0 {
+        return Err(format!(
+            "invalid file descriptor {value:?}: must be non-negative"
+        ));
+    }
+
+    // SAFETY: the parent process passes ownership of this FD to us through `pass_fds`.
+    Ok(ReportBoundPortPipe(Arc::new(Mutex::new(Some(
+        BoundPortPipe(unsafe { File::from_raw_fd(fd) }),
+    )))))
 }
