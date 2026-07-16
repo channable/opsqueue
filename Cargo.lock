@@ -1023,15 +1023,17 @@ dependencies = [
 
 [[package]]
 name = "generator"
-version = "0.7.5"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc16584ff22b460a382b7feec54b23d2908d858152e5739a120b949293bd74e"
+checksum = "b3b854b0e584ead1a33f18b2fcad7cf7be18b3875c78816b753639aa501513ae"
 dependencies = [
  "cc",
+ "cfg-if",
  "libc",
  "log",
  "rustversion",
- "windows",
+ "windows-link",
+ "windows-result",
 ]
 
 [[package]]
@@ -1697,9 +1699,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loom"
-version = "0.5.6"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff50ecb28bb86013e935fb6683ab1f6d3a20016f123c76fd4c27470076ac30f5"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
 dependencies = [
  "cfg-if",
  "generator",
@@ -3439,8 +3441,7 @@ dependencies = [
 [[package]]
 name = "snowflaked"
 version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "398d462c4c454399be452039b24b0aa0ecb4c7a57f6ae615f5d25de2b032f850"
+source = "git+https://github.com/channable/snowflaked-rs.git#3c2eb5ae4d1c1996288e307db16c008bb58a30e0"
 dependencies = [
  "loom",
 ]
@@ -4539,15 +4540,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "windows"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e686886bc078bc1b0b600cac0147aadb815089b6e4da64016cbd754b6342700f"
-dependencies = [
- "windows-targets 0.48.5",
-]
 
 [[package]]
 name = "windows-core"
