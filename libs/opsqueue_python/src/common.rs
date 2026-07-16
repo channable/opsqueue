@@ -24,7 +24,7 @@ pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(not(debug_assertions))]
 pub const SIGNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-#[pyclass(frozen, get_all, eq, ord, hash, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, eq, ord, hash, module = "opsqueue")]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SubmissionId {
     pub id: u64,
@@ -59,7 +59,7 @@ impl From<submission::SubmissionId> for SubmissionId {
     }
 }
 
-#[pyclass(frozen, get_all, eq, ord, hash, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, eq, ord, hash, module = "opsqueue")]
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkIndex {
     pub id: u64,
@@ -123,7 +123,7 @@ impl Debug for Strategy {
             Strategy::PreferDistinct {
                 meta_key,
                 underlying,
-            } => Python::with_gil(|py| {
+            } => Python::attach(|py| {
                 let underlying = underlying.borrow(py);
                 f.debug_struct("Strategy.PreferDistinct")
                     .field("meta_key", meta_key)
@@ -146,7 +146,7 @@ impl From<strategy::Strategy> for Strategy {
             } => {
                 let underlying = Strategy::from(*underlying);
                 let underlying =
-                    Python::with_gil(|py| Py::new(py, underlying)).expect("A valid Strategy");
+                    Python::attach(|py| Py::new(py, underlying)).expect("A valid Strategy");
                 Strategy::PreferDistinct {
                     meta_key,
                     underlying,
@@ -205,7 +205,7 @@ impl Eq for Strategy {}
 
 /// Wrapper for the internal Opsqueue Chunk datatype
 /// Note that it also includes some fields originating from the Submission
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
     pub submission_id: SubmissionId,
@@ -258,7 +258,7 @@ impl Chunk {
 
 /// Wrapper for the internal Opsqueue Chunk datatype
 /// Note that it also includes some fields originating from the Submission
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFailed {
     pub submission_id: SubmissionId,
@@ -331,7 +331,7 @@ impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCance
     }
 }
 
-#[pyclass(frozen, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
     InProgress {
@@ -378,7 +378,7 @@ impl SubmissionStatus {
     }
 }
 
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Submission {
     pub id: SubmissionId,
@@ -444,7 +444,7 @@ impl SubmissionCancelled {
     }
 }
 
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCompleted {
     pub id: SubmissionId,
@@ -454,7 +454,7 @@ pub struct SubmissionCompleted {
     pub completed_at: DateTime<Utc>,
 }
 
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionFailed {
     pub id: SubmissionId,
@@ -466,7 +466,7 @@ pub struct SubmissionFailed {
     pub failed_chunk_id: u64,
 }
 
-#[pyclass(frozen, get_all, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmissionCancelled {
     pub id: SubmissionId,
@@ -479,7 +479,7 @@ pub struct SubmissionCancelled {
 
 /// Submission could not be cancelled because it was already completed, failed
 /// or cancelled.
-#[pyclass(frozen, module = "opsqueue")]
+#[pyclass(from_py_object, frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionNotCancellable {
     Completed {
@@ -537,7 +537,7 @@ where
 pub async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
-        let res = Python::with_gil(|py| {
+        let res = Python::attach(|py| {
             if let Err(err) = py.check_signals() {
                 // A signal was triggered
                 Some(err)
@@ -588,7 +588,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 ///
 /// c.f. <https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods>
 pub fn format_pyerr(err: &PyErr) -> String {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let msg: Option<String> = (|| {
             let traceback = err.traceback(py)?;
             let traceback_str = traceback

@@ -8,14 +8,14 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Unlock the GIL across `.await` points
+/// Unlock the GIL across `.await` points in GIL enabled builds.
 ///
-/// Essentially `py.allow_threads` but for async code.
+/// Essentially `py.detach` but for async code.
 ///
 /// Based on https://pyo3.rs/v0.25.1/async-await.html#release-the-gil-across-await
 pub struct AsyncAllowThreads<F>(F);
 
-pub fn async_allow_threads<F>(fut: F) -> AsyncAllowThreads<F>
+pub fn async_detach<F>(fut: F) -> AsyncAllowThreads<F>
 where
     F: Future,
 {
@@ -31,9 +31,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker = cx.waker();
-        Python::with_gil(|py| {
-            py.allow_threads(|| pin!(&mut self.0).poll(&mut Context::from_waker(waker)))
-        })
+        Python::attach(|py| py.detach(|| pin!(&mut self.0).poll(&mut Context::from_waker(waker))))
     }
 }
 
@@ -41,7 +39,7 @@ where
 pub fn future_into_py<T, F>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
-    T: for<'py> IntoPyObject<'py>,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
     pyo3_async_runtimes::generic::future_into_py::<TokioRuntimeThatIsInScope, F, T>(py, fut)
 }
@@ -71,6 +69,13 @@ impl pyo3_async_runtimes::generic::Runtime for TokioRuntimeThatIsInScope {
             fut.await;
         })
     }
+
+    fn spawn_blocking<F>(f: F) -> Self::JoinHandle
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        tokio::task::spawn_blocking(f)
+    }
 }
 
 impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
@@ -89,10 +94,7 @@ impl pyo3_async_runtimes::generic::ContextExt for TokioRuntimeThatIsInScope {
 
     fn get_task_locals() -> Option<TaskLocals> {
         TASK_LOCALS
-            .try_with(|c| {
-                c.get()
-                    .map(|locals| Python::with_gil(|py| locals.clone_ref(py)))
-            })
+            .try_with(|c| c.get().cloned())
             .unwrap_or_default()
     }
 }
