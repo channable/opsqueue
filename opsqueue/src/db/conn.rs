@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
-use sqlx::{pool::PoolConnection, Sqlite, SqliteConnection};
+use sqlx::{Sqlite, SqliteConnection, pool::PoolConnection};
 
-use super::{magic::*, Connection};
+use super::{Connection, magic::*};
 
 /// A connection to the database.
 ///

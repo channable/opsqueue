@@ -218,11 +218,11 @@ impl Chunk {
 #[cfg(feature = "server-logic")]
 pub mod db {
     use super::*;
-    use crate::common::errors::{ChunkNotFound, DatabaseError, SubmissionNotFound, E};
+    use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
     use crate::db::{Connection, True, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};
-    use sqlx::{query, query_as};
     use sqlx::{QueryBuilder, Sqlite};
+    use sqlx::{query, query_as};
 
     impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
         fn encode_by_ref(
@@ -597,9 +597,9 @@ pub mod db {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
+    use crate::common::StrategicMetadataMap;
     use crate::common::submission::db::insert_submission_raw;
     use crate::common::submission::{Submission, SubmissionStatus};
-    use crate::common::StrategicMetadataMap;
     use crate::db::{Connection as _, WriterPool};
 
     use super::db::*;

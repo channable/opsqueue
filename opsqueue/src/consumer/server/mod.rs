@@ -5,9 +5,9 @@ use std::{
 };
 
 use axum::{
+    Router,
     extract::{State, WebSocketUpgrade},
     routing::get,
-    Router,
 };
 use axum_prometheus::metrics::{gauge, histogram};
 use tokio::{select, sync::Notify};

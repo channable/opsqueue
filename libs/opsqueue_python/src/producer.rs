@@ -7,25 +7,23 @@ use pyo3::{
     types::PyIterator,
 };
 
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use opsqueue::{
+    E,
     common::errors::E::{self, L, R},
     common::errors::{SubmissionNotCancellable, SubmissionNotFound},
-    object_store::{ChunksStorageError, NewObjectStoreClientError},
-    producer::client::{Client as ActualClient, InternalProducerClientError},
-};
-use opsqueue::{
-    common::{chunk, submission, StrategicMetadataMap},
+    common::{StrategicMetadataMap, chunk, submission},
     object_store::{ChunkRetrievalError, ChunkType},
+    object_store::{ChunksStorageError, NewObjectStoreClientError},
     producer::ChunkContents,
+    producer::client::{Client as ActualClient, InternalProducerClientError},
     tracing::CarrierMap,
-    E,
 };
 use ux::u63;
 
 use crate::{
     async_util,
-    common::{run_unless_interrupted, start_runtime, SubmissionId, SubmissionStatus},
+    common::{SubmissionId, SubmissionStatus, run_unless_interrupted, start_runtime},
     errors::{self, CError, CPyResult, FatalPythonException},
 };
 

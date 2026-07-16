@@ -1,13 +1,13 @@
 //! Defines the HTTP endpoints that are used by both the `producer` and `consumer` APIs
 use std::{
     any::Any,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use backon::{BackoffBuilder, FibonacciBuilder};
-use http::{header, Response, StatusCode};
+use http::{Response, StatusCode, header};
 
 use crate::db::DBPools;
 use tokio::select;
@@ -47,15 +47,14 @@ pub async fn serve_producer_and_consumer(
         match listener.local_addr() {
             Ok(addr) => {
                 tracing::info!("Server listening on {addr}");
-                if let Some(pipe) = config.report_bound_port_pipe.take() {
-                    if let Err(err) = pipe.write_port(addr.port()) {
+                if let Some(pipe) = config.report_bound_port_pipe.take()
+                    && let Err(err) = pipe.write_port(addr.port()) {
                         tracing::warn!(
                             "Failed to write bound port {} to pipe: {}",
                             addr.port(),
                             err
                         );
                     }
-                }
             }
             Err(err) => tracing::warn!(
                 "Could not get locally bound address of the server, tried binding on {server_addr}: {err}"
@@ -137,7 +136,9 @@ pub fn build_router(
 }
 
 async fn intentionally_panic_for_tests() {
-    panic!("Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration")
+    panic!(
+        "Boom! A big explosion! This allows us to test the panic handler + trace/sentry integration"
+    )
 }
 
 pub async fn version_endpoint() -> String {

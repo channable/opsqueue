@@ -16,7 +16,7 @@ use crate::consumer::strategy;
 
 use super::CompleterMessage;
 use super::ServerState;
-use crate::common::errors::{IncorrectUsage, LimitIsZero, E};
+use crate::common::errors::{E, IncorrectUsage, LimitIsZero};
 
 #[derive(Debug, Clone)]
 pub struct ConsumerState {

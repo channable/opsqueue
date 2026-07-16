@@ -2,9 +2,9 @@
 use std::fmt::Display;
 use std::time::Duration;
 
-use crate::common::StrategicMetadataMap;
 #[cfg(feature = "server-logic")]
 use crate::E;
+use crate::common::StrategicMetadataMap;
 use chrono::{DateTime, Utc};
 use ux::u63;
 
@@ -270,13 +270,13 @@ impl Submission {
 pub mod db {
     use crate::{
         common::{
-            errors::{DatabaseError, SubmissionNotCancellable, SubmissionNotFound, E},
             StrategicMetadataMap,
+            errors::{DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound},
         },
         db::{Connection, True, WriterConnection, WriterPool},
     };
     use chunk::ChunkSize;
-    use sqlx::{query, Sqlite};
+    use sqlx::{Sqlite, query};
 
     use axum_prometheus::metrics::{counter, histogram};
 
@@ -508,7 +508,7 @@ pub mod db {
         id: SubmissionId,
         mut conn: impl Connection,
     ) -> Result<StrategicMetadataMap, DatabaseError> {
-        use futures::{future, TryStreamExt};
+        use futures::{TryStreamExt, future};
         let metadata = query!(
             r#"
         SELECT metadata_key, metadata_value FROM submissions_metadata

@@ -3,24 +3,24 @@ use std::{
     error::Error,
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use arc_swap::ArcSwapOption;
-use futures::{stream::SplitSink, SinkExt, Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt, stream::SplitSink};
 use http::Uri;
 use tokio::{net::TcpStream, sync::oneshot::error::RecvError};
 use tokio::{
     select,
-    sync::{oneshot, Mutex},
+    sync::{Mutex, oneshot},
     task::yield_now,
 };
 use tokio_tungstenite::{
-    tungstenite::{self, Message},
     MaybeTlsStream, WebSocketStream,
+    tungstenite::{self, Message},
 };
 use tokio_util::sync::{CancellationToken, DropGuard};
 // use tokio_websockets::{MaybeTlsStream, Message, WebSocketStream};
@@ -28,7 +28,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::{
     common::{
         chunk::{self, Chunk, ChunkId},
-        errors::{IncorrectUsage, LimitIsZero, E},
+        errors::{E, IncorrectUsage, LimitIsZero},
         submission::Submission,
     },
     consumer::common::{AsyncServerToClientMessage, Envelope},
@@ -177,14 +177,14 @@ struct InFlightRequests(
 
 impl InFlightRequests {
     fn next_nonce(&self) -> usize {
-        self.0 .0.fetch_add(1, Ordering::SeqCst)
+        self.0.0.fetch_add(1, Ordering::SeqCst)
     }
 
     async fn next_nonce_with_oneshot(
         &self,
     ) -> (usize, oneshot::Receiver<SyncServerToClientResponse>) {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
-        let mut guard = self.0 .1.lock().await;
+        let mut guard = self.0.1.lock().await;
         // This is called within the lock, so we know the nonce and the oneshot_sender are inserted atomically.
         let nonce = self.next_nonce();
         guard.insert(nonce, oneshot_sender);
@@ -195,7 +195,7 @@ impl InFlightRequests {
         &self,
         envelop: Envelope<SyncServerToClientResponse>,
     ) -> Result<(), SyncServerToClientResponse> {
-        let mut in_flight_requests = self.0 .1.lock().await;
+        let mut in_flight_requests = self.0.1.lock().await;
         let oneshot_sender = in_flight_requests
             .remove(&envelop.nonce)
             .expect("Received response with nonce that matches none of the open requests");
@@ -203,9 +203,9 @@ impl InFlightRequests {
     }
 
     async fn clear(&self) {
-        let mut in_flight_requests = self.0 .1.lock().await;
+        let mut in_flight_requests = self.0.1.lock().await;
         // This is called within the lock, so we know the nonce and the `onceshot_sender`s are cleared atomically.
-        self.0 .0.store(0, Ordering::SeqCst);
+        self.0.0.store(0, Ordering::SeqCst);
         in_flight_requests.clear();
     }
 }
@@ -469,7 +469,9 @@ impl Client {
 pub enum InternalConsumerClientError {
     #[error("Low-level error in the websocket connection: {0}")]
     LowLevelWebsocketError(#[from] tokio_tungstenite::tungstenite::Error),
-    #[error("The oneshot channel to receive a sync response to an earlier request was dropped before a response was received: {0}")]
+    #[error(
+        "The oneshot channel to receive a sync response to an earlier request was dropped before a response was received: {0}"
+    )]
     OneshotSenderDropped(#[from] RecvError),
     #[error("Expected the sync response of kind {expected} but received {actual:?}")]
     UnexpectedSyncResponse {

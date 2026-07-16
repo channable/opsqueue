@@ -4,7 +4,7 @@ use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python};
 use pyo3_async_runtimes::TaskLocals;
 use std::{
     future::Future,
-    pin::{pin, Pin},
+    pin::{Pin, pin},
     task::{Context, Poll},
 };
 

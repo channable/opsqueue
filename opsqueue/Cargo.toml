@@ -1,7 +1,7 @@
 [package]
 name = "opsqueue"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 description = "lightweight batch processing queue for heavy loads"
 repository = "https://github.com/channable/opsqueue"
 license = "MIT"

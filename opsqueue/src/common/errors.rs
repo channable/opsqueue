@@ -50,7 +50,9 @@ pub enum SubmissionNotCancellable {
 }
 
 #[derive(Error, Debug)]
-#[error("Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}")]
+#[error(
+    "Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}"
+)]
 pub struct UnexpectedOpsqueueConsumerServerResponse(pub SyncServerToClientResponse);
 
 /// We roll our own version of `either::E` so that we're not limited by the orphan rule.

@@ -5,10 +5,10 @@
 //! Note that we explicitly have a separate endpoint to check the queue health,
 //! which is more fine-grained than Prometheus' way to check whether a service is 'up'.
 use axum_prometheus::{
-    metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit},
+    AXUM_HTTP_REQUESTS_DURATION_SECONDS, GenericMetricLayer, PrometheusMetricLayer,
+    metrics::{Unit, describe_counter, describe_gauge, describe_histogram, gauge},
     metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
     utils::SECONDS_DURATION_BUCKETS,
-    GenericMetricLayer, PrometheusMetricLayer, AXUM_HTTP_REQUESTS_DURATION_SECONDS,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -45,7 +45,11 @@ pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_fail_chunk_duration_sec
 pub const OPERATIONS_BACKLOG_GAUGE: &str = "operations_in_backlog_count";
 
 pub fn describe_metrics() {
-    describe_counter!(SUBMISSIONS_TOTAL_COUNTER, Unit::Count, "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system");
+    describe_counter!(
+        SUBMISSIONS_TOTAL_COUNTER,
+        Unit::Count,
+        "Total count of submissions (in backlog + completed + failed), i.e. total that ever entered the system"
+    );
     describe_counter!(
         SUBMISSIONS_COMPLETED_COUNTER,
         Unit::Count,
@@ -61,7 +65,11 @@ pub fn describe_metrics() {
         Unit::Count,
         "Number of submissions cancelled (client-requested cancellation, not failure) permanently"
     );
-    describe_histogram!(SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM, Unit::Seconds, "Time between a submission entering the system and its final chunk being completed. Does not count failed submissions.");
+    describe_histogram!(
+        SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM,
+        Unit::Seconds,
+        "Time between a submission entering the system and its final chunk being completed. Does not count failed submissions."
+    );
     describe_histogram!(
         SUBMISSIONS_DURATION_FAIL_HISTOGRAM,
         Unit::Seconds,
@@ -93,22 +101,46 @@ pub fn describe_metrics() {
         Unit::Count,
         "Number of chunks skipped (because another chunk in the submission failed)"
     );
-    describe_counter!(CHUNKS_TOTAL_COUNTER, Unit::Count, "Total count of chunks (in backlog + completed + failed), i.e. total that ever entered the system");
+    describe_counter!(
+        CHUNKS_TOTAL_COUNTER,
+        Unit::Count,
+        "Total count of chunks (in backlog + completed + failed), i.e. total that ever entered the system"
+    );
     // We could calculate the backlog size from TOTAL - COMPLETED - FAILED - SKIPPED
     // but since it will commonly be used for checking whether we should autoscale,
     // it's much nicer to measure/expose it directly
-    describe_gauge!(CHUNKS_BACKLOG_GAUGE, Unit::Count, "Number of chunks in the backlog. Note that this is a _gauge_ reflecting the accurate state of the DB");
-    describe_histogram!(CHUNKS_DURATION_COMPLETED_HISTOGRAM, Unit::Seconds, "How long it took from the moment a chunk was reserved until 'complete_chunk' was called, as measured from Opsqueue (so including network overhead and reading/writing to the object_store to get the chunk data)");
-    describe_histogram!(CHUNKS_DURATION_FAILED_HISTOGRAM, Unit::Seconds, "How long it took from the moment a chunk was reserved until 'fail_chunk' was called, as measured from Opsqueue (so including network overhead and reading/writing to the object_store to get the chunk data). Includes chunks that are retried.");
+    describe_gauge!(
+        CHUNKS_BACKLOG_GAUGE,
+        Unit::Count,
+        "Number of chunks in the backlog. Note that this is a _gauge_ reflecting the accurate state of the DB"
+    );
+    describe_histogram!(
+        CHUNKS_DURATION_COMPLETED_HISTOGRAM,
+        Unit::Seconds,
+        "How long it took from the moment a chunk was reserved until 'complete_chunk' was called, as measured from Opsqueue (so including network overhead and reading/writing to the object_store to get the chunk data)"
+    );
+    describe_histogram!(
+        CHUNKS_DURATION_FAILED_HISTOGRAM,
+        Unit::Seconds,
+        "How long it took from the moment a chunk was reserved until 'fail_chunk' was called, as measured from Opsqueue (so including network overhead and reading/writing to the object_store to get the chunk data). Includes chunks that are retried."
+    );
 
-    describe_gauge!(RESERVER_CHUNKS_RESERVED_GAUGE, Unit::Count, "Number of chunks currently reserved by the reserver, i.e. being worked on by the consumers");
+    describe_gauge!(
+        RESERVER_CHUNKS_RESERVED_GAUGE,
+        Unit::Count,
+        "Number of chunks currently reserved by the reserver, i.e. being worked on by the consumers"
+    );
 
     describe_gauge!(
         CONSUMERS_CONNECTED_GAUGE,
         Unit::Count,
         "Number of healthy websocket connections between the system and consumers"
     );
-    describe_histogram!(CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM, Unit::Seconds, "Time spent by Opsqueue (SQLite + reserver) to reserve `limit` chunks for a consumer using strategy `strategy`");
+    describe_histogram!(
+        CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM,
+        Unit::Seconds,
+        "Time spent by Opsqueue (SQLite + reserver) to reserve `limit` chunks for a consumer using strategy `strategy`"
+    );
     describe_histogram!(
         CONSUMER_COMPLETE_CHUNK_DURATION,
         Unit::Seconds,

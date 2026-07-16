@@ -8,8 +8,8 @@ use std::{
 use axum_prometheus::metrics::{counter, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use tokio_util::time::DelayQueue;
 
