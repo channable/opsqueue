@@ -6,6 +6,7 @@ use opentelemetry_resource_detectors::{OsResourceDetector, ProcessResourceDetect
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
+    error::Error,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
@@ -47,9 +48,9 @@ pub async fn async_main() {
     .expect("Timed out while initiating the database");
 
     moro_local::async_scope!(|scope| {
-        scope.spawn(db_pool.periodically_checkpoint_wal());
+        let checkpoint_handle = scope.spawn(db_pool.periodically_checkpoint_wal());
 
-        scope.spawn(opsqueue::server::serve_producer_and_consumer(
+        let server_handle = scope.spawn(opsqueue::server::serve_producer_and_consumer(
             config,
             &server_addr,
             &db_pool,
@@ -60,15 +61,15 @@ pub async fn async_main() {
         ));
 
         let max_age = config.max_submission_age.into();
-        scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
+        let cleanup_handle = scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
 
-        scope.spawn(prometheus::periodically_calculate_scaling_metrics(
+        let prometheus_handle = scope.spawn(prometheus::periodically_calculate_scaling_metrics(
             &db_pool,
             &cancellation_token,
         ));
 
         // Set up complete. Start up watchdog, which will mark app healthy when appropriate
-        scope.spawn(opsqueue::server::app_watchdog(
+        let watchdog_handle = scope.spawn(opsqueue::server::app_watchdog(
             app_healthy_flag.clone(),
             &db_pool,
             cancellation_token.clone(),
@@ -79,9 +80,29 @@ pub async fn async_main() {
             opsqueue::version_info()
         );
 
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to set up Ctrl+C signal handler");
+        tokio::select! {
+            _ = checkpoint_handle => {
+                tracing::error!("Checkpointing task exited unexpectedly");
+            },
+            _ = server_handle => {
+                tracing::error!("Server task exited unexpectedly");
+            },
+            _ = cleanup_handle => {
+                tracing::error!("Cleanup task exited unexpectedly");
+            },
+            _ = prometheus_handle => {
+                tracing::error!("Prometheus metrics calculation task exited unexpectedly");
+            },
+            _ = watchdog_handle => {
+                tracing::error!("Watchdog task exited unexpectedly");
+            },
+            res = tokio::signal::ctrl_c() => {
+                match res {
+                    Ok(_) => tracing::warn!("Received Ctrl-C signal"),
+                    Err(ref err) => tracing::error!(error = err as &dyn Error, "Error while waiting for Ctrl-C signal"),
+                };
+            },
+        };
 
         tracing::warn!("Opsqueue is shutting down");
 
