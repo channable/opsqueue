@@ -44,3 +44,6 @@ opt-level = 3
 
 [profile.release.build-override]
 opt-level = 3
+
+[patch.crates-io]
+snowflaked = { git = "https://github.com/channable/snowflaked-rs.git" }

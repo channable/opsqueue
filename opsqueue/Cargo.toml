@@ -83,8 +83,6 @@ sqlformat = "0.5.0"
 criterion = {version = "0.8", features = ["async_tokio"]}
 insta = { version = "1.47.2" }
 assert_matches = { version = "1.5.0" }
-snowflaked = {version = "1.0.3", features = ["sync"] }
-proptest = "1.6.0"
 
 # [[bench]]
 # name = "chunks_select"
@@ -93,10 +91,6 @@ proptest = "1.6.0"
 # [[bench]]
 # name = "submissions_insert"
 # harness = false
-
-[[bench]]
-name = "snowflake_compare"
-harness = false
 
 [features]
 # Dependencies only in use by the server-logic:
