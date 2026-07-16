@@ -63,7 +63,10 @@ let
     cargoExtraArgs = "--package opsqueue_python";
     doCheck = false;
   };
-  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { pname = pname; });
+  # The `cargo build` still catches the same errors as `cargo check`. The `nix build` executes them
+  # serially, this is the slowest part on CI. We have other CI linting steps, i.e. `cargo clippy`,
+  # that report these errors earlier.
+  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { cargoCheckCommand = "true"; });
 
   wheelTail = "py3-abi3-linux_x86_64";
   wheelName = "opsqueue-${version}-${wheelTail}.whl";

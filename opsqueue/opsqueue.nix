@@ -16,14 +16,17 @@ let
   sources = import ../nix/sources.nix;
   crane = import sources.crane { pkgs = pkgs; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
-  extraFileFilter = path: _type: builtins.match "^.*\.(db|sql)$" path != null;
-  fileFilter = path: type: (extraFileFilter path type) || (craneLib.filterCargoSources path type);
+
+  # Only the files necessary to build the Rust-side and cache dependencies
+  sqlFileFilter = path: _type: builtins.match "^.*\.(db|sql)$" path != null;
+  rustCrateFileFilter =
+    path: type: (sqlFileFilter path type) || (craneLib.filterCargoSources path type);
 
   # src = craneLib.cleanCargoSource ../.;
   src = lib.cleanSourceWith {
     src = ../.;
     name = "opsqueue";
-    filter = fileFilter;
+    filter = rustCrateFileFilter;
   };
 
   crateName = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
@@ -37,7 +40,10 @@ let
     cargoExtraArgs = "--package opsqueue";
     doCheck = true;
   };
-  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+  # The `cargo build` still catches the same errors as `cargo check`. The `nix build` executes them
+  # serially, this is the slowest part on CI. We have other CI linting steps, i.e. `cargo clippy`,
+  # that report these errors earlier.
+  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { cargoCheckCommand = "true"; });
 in
 craneLib.buildPackage (
   commonArgs
