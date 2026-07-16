@@ -106,13 +106,13 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 pub mod test {
     use itertools::Itertools;
     use libsqlite3_sys as ffi;
-    use sqlformat::{FormatOptions, QueryParams, format};
+    use sqlformat::{format, FormatOptions, QueryParams};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
     use super::*;
-    use crate::common::StrategicMetadataMap;
     use crate::common::chunk::ChunkSize;
+    use crate::common::StrategicMetadataMap;
 
     unsafe extern "C" fn sqlite_reserved_chunk_lookup_noop(
         context: *mut ffi::sqlite3_context,

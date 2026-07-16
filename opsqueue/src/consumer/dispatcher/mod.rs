@@ -6,7 +6,7 @@ use crate::{
         chunk::{Chunk, ChunkId, ChunkIndex},
         submission::{Submission, SubmissionId},
     },
-    db::{Connection, Pool, ReaderPool, magic::Bool},
+    db::{magic::Bool, Connection, Pool, ReaderPool},
 };
 use futures::stream::{StreamExt as _, TryStreamExt as _};
 use libsqlite3_sys as ffi;
