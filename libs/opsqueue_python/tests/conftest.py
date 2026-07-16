@@ -50,13 +50,9 @@ def opsqueue() -> Generator[OpsqueueProcess, None, None]:
 
 @contextmanager
 def opsqueue_service(
-    *, port: int | None = None
+    *,
+    port: int = 0,  # The default of 0 means "pick any free port".
 ) -> Generator[OpsqueueProcess, None, None]:
-    global test_opsqueue_port_offset
-
-    if port is None:
-        port = random_free_port()
-
     # This will create a SQLite database in memory.
     # We need the `cache=shared` to allow sharing this DB between all threads within the same OS process.
     temp_dbname = "file::memory:?cache=shared"
@@ -66,12 +62,16 @@ def opsqueue_service(
     # will from time to time hang for **many minutes** on initializing SQLite for some reason.
     # temp_dbname = f"/tmp/opsqueue_tests-{uuid.uuid4()}.db"
 
+    read_fd, write_fd = os.pipe()
+
     command = [
         "setpriv",
         "--pdeathsig=SIGKILL",
         str(opsqueue_bin_location()),
         "--port",
         str(port),
+        "--report-bound-port-pipe",
+        str(write_fd),
         "--database-filename",
         temp_dbname,
     ]
@@ -79,30 +79,65 @@ def opsqueue_service(
     if env.get("RUST_LOG") is None:
         env["RUST_LOG"] = "off"
 
-    with subprocess.Popen(command, cwd=PROJECT_ROOT, env=env) as process:
-        assert process.poll() is None, "Opsqueue process failed to start"
-        try:
-            wrapper = OpsqueueProcess(port=port, process=process)
-            yield wrapper
-            assert process.poll() is None, "Opsqueue process failed during run"
-        finally:
-            process.terminate()
+    try:
+        with subprocess.Popen(
+            command,
+            cwd=PROJECT_ROOT,
+            env=env,
+            pass_fds=(write_fd,),
+        ) as process:
+            os.close(write_fd)
+            write_fd = -1
+
+            assert process.poll() is None, "Opsqueue process failed to start"
+            try:
+                actual_port = int.from_bytes(
+                    read_exact_fd(read_fd, 2),
+                    byteorder="big",
+                    signed=False,
+                )
+                os.close(read_fd)
+                read_fd = -1
+
+                yield OpsqueueProcess(port=actual_port, process=process)
+                assert process.poll() is None, "Opsqueue process failed during run"
+            finally:
+                # Give the process a chance to exit cleanly, but if it doesn't, kill it.
+                # `with subprocess.Popen(...) as process` will not terminate the process on its own.
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired as exc:
+                    process.kill()
+                    raise AssertionError(
+                        "Opsqueue process locked up for more than 1 second on shutdown"
+                    ) from exc
+
+    finally:
+        if write_fd != -1:
+            os.close(write_fd)
+        if read_fd != -1:
+            os.close(read_fd)
 
 
-def random_free_port() -> int:
-    import random
+def read_exact_fd(fd: int, num_bytes: int) -> bytes:
+    """
+    Reads exactly `num_bytes` bytes from the given file descriptor `fd`.
 
-    while True:
-        port = random.randrange(10_000, 60_000)
-        if not is_port_in_use(port):
-            return port
+    `os.read` may return fewer bytes than requested, so this function will keep reading until the
+    requested number of bytes is obtained or EOF is reached.
 
-
-def is_port_in_use(port: int) -> bool:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("localhost", port)) == 0
+    Raises EOFError if the end of the file is reached before reading the requested number of bytes.
+    """
+    data = bytearray()
+    while len(data) < num_bytes:
+        chunk = os.read(fd, num_bytes - len(data))
+        if not chunk:
+            raise EOFError(
+                f"Unexpected EOF: expected {num_bytes} bytes, got {len(data)}: {bytes(data)!r}"
+            )
+        data.extend(chunk)
+    return bytes(data)
 
 
 @contextmanager

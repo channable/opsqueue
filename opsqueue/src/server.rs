@@ -45,7 +45,18 @@ pub async fn serve_producer_and_consumer(
         );
         let listener = tokio::net::TcpListener::bind(server_addr).await?;
         match listener.local_addr() {
-            Ok(addr) => tracing::info!("Server listening on {addr}"),
+            Ok(addr) => {
+                tracing::info!("Server listening on {addr}");
+                if let Some(pipe) = config.report_bound_port_pipe.take() {
+                    if let Err(err) = pipe.write_port(addr.port()) {
+                        tracing::warn!(
+                            "Failed to write bound port {} to pipe: {}",
+                            addr.port(),
+                            err
+                        );
+                    }
+                }
+            }
             Err(err) => tracing::warn!(
                 "Could not get locally bound address of the server, tried binding on {server_addr}: {err}"
             ),
@@ -57,7 +68,11 @@ pub async fn serve_producer_and_consumer(
     })
     .retry(retry_policy())
     .notify(|e, d| tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}"))
-    .await
+    .await.inspect_err(|_|{
+        // Drop the pipe after the server start retries have been exhausted. This ensures that the
+        // parent process can safely block on reading from the pipe.
+        config.report_bound_port_pipe.take();
+    })
 }
 
 #[cfg(feature = "server-logic")]
