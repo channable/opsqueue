@@ -499,7 +499,7 @@ mod tests {
 
     use super::*;
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
         let db_pools = db::DBPools::from_test_pool(&pool);
         let uri = "0.0.0.0:10083";

@@ -605,7 +605,7 @@ pub mod test {
     use super::db::*;
     use super::*;
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_insert_chunk(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -622,7 +622,7 @@ pub mod test {
         assert!(count_chunks(&mut conn).await.unwrap() == u63::new(1));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_get_chunk(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -642,7 +642,7 @@ pub mod test {
         assert!(chunk == fetched_chunk);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_complete_chunk_raw(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -680,7 +680,7 @@ pub mod test {
         assert!(count_chunks_failed(&mut conn).await.unwrap() == u63::new(0));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_complete_chunk_raw_updates_submissions_chunk_total(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -723,7 +723,7 @@ pub mod test {
         }
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();

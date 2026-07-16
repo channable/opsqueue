@@ -139,7 +139,7 @@ pub mod test {
         );
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let mut qb = QueryBuilder::new("");
@@ -162,7 +162,7 @@ pub mod test {
         assert_eq!(explained, "3, 0, SCAN chunks");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let mut qb = QueryBuilder::new("");
@@ -185,7 +185,7 @@ pub mod test {
         assert_eq!(explained, "3, 0, SCAN chunks");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_random(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         let metastate = MetaState::default();
@@ -221,7 +221,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_prefer_distinct_oldest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
@@ -307,7 +307,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_prefer_distinct_newest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
@@ -393,7 +393,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_prefer_distinct_random(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
@@ -502,7 +502,7 @@ pub mod test {
         ");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_prefer_distinct_nested(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
@@ -726,7 +726,7 @@ pub mod test {
     use crate::db::Connection;
     use futures::stream::TryStreamExt as _;
 
-    #[sqlx::test]
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     /// Tests whether the 'cutting the deck' technique is working
     ///
     /// We do this by checking whether two selects in a huge amount of available chunks
