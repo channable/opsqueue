@@ -89,5 +89,5 @@ blocks:
       jobs:
         - name: "Type- and format-check"
           commands:
-            - "just lint-light --all"
+            - "just lint-light --show-diff-on-failure --all"
             - "just lint-heavy"

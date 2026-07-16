@@ -29,4 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
       - uses: ./.github/actions/setup-nix-direnv-rust
-      - run: just lint
+      - run: |
+          just lint-light --show-diff-on-failure --all
+          just lint-heavy
