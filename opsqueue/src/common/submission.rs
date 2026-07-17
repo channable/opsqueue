@@ -270,15 +270,17 @@ impl Submission {
 pub mod db {
     use crate::{
         common::{
-            StrategicMetadataMap,
-            errors::{DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound},
+            MaxSubmissions, StrategicMetadataMap,
+            errors::{
+                DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound,
+                TooManyMatchingSubmissions,
+            },
         },
         db::{Connection, True, WriterConnection, WriterPool},
     };
-    use chunk::ChunkSize;
-    use sqlx::{Sqlite, query};
-
     use axum_prometheus::metrics::{counter, histogram};
+    use chunk::ChunkSize;
+    use sqlx::{QueryBuilder, Sqlite, query, query_scalar};
 
     use super::*;
 
@@ -543,6 +545,59 @@ pub mod db {
         .fetch_optional(conn.get_inner())
         .await?;
         Ok(row.map(|row| row.id))
+    }
+
+    pub async fn lookup_ids_by_strategic_metadata(
+        strategic_metadata: StrategicMetadataMap,
+        max_submissions: MaxSubmissions,
+        mut conn: impl Connection,
+    ) -> Result<Vec<SubmissionId>, E<DatabaseError, TooManyMatchingSubmissions>> {
+        // MaxSubmissions provides us with the guarantee this won't overflow.
+        let limit = (u64::from(max_submissions) + 1) as i64;
+        // The main query to match on strategic_metadata will fail at run-time
+        // if strategic_metadata is empty, so we handle the empty case here.
+        let ids = if strategic_metadata.is_empty() {
+            query_scalar!(
+                r#"SELECT id AS "id: SubmissionId" FROM submissions ORDER BY id LIMIT ?"#,
+                limit
+            )
+            .fetch_all(conn.get_inner())
+            .await?
+        } else {
+            let mut query_builder: QueryBuilder<Sqlite> =
+                lookup_ids_by_strategic_metadata_query(&strategic_metadata, limit);
+            query_builder
+                .build_query_scalar()
+                .fetch_all(conn.get_inner())
+                .await?
+        };
+        if ids.len() as u64 > u64::from(max_submissions) {
+            Err(E::R(TooManyMatchingSubmissions(u64::from(max_submissions))))
+        } else {
+            Ok(ids)
+        }
+    }
+
+    /// The query in 'lookup_ids_by_strategic_metadata', extracted for testing.
+    pub fn lookup_ids_by_strategic_metadata_query(
+        strategic_metadata: &StrategicMetadataMap,
+        limit: i64,
+    ) -> QueryBuilder<'_, Sqlite> {
+        let mut query_builder: QueryBuilder<Sqlite> =
+            QueryBuilder::new("SELECT id FROM submissions");
+        // Inner join for each piece of strategic metadata.
+        for (i, (key, value)) in strategic_metadata.iter().enumerate() {
+            query_builder.push(format!(
+                " INNER JOIN submissions_metadata AS s{i} ON s{i}.submission_id = submissions.id"
+            ));
+            query_builder.push(format!(" AND s{i}.metadata_key = "));
+            query_builder.push_bind(key.clone());
+            query_builder.push(format!(" AND s{i}.metadata_value = "));
+            query_builder.push_bind(*value);
+        }
+        query_builder.push(" ORDER BY s0.submission_id LIMIT ");
+        query_builder.push_bind(limit);
+        query_builder
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1036,6 +1091,7 @@ pub mod test {
     use chrono::Utc;
     use chunk::ChunkSize;
     use itertools::Itertools;
+    use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::{Row, SqliteConnection};
 
     use crate::common::StrategicMetadataMap;
@@ -1068,6 +1124,41 @@ pub mod test {
             !explained.contains("B-TREE"),
             "Query should contain no temporary B-tree construction, but it did.\n\nQuery: {query}\n\nPlan:\n\n{explained}"
         );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_lookup_by_strategic_metadata(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        let strategic_metadata: StrategicMetadataMap =
+            [("company_id".to_string(), 1), ("project_id".to_string(), 2)]
+                .into_iter()
+                .collect();
+        let qb = lookup_ids_by_strategic_metadata_query(&strategic_metadata, 100_000);
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          id
+        FROM
+          submissions
+          INNER JOIN submissions_metadata AS s0 ON s0.submission_id = submissions.id
+          AND s0.metadata_key = ?
+          AND s0.metadata_value = ?
+          INNER JOIN submissions_metadata AS s1 ON s1.submission_id = submissions.id
+          AND s1.metadata_key = ?
+          AND s1.metadata_value = ?
+        ORDER BY
+          s0.submission_id
+        LIMIT
+          ?
+        ");
+        let explained = explain_query_plan(&formatted_query, &mut conn).await;
+        assert_non_regressing_query_plan(&formatted_query, &explained);
+        insta::assert_snapshot!(explained, @"
+        8, 0, SEARCH s0 USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        16, 0, SEARCH submissions USING COVERING INDEX sqlite_autoindex_submissions_1 (id=?)
+        21, 0, SEARCH s1 USING PRIMARY KEY (submission_id=? AND metadata_key=? AND metadata_value=?)
+        ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

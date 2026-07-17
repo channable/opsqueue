@@ -49,6 +49,10 @@ pub enum SubmissionNotCancellable {
     Cancelled(SubmissionCancelled),
 }
 
+#[derive(Error, Debug, Deserialize, Serialize)]
+#[error("Too many submissions matched the lookup, the maximum is {0:?}")]
+pub struct TooManyMatchingSubmissions(pub u64);
+
 #[derive(Error, Debug)]
 #[error(
     "Unexpected opsqueue consumer server response. This indicates an error inside Opsqueue itself: {0:?}"

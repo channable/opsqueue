@@ -5,7 +5,7 @@ use std::error::Error;
 use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
     ChunkNotFound, E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
-    UnexpectedOpsqueueConsumerServerResponse,
+    TooManyMatchingSubmissions, UnexpectedOpsqueueConsumerServerResponse,
 };
 use pyo3::exceptions::PyBaseException;
 use pyo3::{Bound, PyErr, Python, import_exception};
@@ -22,6 +22,7 @@ import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
+import_exception!(opsqueue.exceptions, TooManyMatchingSubmissionsError);
 import_exception!(opsqueue.exceptions, NewObjectStoreClientError);
 import_exception!(opsqueue.exceptions, SubmissionNotCompletedYetError);
 
@@ -143,6 +144,12 @@ impl From<CError<SubmissionNotFound>> for PyErr {
     fn from(value: CError<SubmissionNotFound>) -> Self {
         let submission_id = value.0.0;
         SubmissionNotFoundError::new_err(u64::from(submission_id))
+    }
+}
+
+impl From<CError<TooManyMatchingSubmissions>> for PyErr {
+    fn from(value: CError<TooManyMatchingSubmissions>) -> Self {
+        TooManyMatchingSubmissionsError::new_err(value.0.0)
     }
 }
 

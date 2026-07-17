@@ -11,10 +11,9 @@ use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use opsqueue::{
     E,
     common::errors::E::{self, L, R},
-    common::errors::{SubmissionNotCancellable, SubmissionNotFound},
+    common::errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
     common::{StrategicMetadataMap, chunk, submission},
-    object_store::{ChunkRetrievalError, ChunkType},
-    object_store::{ChunksStorageError, NewObjectStoreClientError},
+    object_store::{ChunkRetrievalError, ChunkType, ChunksStorageError, NewObjectStoreClientError},
     producer::ChunkContents,
     producer::client::{Client as ActualClient, InternalProducerClientError},
     tracing::CarrierMap,
@@ -183,6 +182,31 @@ impl ProducerClient {
                     .lookup_submission_id_by_prefix(prefix)
                     .await
                     .map(|opt| opt.map(Into::into))
+                    .map_err(|e| CError(R(e)))
+            })
+        })
+    }
+
+    /// Attempts to find the IDs of submission matching ALL key-values pairs of
+    /// the given strategic metadata.
+    pub fn lookup_submission_ids_by_strategic_metadata(
+        &self,
+        py: Python<'_>,
+        strategic_metadata: StrategicMetadataMap,
+    ) -> CPyResult<
+        Vec<SubmissionId>,
+        E![
+            FatalPythonException,
+            TooManyMatchingSubmissions,
+            InternalProducerClientError
+        ],
+    > {
+        py.detach(|| {
+            self.block_unless_interrupted(async {
+                self.producer_client
+                    .lookup_submission_ids_by_strategic_metadata(&strategic_metadata)
+                    .await
+                    .map(|res| res.into_iter().map(Into::into).collect())
                     .map_err(|e| CError(R(e)))
             })
         })

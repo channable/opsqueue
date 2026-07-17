@@ -94,8 +94,12 @@ pub fn build_router(
     )
     .run_background()
     .build_router();
-    let producer_routes =
-        crate::producer::server::ServerState::new(pool, notify_on_insert).build_router();
+    let producer_routes = crate::producer::server::ServerState::new(
+        pool,
+        notify_on_insert,
+        config.max_submissions_returned,
+    )
+    .build_router();
 
     let routes = Router::new()
         .nest("/producer", producer_routes)

@@ -52,6 +52,7 @@ def opsqueue() -> Generator[OpsqueueProcess, None, None]:
 def opsqueue_service(
     *,
     port: int = 0,  # The default of 0 means "pick any free port".
+    command_args: Iterable[str] = (),
 ) -> Generator[OpsqueueProcess, None, None]:
     # This will create a SQLite database in memory.
     # We need the `cache=shared` to allow sharing this DB between all threads within the same OS process.
@@ -74,6 +75,7 @@ def opsqueue_service(
         str(write_fd),
         "--database-filename",
         temp_dbname,
+        *command_args,
     ]
     env = os.environ.copy()  # We copy the env so e.g. RUST_LOG and other env vars are propagated from outside of the invocation of pytest
     if env.get("RUST_LOG") is None:

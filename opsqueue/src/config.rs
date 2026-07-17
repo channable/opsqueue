@@ -12,6 +12,13 @@ use std::{
 
 use clap::Parser;
 
+use crate::common::MaxSubmissions;
+
+fn default_max_submissions_returned() -> MaxSubmissions {
+    MaxSubmissions::new(NonZero::new(100_000).expect("Non-zero u64"))
+        .expect("Valid MaxSubmissions default")
+}
+
 /// Making big work horizontally scalable.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -93,6 +100,11 @@ pub struct Config {
 
     #[arg(long, default_value = "1 hour")]
     pub max_submission_age: humantime::Duration,
+
+    /// Maximum number of submission IDs that a single
+    /// `lookup_submission_ids_by_strategic_metadata` request may return.
+    #[arg(long, default_value_t = default_max_submissions_returned())]
+    pub max_submissions_returned: MaxSubmissions,
 }
 
 impl Default for Config {
@@ -109,6 +121,7 @@ impl Default for Config {
         let max_missable_heartbeats = 3;
         let max_chunk_retries = 10;
         let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
+        let max_submissions_returned = default_max_submissions_returned();
         Config {
             port,
             report_bound_port_pipe,
@@ -119,6 +132,7 @@ impl Default for Config {
             max_missable_heartbeats,
             max_chunk_retries,
             max_submission_age,
+            max_submissions_returned,
         }
     }
 }

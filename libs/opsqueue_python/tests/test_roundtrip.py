@@ -14,6 +14,7 @@ from opsqueue.producer import (
     SubmissionNotFoundError,
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
+    TooManyMatchingSubmissionsError,
 )
 from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.common import SerializationFormat
@@ -21,11 +22,11 @@ from conftest import (
     background_process,
     multiple_background_processes,
     OpsqueueProcess,
+    opsqueue_service,
     StrategyDescription,
     strategy_from_description,
 )
 import logging
-
 import pytest
 
 
@@ -577,3 +578,92 @@ def test_failed_submission_includes_chunks_done(opsqueue: OpsqueueProcess) -> No
         with pytest.raises(SubmissionFailedError) as exc_info:
             producer_client.blocking_stream_completed_submission(submission_id)
         assert exc_info.value.submission.chunks_done == len(chunks) - 1
+
+
+def test_lookup_submission_ids_by_strategic_metadata(opsqueue: OpsqueueProcess) -> None:
+    """Lookup of submission IDs should only match in progress submissions with
+    all pieces of strategic metadata.
+
+    """
+    url = "file:///tmp/opsqueue/test_lookup_submission_ids_by_strategic_metadata"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    id_1 = producer_client.insert_submission(
+        [1], chunk_size=1, strategic_metadata={"foo": 1, "bar": 2, "wow": 3}
+    )
+    id_2 = producer_client.insert_submission(
+        [1], chunk_size=1, strategic_metadata={"foo": 1, "bar": 2, "moo": 3}
+    )
+    # Inserting some similar data to that above, which shouldn't get matched.
+    producer_client.insert_submission(
+        [1], chunk_size=1, strategic_metadata={"foo": 2, "bar": 1}
+    )
+
+    def test_lookup(
+        strategic_metadata: dict[str, int], expected_ids: list[int]
+    ) -> None:
+        found_ids = producer_client.lookup_submission_ids_by_strategic_metadata(
+            strategic_metadata
+        )
+        assert isinstance(found_ids, list)
+        assert all(map(lambda x: isinstance(x, SubmissionId), found_ids))
+        assert found_ids == expected_ids
+
+    test_lookup({"foo": 1}, [id_1, id_2])
+    test_lookup({"foo": 1, "bar": 2}, [id_1, id_2])
+    test_lookup({"foo": 1, "MISS": 2}, [])
+    test_lookup({"wow": 3}, [id_1])
+
+    # Should only match in-progress submission.
+    producer_client.cancel_submission(id_1)
+    test_lookup({"foo": 1}, [id_2])
+
+
+def test_lookup_submission_ids_by_empty_strategic_metadata(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    """Lookup of submission IDs with empty strategic_metadata should NOT raise
+    an exception.
+
+    """
+    url = "file:///tmp/opsqueue/test_lookup_submission_ids_by_empty_strategic_metadata"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    count = 6
+    for _ in range(count):
+        producer_client.insert_submission([1], chunk_size=1)
+    assert len(producer_client.lookup_submission_ids_by_strategic_metadata({})) == count
+
+
+def test_lookup_too_many_submission_ids_by_strategic_metadata() -> None:
+    """Lookup of too many submission IDs beyond the configured limit raises
+    TooManyMatchingSubmissionsError.
+
+    """
+    max_ = 2
+    # We didn't request the OpsQueueProcess as a parameter so an instance isn't
+    # started, instead we start one here with custom args.
+    with opsqueue_service(
+        command_args=["--max-submissions-returned", str(max_)]
+    ) as opsqueue:
+        url = "file:///tmp/opsqueue/test_lookup_too_many_matching_submissions"
+        producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+        inserted: list[SubmissionId] = []
+        strategic_metadata = {"k": 1}
+        for _ in range(max_ + 1):
+            assert (
+                inserted
+                == producer_client.lookup_submission_ids_by_strategic_metadata(
+                    strategic_metadata
+                )
+            )
+            inserted.append(
+                producer_client.insert_submission(
+                    [1], chunk_size=1, strategic_metadata=strategic_metadata
+                )
+            )
+        with pytest.raises(TooManyMatchingSubmissionsError) as exc:
+            assert len(inserted) == max_ + 1
+            producer_client.lookup_submission_ids_by_strategic_metadata(
+                strategic_metadata
+            )
+        assert exc.type is TooManyMatchingSubmissionsError
+        assert exc.value.max_submissions == max_
