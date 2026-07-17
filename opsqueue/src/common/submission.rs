@@ -1157,7 +1157,7 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         8, 0, SEARCH s0 USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
         16, 0, SEARCH submissions USING COVERING INDEX sqlite_autoindex_submissions_1 (id=?)
-        21, 0, SEARCH s1 USING PRIMARY KEY (submission_id=? AND metadata_key=? AND metadata_value=?)
+        21, 0, SEARCH s1 USING PRIMARY KEY (submission_id=? AND metadata_key=?)
         ");
     }
 
