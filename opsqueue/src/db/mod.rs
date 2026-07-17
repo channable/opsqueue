@@ -234,6 +234,10 @@ impl DBPools {
     /// Access a reader connection.
     ///
     /// Such a connection can't be used to make changes to the state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring a reader connection fails.
     pub async fn reader_conn(&self) -> sqlx::Result<Reader<NoTransaction>> {
         self.read_pool.reader_conn().await
     }
@@ -241,6 +245,10 @@ impl DBPools {
     ///
     /// This connection can be used both for functions requiring read-only access and for functions
     /// that make changes to the state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the writer connection fails.
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.write_pool.writer_conn().await
     }
@@ -280,6 +288,10 @@ where
         }
     }
     /// Acquire a new connection from the underlying pool and wrap it in our typed connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if pool acquisition fails.
     pub async fn acquire(&self) -> sqlx::Result<Conn<W>> {
         self.inner.acquire().await.map(Conn::new)
     }
@@ -291,10 +303,19 @@ impl WriterPool {
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
     /// [`DBPools`]: DBPools
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the connection fails.
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.acquire().await
     }
 
+    /// Perform an explicit WAL checkpoint using the writer connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection acquisition or checkpoint execution fails.
     pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
         let conn = self.writer_conn().await?;
         perform_explicit_wal_checkpoint(conn).await
@@ -305,6 +326,10 @@ impl WriterPool {
 /// We use the 'RESTART' strategy, which will do the most work but will briefly block the writer *and* all readers
 ///
 /// c.f. <https://www.sqlite.org/pragma.html#pragma_wal_checkpoint>
+///
+/// # Errors
+///
+/// Returns an error if the checkpoint query fails.
 pub async fn perform_explicit_wal_checkpoint(mut conn: impl WriterConnection) -> sqlx::Result<()> {
     let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
         .fetch_one(conn.get_inner())
@@ -319,6 +344,10 @@ impl ReaderPool {
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
     /// [`DBPools`]: DBPools
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the connection fails.
     pub async fn reader_conn(&self) -> sqlx::Result<Reader<NoTransaction>> {
         self.acquire().await
     }

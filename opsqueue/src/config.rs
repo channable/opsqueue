@@ -142,6 +142,11 @@ pub struct ReportBoundPortPipe(Arc<Mutex<Option<BoundPortPipe>>>);
 
 impl ReportBoundPortPipe {
     #[must_use]
+    /// Take ownership of the optional bound-port pipe.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn take(&self) -> Option<BoundPortPipe> {
         self.0.lock().expect("No poison").take()
     }
@@ -151,6 +156,11 @@ impl ReportBoundPortPipe {
 pub struct BoundPortPipe(File);
 
 impl BoundPortPipe {
+    /// Write the bound port into the configured file descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing or flushing the file descriptor fails.
     pub fn write_port(mut self, port: u16) -> io::Result<()> {
         self.0.write_all(&u16::to_be_bytes(port))?;
         self.0.flush()

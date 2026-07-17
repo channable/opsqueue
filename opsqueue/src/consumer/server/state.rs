@@ -48,6 +48,15 @@ impl ConsumerState {
 
     #[tracing::instrument(skip(self, stale_chunks_notifier))]
     #[allow(clippy::type_complexity)]
+    /// Fetch and reserve chunks for this connection state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reservations mutex is poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid `limit` values or underlying database failures.
     pub async fn fetch_and_reserve_chunks(
         &mut self,
         strategy: strategy::Strategy,

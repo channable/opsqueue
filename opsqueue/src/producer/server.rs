@@ -40,6 +40,12 @@ impl ServerState {
             max_submissions,
         }
     }
+
+    /// Run a test-only producer HTTP server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if binding the server socket fails or if serving fails unexpectedly.
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
         let app = Router::new().nest("/producer", self.build_router());
 
@@ -209,16 +215,16 @@ pub struct InsertSubmissionResponse {
     pub id: SubmissionId,
 }
 
-async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
+async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions(&mut conn).await?;
-    Ok(Json(count.try_into()?))
+    Ok(Json(u64::from(count)))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
-) -> Result<Json<u32>, ServerError> {
+) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions_completed(&mut conn).await?;
-    Ok(Json(count.try_into()?))
+    Ok(Json(u64::from(count)))
 }

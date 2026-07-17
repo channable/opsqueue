@@ -14,7 +14,7 @@ pub fn context_from_headers(headers: &http::HeaderMap) -> Context {
 #[must_use]
 pub fn context_to_headers(context: &Context) -> http::HeaderMap {
     let propagator = propagator();
-    let mut headers = Default::default();
+    let mut headers = http::HeaderMap::default();
     propagator.inject_context(context, &mut HeaderInjector(&mut headers));
     headers
 }

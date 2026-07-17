@@ -25,6 +25,11 @@ fn main() {
 }
 
 #[tokio::main]
+/// Initialize and run the Opsqueue application runtime.
+///
+/// # Panics
+///
+/// Panics if database initialization times out.
 pub async fn async_main() {
     let config = Box::leak(Box::new(Config::parse()));
 

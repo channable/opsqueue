@@ -96,6 +96,10 @@ impl ConsumerConn {
 
     /// Runs the consumer websocket connection loop
     /// Blocks until the loop is stopped (because the connection is closed intentionally or by network failure).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a websocket protocol/transport failure occurs.
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
         self.initialize().await?;
         loop {
@@ -110,10 +114,9 @@ impl ConsumerConn {
                 // When a normal message is received, handle it
                 msg = self.ws_stream.recv() => {
                     match msg {
-                        // Socket closed (stream closed before receiving WS 'close' message, ungraceful shutdown)
-                        None => return Ok(()),
                         // Socket received a close message (graceful WS shutdown)
-                        Some(Ok(Message::Close(_))) => return Ok(()),
+                        // Socket closed (stream closed before receiving WS 'close' message, ungraceful shutdown)
+                        None | Some(Ok(Message::Close(_))) => return Ok(()),
                         // Socket had a problem (protocol violation, sending too much data, closed, etc.)
                         Some(Err(err)) => return Err(ConsumerConnError::LowLevelWebsocketError(err)),
                         // Socket received a normal message

@@ -24,6 +24,11 @@ use super::dispatcher::Dispatcher;
 pub mod conn;
 pub mod state;
 
+/// Run a test-only consumer websocket server.
+///
+/// # Panics
+///
+/// Panics if binding the server socket fails or if serving fails unexpectedly.
 pub async fn serve_for_tests(
     pool: DBPools,
     server_addr: Box<str>,
@@ -86,6 +91,11 @@ impl ServerState {
     }
 
     #[must_use]
+    /// Start background maintenance tasks for the consumer server state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called more than once for the same state instance.
     pub fn run_background(mut self) -> Self {
         self.dispatcher
             .run_pending_tasks_periodically(self.cancellation_token.clone());

@@ -529,7 +529,6 @@ impl PyChunksIter {
         let stream = client
             .object_store_client
             .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
-            .await
             .map_err(CError)
             .boxed();
         Self {

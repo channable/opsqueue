@@ -52,7 +52,7 @@ where
             // We're not worried about HashDoS as the consumers are trusted code,
             // so let's use a faster hash than SipHash
             .build_with_hasher(rustc_hash::FxBuildHasher);
-        let pending_removals = Default::default();
+        let pending_removals = Arc::default();
         Reserver {
             reservations,
             pending_removals,
@@ -133,8 +133,9 @@ where
         // By running this immediately after 'run_pending_tasks',
         // we can be reasonably sure that the count is accurate (doesn't include expired entries),
         // c.f. documentation of moka::sync::Cache::entry_count.
+        #[allow(clippy::cast_precision_loss)]
         gauge!(crate::prometheus::RESERVER_CHUNKS_RESERVED_GAUGE)
-            .set(self.reservations.entry_count() as u32);
+            .set(self.reservations.entry_count() as f64);
     }
 
     /// Purges all reservations that were finished with `delayed: true` earlier,

@@ -1,4 +1,4 @@
-//! Dealing with `Chunk``s, the most fine-grained datatype the queue itself works with.
+//! Dealing with `Chunk`s, the most fine-grained datatype the queue itself works with.
 //!
 //! While the smallest datatype is the 'Operation', the Opsqueue queue binary itself
 //! only deals with _chunks_ of them. The operations inside of them are hidden and only read/written
@@ -42,8 +42,8 @@ impl<'a> serde::Deserialize<'a> for ChunkIndex {
 }
 
 /// Another name for `ChunkIndex`, indicating that we're dealing with the _total count_ of chunks.
-/// i.e. when you have a value of type `ChunkCount`, there is a high likelyhood
-/// that there are [`0..chunk_count`) (note the half-open range) chunks to select from.
+/// i.e. when you have a value of type `ChunkCount`, there is a high likelihood
+/// that there are `[0..chunk_count)` (note the half-open range) chunks to select from.
 pub type ChunkCount = ChunkIndex;
 
 /// The count of entries in each chunk.
@@ -75,6 +75,11 @@ impl From<Option<ChunkSize>> for ChunkSize {
 }
 
 impl ChunkIndex {
+    /// Create a `ChunkIndex` from an integer-like value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` does not fit within the allowed range.
     pub fn new<T>(index: T) -> Result<Self, TryFromIntError>
     where
         Self: TryFrom<T, Error = TryFromIntError>,
@@ -121,7 +126,7 @@ impl From<ChunkIndex> for i64 {
     fn from(value: ChunkIndex) -> Self {
         let inner: u64 = value.0.into();
         // Guaranteed to fit positive signed range
-        inner as i64
+        inner.cast_signed()
     }
 }
 
@@ -267,6 +272,11 @@ pub mod db {
         }
     }
 
+    /// Insert one chunk row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
     #[tracing::instrument(skip(conn))]
     pub async fn insert_chunk(chunk: Chunk, mut conn: impl WriterConnection) -> sqlx::Result<()> {
         query!(
@@ -281,6 +291,11 @@ pub mod db {
         Ok(())
     }
 
+    /// Mark a chunk as completed and update related submission state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the chunk/submission cannot be updated in the database.
     #[tracing::instrument(skip(conn))]
     pub async fn complete_chunk(
         chunk_id: ChunkId,
@@ -311,6 +326,10 @@ pub mod db {
     }
 
     /// This function MUST be called inside a transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the chunk transition cannot be persisted.
     #[tracing::instrument(skip(tx))]
     pub async fn complete_chunk_raw(
         chunk_id: ChunkId,
@@ -357,6 +376,11 @@ pub mod db {
         .map(|opt| opt.map(ChunkSize))
     }
 
+    /// Increment retries for a chunk, or move it to failed state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database transaction fails.
     #[tracing::instrument(skip(conn))]
     pub async fn retry_or_fail_chunk(
         chunk_id: ChunkId,
@@ -405,6 +429,11 @@ pub mod db {
         Ok(failed_permanently)
     }
 
+    /// Move an in-progress chunk to failed chunks storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any database statement in the savepoint fails.
     #[tracing::instrument(skip(conn))]
     pub async fn move_chunk_to_failed_chunks(
         chunk_id: ChunkId,
@@ -440,6 +469,11 @@ pub mod db {
         Ok(())
     }
 
+    /// Fetch a chunk by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the row does not exist.
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk(
         full_chunk_id: ChunkId,
@@ -462,6 +496,11 @@ pub mod db {
         .await
     }
 
+    /// Fetch a completed chunk by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the row does not exist.
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk_completed(
         full_chunk_id: ChunkId,
@@ -484,6 +523,11 @@ pub mod db {
         .await
     }
 
+    /// Fetch a failed chunk by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the row does not exist.
     #[tracing::instrument(skip(conn))]
     pub async fn get_chunk_failed(
         full_chunk_id: ChunkId,
@@ -507,6 +551,11 @@ pub mod db {
         .await
     }
 
+    /// Insert many chunks in batches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any batch insert fails.
     #[tracing::instrument(skip(chunks, conn))]
     pub async fn insert_many_chunks(
         chunks: &[Chunk],
@@ -534,6 +583,11 @@ pub mod db {
         Ok(())
     }
 
+    /// Mark all remaining chunks for a submission as skipped/failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the savepoint transaction fails.
     #[tracing::instrument(skip(conn))]
     pub async fn skip_remaining_chunks(
         submission_id: SubmissionId,
@@ -561,30 +615,45 @@ pub mod db {
         Ok(())
     }
 
+    /// Count chunks currently in progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
     #[tracing::instrument(skip(db))]
     pub async fn count_chunks(mut db: impl Connection) -> sqlx::Result<u63> {
-        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks;")
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.count as u64);
+        let count = u63::new(count.cast_unsigned());
         Ok(count)
     }
 
+    /// Count completed chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
     #[tracing::instrument(skip(db))]
     pub async fn count_chunks_completed(mut db: impl Connection) -> sqlx::Result<u63> {
-        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_completed;")
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_completed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.count as u64);
+        let count = u63::new(count.cast_unsigned());
         Ok(count)
     }
 
+    /// Count failed chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
     #[tracing::instrument(skip(db))]
     pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u63> {
-        let count = sqlx::query!("SELECT COUNT(1) as count FROM chunks_failed;")
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_failed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.count as u64);
+        let count = u63::new(count.cast_unsigned());
         Ok(count)
     }
 
@@ -593,9 +662,12 @@ pub mod db {
     /// An estimation that returns a slightly too high number,
     /// since we just count the number of chunks times their chunk size,
     /// meaning that we over-estimate the size of any 'final' chunk that is not full.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the aggregation query fails.
     pub async fn count_ops_in_backlog_estimate(mut db: impl Connection) -> sqlx::Result<f64> {
-        let count = sqlx::query!("SELECT COALESCE(SUM(chunk_size * 1.0), 0.0) as count FROM chunks INNER JOIN submissions ON chunks.submission_id = submissions.id").fetch_one(db.get_inner()).await?.count;
-        Ok(count)
+        sqlx::query_scalar!("SELECT COALESCE(SUM(chunk_size * 1.0), 0.0) as count FROM chunks INNER JOIN submissions ON chunks.submission_id = submissions.id").fetch_one(db.get_inner()).await
     }
 }
 
@@ -620,11 +692,11 @@ pub mod test {
             vec![1, 2, 3, 4, 5].into(),
         );
 
-        assert!(count_chunks(&mut conn).await.unwrap() == u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
         insert_chunk(chunk.clone(), &mut conn)
             .await
             .expect("Insert chunk failed");
-        assert!(count_chunks(&mut conn).await.unwrap() == u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -644,7 +716,7 @@ pub mod test {
         let fetched_chunk = get_chunk((chunk.submission_id, chunk.chunk_index).into(), &mut conn)
             .await
             .unwrap();
-        assert!(chunk == fetched_chunk);
+        assert_eq!(chunk, fetched_chunk);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -680,9 +752,12 @@ pub mod test {
         .await
         .expect("complete chunk failed");
 
-        assert!(count_chunks(&mut conn).await.unwrap() == u63::new(0));
-        assert!(count_chunks_completed(&mut conn).await.unwrap() == u63::new(1));
-        assert!(count_chunks_failed(&mut conn).await.unwrap() == u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(
+            count_chunks_completed(&mut conn).await.unwrap(),
+            u63::new(1)
+        );
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(0));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -700,7 +775,7 @@ pub mod test {
         .await
         .unwrap();
 
-        assert!(count_chunks(&mut conn).await.unwrap() == u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
 
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -749,8 +824,11 @@ pub mod test {
         .await
         .expect("Succeed chunk failed");
 
-        assert!(count_chunks(&mut conn).await.unwrap() == u63::new(0));
-        assert!(count_chunks_completed(&mut conn).await.unwrap() == u63::new(0));
-        assert!(count_chunks_failed(&mut conn).await.unwrap() == u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(
+            count_chunks_completed(&mut conn).await.unwrap(),
+            u63::new(0)
+        );
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(1));
     }
 }

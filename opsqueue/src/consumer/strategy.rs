@@ -751,7 +751,7 @@ pub mod test {
         let mut conn = db_pools.reader_conn().await.unwrap();
         let mut query_builder = QueryBuilder::default();
         let vals1: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder, &Default::default())
+            .build_query(&mut query_builder, &MetaState::default())
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()
@@ -760,7 +760,7 @@ pub mod test {
 
         let mut query_builder = QueryBuilder::default();
         let vals2: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder, &Default::default())
+            .build_query(&mut query_builder, &MetaState::default())
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()

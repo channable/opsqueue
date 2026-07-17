@@ -15,11 +15,17 @@ pub type MetaStateVal = i64;
 pub type StrategicMetadataMap = FxHashMap<String, MetaStateVal>;
 
 /// Maximum number of submissions a lookup may return.
-/// Guarantees: 0 < `MaxSubmissions` 1 < `i64::MAX`;
+/// Guarantees: `0 < MaxSubmissions && MaxSubmissions + 1 < i64::MAX`;
 #[derive(Debug, Clone, Copy)]
 pub struct MaxSubmissions(NonZero<u64>);
 
 impl MaxSubmissions {
+    /// Create a validated `MaxSubmissions`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is too large to safely convert to `i64`
+    /// during SQL binding.
     pub fn new(value: NonZero<u64>) -> Result<Self, MaxSubmissionsTooLarge> {
         if u64::from(value) < i64::MAX as u64 {
             Ok(Self(value))

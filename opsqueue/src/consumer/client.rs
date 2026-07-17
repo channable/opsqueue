@@ -54,6 +54,7 @@ type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub struct OuterClient(ArcSwapOption<Client>, Box<str>);
 
 impl OuterClient {
+    /// Construct a lazy, reconnecting consumer client.
     #[must_use]
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
@@ -63,6 +64,16 @@ impl OuterClient {
         &self.1
     }
 
+    /// Reserve up to `max` chunks from the server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal lazy initialization invariants are violated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if input usage is invalid, or if websocket/serialization
+    /// communication with the server fails.
     pub async fn reserve_chunks(
         &self,
         max: usize,
@@ -83,6 +94,15 @@ impl OuterClient {
         res
     }
 
+    /// Mark a chunk as completed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal lazy initialization invariants are violated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if websocket communication with the server fails.
     pub async fn complete_chunk(
         &self,
         id: ChunkId,
@@ -102,6 +122,15 @@ impl OuterClient {
         res
     }
 
+    /// Mark a chunk as failed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal lazy initialization invariants are violated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if websocket communication with the server fails.
     pub async fn fail_chunk(
         &self,
         id: ChunkId,
@@ -220,14 +249,20 @@ pub struct Client {
 }
 
 impl Client {
+    /// Construct and initialize a websocket consumer client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if URL parsing fails, websocket connection setup fails,
+    /// or the initial server message is invalid.
     pub async fn new(url: &str) -> anyhow::Result<Self> {
         // Ensure that the given URL is always a websocket URL; tungstenite requires this
-        let endpoint_url = if url.starts_with("ws://") || url.starts_with("wss://") {
+        let websocket_url = if url.starts_with("ws://") || url.starts_with("wss://") {
             format!("{url}/consumer")
         } else {
             format!("ws://{url}/consumer")
         };
-        let endpoint_uri = Uri::from_str(&endpoint_url)?;
+        let endpoint_uri = Uri::from_str(&websocket_url)?;
         tracing::debug!("Connecting to: {}", endpoint_uri);
 
         let in_flight_requests =
@@ -426,6 +461,12 @@ impl Client {
         Ok(())
     }
 
+    /// Request chunks to reserve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server rejects the request or if websocket/serialization
+    /// communication fails.
     pub async fn reserve_chunks(
         &self,
         max: usize,
@@ -439,6 +480,11 @@ impl Client {
         Ok(chunks)
     }
 
+    /// Report chunk completion to the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if websocket communication fails.
     pub async fn complete_chunk(
         &self,
         id: ChunkId,
@@ -452,6 +498,11 @@ impl Client {
         .await
     }
 
+    /// Report chunk failure to the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if websocket communication fails.
     pub async fn fail_chunk(
         &self,
         id: ChunkId,

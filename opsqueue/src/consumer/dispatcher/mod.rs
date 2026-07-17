@@ -51,16 +51,21 @@ impl Dispatcher {
 
     fn insert_metadata(&self, metadata: &StrategicMetadataMap) {
         for (name, value) in metadata {
-            self.metastate.increment(name, value);
+            self.metastate.increment(name, *value);
         }
     }
 
     fn remove_metadata(&self, metadata: &StrategicMetadataMap) {
         for (name, value) in metadata {
-            self.metastate.decrement(name, value);
+            self.metastate.decrement(name, *value);
         }
     }
 
+    /// Fetch chunks according to strategy and reserve them in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if querying or joining submission info from the database fails.
     pub async fn fetch_and_reserve_chunks(
         &self,
         pool: &ReaderPool,
@@ -75,24 +80,24 @@ impl Dispatcher {
             .build_query_as()
             .fetch(conn.get_inner());
         stream
-            .try_filter_map(|chunk| self.reserve_chunk(chunk, stale_chunks_notifier))
+            .try_filter_map(|chunk| {
+                futures::future::ready(Ok(self.reserve_chunk(chunk, stale_chunks_notifier)))
+            })
             .and_then(|chunk| self.join_chunk_with_submission_info(chunk, pool))
             .take(limit)
             .try_collect()
             .await
     }
 
-    async fn reserve_chunk<E>(
+    fn reserve_chunk(
         &self,
         chunk: Chunk,
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
-    ) -> Result<Option<Chunk>, E> {
+    ) -> Option<Chunk> {
         let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
-        let val = self
-            .reserver
+        self.reserver
             .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
-            .map(|_| chunk);
-        Ok(val)
+            .map(|_| chunk)
     }
 
     async fn join_chunk_with_submission_info(

@@ -9,17 +9,17 @@ pub struct MetaState(DashMap<String, MetaStateField>);
 impl MetaState {
     #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
-    pub fn increment(&self, key: &str, val: &MetaStateVal) {
+    pub fn increment(&self, key: &str, val: MetaStateVal) {
         match self.0.get(key) {
             Some(meta_state_field) => meta_state_field.increment(val),
             None => self.0.entry(key.to_string()).or_default().increment(val),
         }
     }
 
-    pub fn decrement(&self, key: &str, val: &MetaStateVal) {
+    pub fn decrement(&self, key: &str, val: MetaStateVal) {
         let ripe_for_removal = {
             if let Some(meta_state_field) = self.0.get(key) {
                 meta_state_field.decrement(val);
@@ -76,11 +76,11 @@ pub struct MetaStateField {
 impl MetaStateField {
     #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
-    fn increment(&self, val: &MetaStateVal) {
-        match self.vals_to_counts.entry(*val) {
+    fn increment(&self, val: MetaStateVal) {
+        match self.vals_to_counts.entry(val) {
             Entry::Vacant(entry) => {
                 self.counts_to_vals.insert((1, *entry.key()));
                 entry.insert(1);
@@ -97,8 +97,8 @@ impl MetaStateField {
         }
     }
 
-    fn decrement(&self, val: &MetaStateVal) {
-        match self.vals_to_counts.entry(*val) {
+    fn decrement(&self, val: MetaStateVal) {
+        match self.vals_to_counts.entry(val) {
             Entry::Vacant(_entry) => {
                 unreachable!()
             }
@@ -149,12 +149,12 @@ mod tests {
         let key = "company_id";
         let mut vals: Vec<_> = (0..n_operations)
             .map(|x| x % n_groups)
-            .map(|val| val as i64)
+            .map(|val| i64::try_from(val).expect("test value fits into i64"))
             .collect();
 
         // Increment in one order
         vals.shuffle(&mut rand::rng());
-        for val in &vals {
+        for &val in &vals {
             sut.increment(key, val);
         }
 
@@ -169,7 +169,7 @@ mod tests {
 
         // Decrement in a different order
         vals.shuffle(&mut rand::rng());
-        for val in &vals {
+        for &val in &vals {
             sut.decrement(key, val);
         }
 
@@ -190,9 +190,9 @@ mod tests {
         for val in vals {
             let sut = sut.clone();
             task_set.spawn(async move {
-                sut.increment(key, &val);
+                sut.increment(key, val);
                 tokio::task::yield_now().await;
-                sut.decrement(key, &val);
+                sut.decrement(key, val);
             });
         }
         task_set.join_all().await;

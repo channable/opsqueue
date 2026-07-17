@@ -105,6 +105,10 @@ impl ObjectStoreClient {
     ///
     /// The given `object_store_url` recognizes the formats detailed [here](https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse).
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be parsed or if object store initialization fails.
     pub fn new(
         object_store_url: &str,
         options: Vec<(String, String)>,
@@ -118,6 +122,11 @@ impl ObjectStoreClient {
         })))
     }
 
+    /// Store a stream of chunks and return the number of stored chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if evaluating the stream or uploading any chunk fails.
     pub async fn store_chunks(
         &self,
         submission_prefix: &str,
@@ -154,6 +163,11 @@ impl ObjectStoreClient {
         Ok(chunk_count)
     }
 
+    /// Store one chunk in object storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if uploading fails.
     pub async fn store_chunk(
         &self,
         submission_prefix: &str,
@@ -176,6 +190,11 @@ impl ObjectStoreClient {
         Ok(())
     }
 
+    /// Retrieve one chunk from object storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the object cannot be read.
     pub async fn retrieve_chunk(
         &self,
         submission_prefix: &str,
@@ -202,7 +221,7 @@ impl ObjectStoreClient {
             chunk_type,
         })
     }
-    pub async fn retrieve_chunks<Prefix: Into<String>>(
+    pub fn retrieve_chunks<Prefix: Into<String>>(
         &self,
         submission_prefix: Prefix,
         chunk_count: u63,
