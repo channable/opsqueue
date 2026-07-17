@@ -47,7 +47,7 @@ pub async fn serve_for_tests(
 
     tracing::info!("Consumer WebSocket server listening at {server_addr}...");
     select! {
-      _ = cancellation_token.cancelled() => {},
+      () = cancellation_token.cancelled() => {},
       res = axum::serve(listener, app) => res.expect("Failed to start consumer server"),
     }
 }
@@ -85,6 +85,7 @@ impl ServerState {
         }
     }
 
+    #[must_use]
     pub fn run_background(mut self) -> Self {
         self.dispatcher
             .run_pending_tasks_periodically(self.cancellation_token.clone());
@@ -175,6 +176,7 @@ pub struct Completer {
 }
 
 impl Completer {
+    #[must_use]
     pub fn new(
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
@@ -233,7 +235,7 @@ impl Completer {
                         .await
                     {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
-                            .record(started_at.elapsed())
+                            .record(started_at.elapsed());
                     }
                     histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION)
                         .record(start.elapsed());
@@ -272,7 +274,7 @@ impl Completer {
                         .await;
                     if let Some(started_at) = maybe_started_at {
                         histogram!(crate::prometheus::CHUNKS_DURATION_FAILED_HISTOGRAM)
-                            .record(started_at.elapsed())
+                            .record(started_at.elapsed());
                     }
 
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)

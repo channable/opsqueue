@@ -5,11 +5,13 @@ use opentelemetry_http::{HeaderExtractor, HeaderInjector};
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use rustc_hash::FxHashMap;
 
+#[must_use]
 pub fn context_from_headers(headers: &http::HeaderMap) -> Context {
     let propagator = propagator();
     propagator.extract(&HeaderExtractor(headers))
 }
 
+#[must_use]
 pub fn context_to_headers(context: &Context) -> http::HeaderMap {
     let propagator = propagator();
     let mut headers = Default::default();
@@ -17,6 +19,7 @@ pub fn context_to_headers(context: &Context) -> http::HeaderMap {
     headers
 }
 
+#[must_use]
 pub fn current_context_to_json() -> String {
     use tracing::Span;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -24,6 +27,7 @@ pub fn current_context_to_json() -> String {
     context_to_json(&Span::current().context())
 }
 
+#[must_use]
 pub fn context_to_json(context: &Context) -> String {
     let propagator = propagator();
     let mut map = CarrierMap::default();
@@ -31,19 +35,22 @@ pub fn context_to_json(context: &Context) -> String {
     serde_json::to_string(&map).unwrap_or("{}".to_string())
 }
 
+#[must_use]
 pub fn json_to_context(json: &str) -> Context {
     let propagator = propagator();
-    serde_json::from_str(json)
-        .map(|hashmap: CarrierMap| propagator.extract(&hashmap))
-        .unwrap_or(Context::new())
+    serde_json::from_str(json).map_or(Context::new(), |hashmap: CarrierMap| {
+        propagator.extract(&hashmap)
+    })
 }
 
+#[must_use]
 pub fn json_to_carrier(json: &str) -> CarrierMap {
     serde_json::from_str(json).unwrap_or_default()
 }
 
 pub type CarrierMap = FxHashMap<String, String>;
 
+#[must_use]
 pub fn propagator() -> TextMapCompositePropagator {
     TextMapCompositePropagator::new(vec![
         Box::new(BaggagePropagator::new()),

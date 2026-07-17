@@ -54,6 +54,7 @@ type WebsocketTcpStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub struct OuterClient(ArcSwapOption<Client>, Box<str>);
 
 impl OuterClient {
+    #[must_use]
     pub fn new(url: &str) -> Self {
         Self(None.into(), url.into())
     }
@@ -256,7 +257,7 @@ impl Client {
                 "Careful! Consumer and Server use different Opsqueue library versions! Client is version {} whereas Server is version {}.",
                 crate::version_info(),
                 config.version_info,
-            )
+            );
         }
 
         let healthy = Arc::new(AtomicBool::new(true));
@@ -278,6 +279,7 @@ impl Client {
         Ok(me)
     }
 
+    #[must_use]
     pub fn is_healthy(&self) -> bool {
         self.healthy.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -295,7 +297,7 @@ impl Client {
         loop {
             yield_now().await;
             select! {
-                _ = cancellation_token.cancelled() => break,
+                () = cancellation_token.cancelled() => break,
                 _ = heartbeat_interval.tick() => {
                     if heartbeats_missed > config.max_missable_heartbeats {
                         tracing::warn!("We missed too many heartbeats! Closing connection and marking client as unhealthy.");
@@ -305,11 +307,10 @@ impl Client {
                         let _ = ws_sink.lock().await.close().await;
                         // And now exit the background task, which means all remaining in-flight requests immediately fail as well
                         break
-                    } else {
-                        // NOTE: We don't need to send a heartbeat as client; only the server needs to.
-                        // We only need to track missed heartbeats.
-                        heartbeats_missed += 1;
                     }
+                    // NOTE: We don't need to send a heartbeat as client; only the server needs to.
+                    // We only need to track missed heartbeats.
+                    heartbeats_missed += 1;
                 },
                 msg = ws_stream.next() => {
                     heartbeat_interval.reset();
@@ -340,7 +341,7 @@ impl Client {
                                         match contents {
                                             SyncServerToClientResponse::ChunksReserved(reservation) => {
                                                 let Ok(chunks) = reservation else { continue; };
-                                                for chunk in chunks.iter() {
+                                                for chunk in &chunks {
                                                     let chunk_id = ChunkId::from((chunk.0.submission_id, chunk.0.chunk_index));
                                                     // Send message to the server to indicate that we are no longer
                                                     // reserving this chunk, so that it can be re-reserved by other
@@ -530,7 +531,7 @@ mod tests {
             db_pools,
             uri.into(),
             cancellation_token,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         ));
 
         yield_now().await;

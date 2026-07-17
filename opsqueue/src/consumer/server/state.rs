@@ -38,6 +38,7 @@ impl Drop for ConsumerState {
 }
 
 impl ConsumerState {
+    #[must_use]
     pub fn new(server_state: &Arc<ServerState>) -> Self {
         Self {
             reservations: Arc::new(Mutex::new(HashSet::new())),

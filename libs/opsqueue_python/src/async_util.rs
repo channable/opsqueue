@@ -1,4 +1,4 @@
-//! Helpers to bridge async Rust and PyO3's flavour of async Python
+//! Helpers to bridge async Rust and `PyO3`'s flavour of async Python
 //!
 use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python};
 use pyo3_async_runtimes::TaskLocals;
@@ -12,7 +12,7 @@ use std::{
 ///
 /// Essentially `py.detach` but for async code.
 ///
-/// Based on https://pyo3.rs/v0.25.1/async-await.html#release-the-gil-across-await
+/// Based on <https://pyo3.rs/v0.25.1/async-await.html#release-the-gil-across-await>
 pub struct AsyncAllowThreads<F>(F);
 
 pub fn async_detach<F>(fut: F) -> AsyncAllowThreads<F>

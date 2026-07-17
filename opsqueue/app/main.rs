@@ -21,7 +21,7 @@ fn main() {
 
     // Sentry has to be initialized before starting the Tokio runtime
     let _sentry_guard = init_sentry();
-    async_main()
+    async_main();
 }
 
 #[tokio::main]
@@ -81,26 +81,26 @@ pub async fn async_main() {
         );
 
         tokio::select! {
-            _ = checkpoint_handle => {
+            () = checkpoint_handle => {
                 tracing::error!("Checkpointing task exited unexpectedly");
             },
             _ = server_handle => {
                 tracing::error!("Server task exited unexpectedly");
             },
-            _ = cleanup_handle => {
+            () = cleanup_handle => {
                 tracing::error!("Cleanup task exited unexpectedly");
             },
-            _ = prometheus_handle => {
+            () = prometheus_handle => {
                 tracing::error!("Prometheus metrics calculation task exited unexpectedly");
             },
-            _ = watchdog_handle => {
+            () = watchdog_handle => {
                 tracing::error!("Watchdog task exited unexpectedly");
             },
             res = tokio::signal::ctrl_c() => {
                 match res {
-                    Ok(_) => tracing::warn!("Received Ctrl-C signal"),
+                    Ok(()) => tracing::warn!("Received Ctrl-C signal"),
                     Err(ref err) => tracing::error!(error = err as &dyn Error, "Error while waiting for Ctrl-C signal"),
-                };
+                }
             },
         };
 
@@ -124,7 +124,7 @@ pub async fn async_main() {
 
 /// Starts up the Sentry client to forward errors/panics to it.
 ///
-/// SENTRY_DSN, SENTRY_ENVIRONMENT and SENTRY_RELEASE
+/// `SENTRY_DSN`, `SENTRY_ENVIRONMENT` and `SENTRY_RELEASE`
 /// are expected to be set as environment variables
 /// (and if unset, Sentry support is turned off)
 fn init_sentry() -> sentry::ClientInitGuard {

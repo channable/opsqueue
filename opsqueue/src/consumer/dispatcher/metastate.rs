@@ -7,6 +7,7 @@ use tracing;
 pub struct MetaState(DashMap<String, MetaStateField>);
 
 impl MetaState {
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
@@ -46,10 +47,12 @@ impl MetaState {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<dashmap::mapref::one::Ref<'_, String, MetaStateField>> {
         self.0.get(key)
     }
@@ -57,11 +60,11 @@ impl MetaState {
 
 pub type Bytes = Vec<u8>;
 
-/// As values, we support the largest number value SQLite supports by itself,
+/// As values, we support the largest number value `SQLite` supports by itself,
 /// which should be sufficient for most 'ID' fields, which is what this feature is intended for.
 ///
 /// If you really need to use strings or UUIDs with a `PreferDistinct` strategy,
-/// consider hashing them and using that hash as MetaStateVal.
+/// consider hashing them and using that hash as `MetaStateVal`.
 pub type MetaStateVal = i64;
 
 #[derive(Debug, Default)]
@@ -71,6 +74,7 @@ pub struct MetaStateField {
 }
 
 impl MetaStateField {
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
@@ -113,7 +117,7 @@ impl MetaStateField {
                     self.counts_to_vals.insert(set_entry);
                 }
             }
-        };
+        }
     }
 
     pub fn is_empty(&self) -> bool {

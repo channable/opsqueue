@@ -186,12 +186,13 @@ pub fn setup_prometheus() -> (
     (metric_layer, metric_handle)
 }
 
-/// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
+/// Returns the number of seconds contained by this `TimeDelta` as f64, with nanosecond precision.
 ///
 /// Adapted from <https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64>
+#[must_use]
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
-    (td.num_seconds() as f64) + (td.subsec_nanos() as f64) / NANOS_PER_SEC
+    (td.num_seconds() as f64) + f64::from(td.subsec_nanos()) / NANOS_PER_SEC
 }
 
 /// Calculates the backlog-size metrics used for autoscaling.
@@ -217,8 +218,8 @@ pub async fn periodically_calculate_scaling_metrics(
     const METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
     loop {
         tokio::select! {
-            _ = cancellation_token.cancelled() => break,
-            _ = tokio::time::sleep(METRICS_INTERVAL) => {
+            () = cancellation_token.cancelled() => break,
+            () = tokio::time::sleep(METRICS_INTERVAL) => {
                 if let Err(e) = calculate_scaling_metrics(db_pool).await {
                     tracing::error!("Error calculating scaling metrics: {}", e);
                 }

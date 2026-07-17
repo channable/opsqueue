@@ -40,7 +40,7 @@ pub struct Config {
     #[arg(long, value_parser = parse_report_bound_port_fd, default_value = "-1")]
     pub report_bound_port_pipe: ReportBoundPortPipe,
 
-    /// Name of the SQLite database file used by this opsqueue.
+    /// Name of the `SQLite` database file used by this opsqueue.
     ///
     /// Configure this to different values when you run multiple opsqueues
     /// for different purposes.
@@ -63,7 +63,7 @@ pub struct Config {
     #[arg(long, default_value = "10 minutes")]
     pub reservation_expiration: humantime::Duration,
 
-    /// Maximum number of SQLite connections to keep in memory for reading.
+    /// Maximum number of `SQLite` connections to keep in memory for reading.
     /// Connections will only be opened when needed.
     ///
     /// For the best performance, keep this number as high
@@ -80,7 +80,7 @@ pub struct Config {
     /// Note that special heartbeat messages are only sent if
     /// there was no other message sent/received within the given interval;
     /// any message sent/received on the connection will reset the interval
-    /// as well as the 'missed_heartbeats' counter.
+    /// as well as the '`missed_heartbeats`' counter.
     ///
     /// It is recommended to keep this value in the seconds range.
     #[arg(long, default_value = "10 seconds")]
@@ -141,6 +141,7 @@ impl Default for Config {
 pub struct ReportBoundPortPipe(Arc<Mutex<Option<BoundPortPipe>>>);
 
 impl ReportBoundPortPipe {
+    #[must_use]
     pub fn take(&self) -> Option<BoundPortPipe> {
         self.0.lock().expect("No poison").take()
     }

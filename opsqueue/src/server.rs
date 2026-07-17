@@ -203,7 +203,7 @@ pub async fn app_watchdog(
 
         select! {
             () = cancellation_token.cancelled() => break,
-            _ = tokio::time::sleep(Duration::from_secs(10)) => {},
+            () = tokio::time::sleep(Duration::from_secs(10)) => {},
         }
     }
     // Set to unhealthy when shutting down

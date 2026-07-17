@@ -37,6 +37,7 @@ where
     K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
     V: Send + Sync + Clone + 'static,
 {
+    #[must_use]
     pub fn new(reservation_expiration: Duration) -> Self {
         let reservations = Cache::builder()
             .time_to_live(reservation_expiration)
@@ -148,7 +149,7 @@ where
                     tracing::trace!("Removing outdated reservation: {entry:?}");
                     self.reservations.remove(entry.get_ref());
                 }
-                _ = async {} => break,
+                () = async {} => break,
             }
         }
     }
@@ -164,7 +165,7 @@ where
                 bg_reserver_handle.run_pending_tasks().await;
                 tokio::select! {
                     () = cancellation_token.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    () = tokio::time::sleep(Duration::from_millis(10)) => {}
                 }
             }
         });

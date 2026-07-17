@@ -67,6 +67,7 @@ impl SubmissionId {
             .expect("Invalid timestamp extracted from snowflake ID")
     }
     /// Get the time at which the submission ID was generated as a [`chrono::DateTime`].
+    #[must_use]
     pub fn timestamp(self) -> chrono::DateTime<Utc> {
         self.system_time().into()
     }
@@ -221,6 +222,7 @@ impl Default for Submission {
 }
 
 impl Submission {
+    #[must_use]
     pub fn new() -> Self {
         let otel_trace_carrier = crate::tracing::current_context_to_json();
         Submission {
@@ -235,6 +237,7 @@ impl Submission {
         }
     }
 
+    #[must_use]
     pub fn from_vec(
         chunks: Vec<chunk::Content>,
         metadata: Option<Metadata>,
@@ -282,7 +285,11 @@ pub mod db {
     use chunk::ChunkSize;
     use sqlx::{QueryBuilder, Sqlite, query, query_scalar};
 
-    use super::*;
+    use super::{
+        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
+        SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId, SubmissionStatus,
+        Utc, chunk,
+    };
 
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
         fn encode_by_ref(
@@ -448,16 +455,16 @@ pub mod db {
                 Err(E::L(e)) => return Err(e),
                 // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
                 Err(E::R(_)) => {
-                    tracing::warn!(%submission_id, "Presumed zero-length submission not found")
+                    tracing::warn!(%submission_id, "Presumed zero-length submission not found");
                 }
                 // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
                 // Our future selves might thank us.
                 Ok(true) => {
-                    tracing::debug!(%submission_id, "Zero-length submission marked as completed")
+                    tracing::debug!(%submission_id, "Zero-length submission marked as completed");
                 }
                 // This should never happen. If it does, better log it.
                 Ok(false) => {
-                    tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!")
+                    tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
                 }
             }
         }
@@ -578,7 +585,8 @@ pub mod db {
         }
     }
 
-    /// The query in 'lookup_ids_by_strategic_metadata', extracted for testing.
+    /// The query in '`lookup_ids_by_strategic_metadata`', extracted for testing.
+    #[must_use]
     pub fn lookup_ids_by_strategic_metadata_query(
         strategic_metadata: &StrategicMetadataMap,
         limit: i64,
@@ -794,7 +802,7 @@ pub mod db {
                         match submission_status(id, &mut tx).await {
                             Ok(None) => Err(E::R(E::L(not_found_err))),
                             Ok(Some(SubmissionStatus::InProgress(submission))) => {
-                                panic!("Failed to cancel in progress submission {:?}", submission)
+                                panic!("Failed to cancel in progress submission {submission:?}")
                             }
                             Ok(Some(SubmissionStatus::Completed(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Completed(submission))))
@@ -845,15 +853,14 @@ pub mod db {
         )
         .fetch_optional(conn.get_inner())
         .await?;
-        match submission_opt {
-            None => Err(E::R(SubmissionNotFound(id))),
-            Some(_) => {
-                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
-                histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
-                    crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-                );
-                Ok(())
-            }
+        if submission_opt.is_none() {
+            Err(E::R(SubmissionNotFound(id)))
+        } else {
+            counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+            histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+                crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+            );
+            Ok(())
         }
     }
 
@@ -1066,7 +1073,7 @@ pub mod db {
     }
 
     pub async fn periodically_cleanup_old(db: &WriterPool, max_age: Duration) {
-        const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+        const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_mins(1);
         loop {
             let cutoff = Utc::now() - max_age;
             let res: sqlx::Result<()> = async move {
@@ -1164,7 +1171,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_in_progress(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let query = r#"
+        let query = r"
         SELECT
               id
             , prefix
@@ -1178,7 +1185,7 @@ pub mod test {
               ) AS strategic_metadata
             , otel_trace_carrier
         FROM submissions WHERE id = 1
-        "#;
+        ";
 
         let explained = explain_query_plan(query, &mut conn).await;
         assert_non_regressing_query_plan(query, &explained);
@@ -1192,7 +1199,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_completed(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let query = r#"
+        let query = r"
         SELECT
               id
             , prefix
@@ -1206,7 +1213,7 @@ pub mod test {
             , completed_at
             , otel_trace_carrier
         FROM submissions_completed WHERE id = 1
-        "#;
+        ";
 
         let explained = explain_query_plan(query, &mut conn).await;
         assert_non_regressing_query_plan(query, &explained);
@@ -1220,7 +1227,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_failed(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let query = r#"
+        let query = r"
         SELECT
               id
             , prefix
@@ -1236,7 +1243,7 @@ pub mod test {
             , failed_chunk_id
             , otel_trace_carrier
         FROM submissions_failed WHERE id = 1
-        "#;
+        ";
 
         let explained = explain_query_plan(query, &mut conn).await;
         assert_non_regressing_query_plan(query, &explained);
@@ -1250,7 +1257,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_cancelled(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let query = r#"
+        let query = r"
         SELECT
               id
             , prefix
@@ -1263,7 +1270,7 @@ pub mod test {
               ) AS strategic_metadata
             , cancelled_at
         FROM submissions_cancelled WHERE id = 1
-        "#;
+        ";
 
         let explained = explain_query_plan(query, &mut conn).await;
         assert_non_regressing_query_plan(query, &explained);

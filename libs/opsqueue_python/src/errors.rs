@@ -39,7 +39,7 @@ import_exception!(opsqueue.exceptions, InternalConsumerClientError);
 import_exception!(opsqueue.exceptions, InternalProducerClientError);
 
 /// A newtype so we can write From/Into implementations turning various error types
-/// into PyErr, including those defined in other crates.
+/// into `PyErr`, including those defined in other crates.
 ///
 /// This follows the 'newtype wrapper' approach from
 /// <https://pyo3.rs/v0.22.5/function/error-handling#foreign-rust-error-types>
@@ -53,7 +53,7 @@ impl<T> From<T> for CError<T> {
 }
 
 /// Result type alias to help with the automatic conversion of error types
-/// into PyErr.
+/// into `PyErr`.
 ///
 /// This follows the 'newtype wrapper' approach from
 /// <https://pyo3.rs/v0.22.5/function/error-handling#foreign-rust-error-types>
@@ -61,13 +61,13 @@ impl<T> From<T> for CError<T> {
 /// The 'C' stands for 'Convertible'.
 pub type CPyResult<T, E> = Result<T, CError<E>>;
 
-/// Indicates a 'fatal' PyErr: Any Python exception which is _not_ a subclass of `PyException`.
+/// Indicates a 'fatal' `PyErr`: Any Python exception which is _not_ a subclass of `PyException`.
 ///
 /// These are known as 'fatal' exceptions in Python.
 /// c.f. <https://docs.python.org/3/tutorial/errors.html#tut-userexceptions>
 ///
 /// We don't consume/wrap these errors but propagate them,
-/// allowing things like KeyboardInterrupt, SystemExit or MemoryError,
+/// allowing things like `KeyboardInterrupt`, `SystemExit` or `MemoryError`,
 /// to trigger cleanup-and-exit.
 #[derive(thiserror::Error, Debug)]
 #[error("Fatal Python exception: {0}")]

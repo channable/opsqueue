@@ -38,7 +38,7 @@ impl Strategy {
         qb: &'a mut QueryBuilder<'a, Sqlite>,
         metastate: &MetaState,
     ) -> &'a mut QueryBuilder<'a, Sqlite> {
-        use Strategy::*;
+        use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
             Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
             Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
@@ -57,15 +57,15 @@ impl Strategy {
                 let qb = qb.push(format_args!("WITH inner_{meta_key} AS NOT MATERIALIZED ("));
                 let qb = underlying.build_query_snippet(qb, metastate);
                 qb.push(format_args!(
-                    r#"),
+                    r"),
                 taken_{meta_key} AS (
                     SELECT * FROM submissions_metadata
                     WHERE
-                    submissions_metadata.metadata_key = "#,
+                    submissions_metadata.metadata_key = ",
                 ));
                 qb.push_bind(meta_key);
                 qb.push(
-                    r#" AND submissions_metadata.metadata_value IN (SELECT value FROM json_each("#,
+                    r" AND submissions_metadata.metadata_value IN (SELECT value FROM json_each(",
                 );
                 match metastate.get(meta_key) {
                     None => {
@@ -113,10 +113,10 @@ pub mod test {
     ) -> String {
         let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
 
-        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {}", formatted_query))
+        sqlx::raw_sql(&format!("EXPLAIN QUERY PLAN {formatted_query}"))
             .fetch_all(&mut *conn)
             .await
-            .unwrap_or_else(|_| panic!("Invalid query: \n{}\n", formatted_query))
+            .unwrap_or_else(|_| panic!("Invalid query: \n{formatted_query}\n"))
             .into_iter()
             .map(|row| {
                 let id = row.get::<i64, &str>("id");
@@ -767,6 +767,6 @@ pub mod test {
             .await
             .unwrap();
 
-        assert!(vals1 != vals2)
+        assert!(vals1 != vals2);
     }
 }

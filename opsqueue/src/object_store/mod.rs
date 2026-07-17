@@ -124,7 +124,7 @@ impl ObjectStoreClient {
         chunk_type: ChunkType,
         chunk_contents: impl TryStreamExt<Ok = Vec<u8>, Error = anyhow::Error>,
     ) -> Result<u63, ChunksStorageError> {
-        use ChunksStorageError::*;
+        use ChunksStorageError::ChunkContentsEvalError;
         let chunk_count = chunk_contents
             .try_fold(u63::new(0), |chunk_index, chunk_content| async move {
                 self.store_chunk(
@@ -161,7 +161,7 @@ impl ObjectStoreClient {
         chunk_type: ChunkType,
         content: Vec<u8>,
     ) -> Result<(), ChunkStorageError> {
-        use ChunkStorageError::*;
+        use ChunkStorageError::ObjectStoreError;
         let path = self.chunk_path(submission_prefix, chunk_index, chunk_type);
         self.0
             .object_store
@@ -182,7 +182,7 @@ impl ObjectStoreClient {
         chunk_index: chunk::ChunkIndex,
         chunk_type: ChunkType,
     ) -> Result<Vec<u8>, ChunkRetrievalError> {
-        use ChunkRetrievalError::*;
+        use ChunkRetrievalError::ObjectStoreError;
         let res = async move {
             let bytes = self
                 .0
@@ -223,6 +223,7 @@ impl ObjectStoreClient {
         })
     }
 
+    #[must_use]
     pub fn base_path(&self) -> &Path {
         &self.0.base_path
     }
@@ -239,6 +240,7 @@ impl ObjectStoreClient {
         ))
     }
 
+    #[must_use]
     pub fn url(&self) -> &str {
         &self.0.url
     }

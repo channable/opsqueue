@@ -41,9 +41,9 @@ impl<'a> serde::Deserialize<'a> for ChunkIndex {
     }
 }
 
-/// Another name for ChunkIndex, indicating that we're dealing with the _total count_ of chunks.
-/// i.e. when you have a value of type ChunkCount, there is a high likelyhood
-/// that there are [0..chunk_count) (note the half-open range) chunks to select from.
+/// Another name for `ChunkIndex`, indicating that we're dealing with the _total count_ of chunks.
+/// i.e. when you have a value of type `ChunkCount`, there is a high likelyhood
+/// that there are [`0..chunk_count`) (note the half-open range) chunks to select from.
 pub type ChunkCount = ChunkIndex;
 
 /// The count of entries in each chunk.
@@ -81,6 +81,7 @@ impl ChunkIndex {
     {
         Self::try_from(index)
     }
+    #[must_use]
     pub fn zero() -> Self {
         Self(u63::new(0))
     }
@@ -205,6 +206,7 @@ pub struct ChunkFailed {
 }
 
 impl Chunk {
+    #[must_use]
     pub fn new(submission_id: SubmissionId, chunk_index: ChunkIndex, uri: Content) -> Self {
         Chunk {
             submission_id,
@@ -217,7 +219,10 @@ impl Chunk {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
-    use super::*;
+    use super::{
+        Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, ChunkSize, DateTime, SubmissionId,
+        Utc, u63,
+    };
     use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
     use crate::db::{Connection, True, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};

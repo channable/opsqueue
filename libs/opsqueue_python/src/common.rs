@@ -187,7 +187,7 @@ impl From<&Strategy> for strategy::Strategy {
             } => {
                 let underlying = strategy::Strategy::from(underlying.get());
                 strategy::Strategy::PreferDistinct {
-                    meta_key: meta_key.to_string(),
+                    meta_key: meta_key.clone(),
                     underlying: Box::new(underlying),
                 }
             }
@@ -223,22 +223,21 @@ impl Chunk {
         s: submission::Submission,
         object_store_client: &ObjectStoreClient,
     ) -> Result<Self, ChunkRetrievalError> {
-        let (content, prefix) = match c.input_content {
-            Some(bytes) => (bytes, None),
-            None => {
-                let prefix = s.prefix.unwrap();
-                tracing::debug!(
-                    "Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}",
-                    c.submission_id,
-                    prefix,
-                    c.chunk_index
-                );
-                let res = object_store_client
-                    .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
-                    .await?;
-                tracing::debug!("Fetched chunk content: {res:?}");
-                (res, Some(prefix))
-            }
+        let (content, prefix) = if let Some(bytes) = c.input_content {
+            (bytes, None)
+        } else {
+            let prefix = s.prefix.unwrap();
+            tracing::debug!(
+                "Fetching chunk content from object store: submission_id={}, prefix={}, chunk_index={}",
+                c.submission_id,
+                prefix,
+                c.chunk_index
+            );
+            let res = object_store_client
+                .retrieve_chunk(&prefix, c.chunk_index, ChunkType::Input)
+                .await?;
+            tracing::debug!("Fetched chunk content: {res:?}");
+            (res, Some(prefix))
         };
         Ok(Chunk {
             submission_id: c.submission_id.into(),
@@ -273,6 +272,7 @@ pub struct ChunkFailed {
 }
 
 impl ChunkFailed {
+    #[must_use]
     pub fn from_internal(c: chunk::ChunkFailed, _s: &submission::SubmissionFailed) -> Self {
         ChunkFailed {
             submission_id: c.submission_id.into(),
@@ -356,7 +356,9 @@ pub enum SubmissionStatus {
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
     fn from(value: opsqueue::common::submission::SubmissionStatus) -> Self {
-        use opsqueue::common::submission::SubmissionStatus::*;
+        use opsqueue::common::submission::SubmissionStatus::{
+            Cancelled, Completed, Failed, InProgress,
+        };
         match value {
             InProgress(s) => SubmissionStatus::InProgress {
                 submission: s.into(),
@@ -515,7 +517,7 @@ pub enum SubmissionNotCancellable {
 
 impl From<opsqueue::common::errors::SubmissionNotCancellable> for SubmissionNotCancellable {
     fn from(value: opsqueue::common::errors::SubmissionNotCancellable) -> Self {
-        use opsqueue::common::errors::SubmissionNotCancellable::*;
+        use opsqueue::common::errors::SubmissionNotCancellable::{Cancelled, Completed, Failed};
         match value {
             Completed(s) => SubmissionNotCancellable::Completed {
                 submission: s.into(),
@@ -575,7 +577,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 /// Note that we very intentionally use the multi-threaded scheduler
 /// but with a single thread.
 ///
-/// We **cannot** use the current_thread scheduler,
+/// We **cannot** use the `current_thread` scheduler,
 /// since that would result in the Python task scheduler (e.g. `asyncio`)
 /// and the Rust task scheduler (`Tokio`) to run on the same thread.
 /// This seems to work fine, until you end up with a Python future
@@ -590,6 +592,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 /// 'Tokio scheduler thread' is preemptive,
 /// the same problem now no longer occurs:
 /// Both schedulers are able to make forward progress (even on a 1-CPU machine).
+#[must_use]
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
@@ -600,7 +603,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 }
 
 /// Formats a Python exception
-/// in similar fashion as the traceback.format_exc()
+/// in similar fashion as the `traceback.format_exc()`
 /// would do it.
 ///
 /// Internally acquires the GIL!

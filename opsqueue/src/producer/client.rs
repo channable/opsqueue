@@ -45,6 +45,7 @@ impl Client {
     /// panics.
     ///
     /// Examples: `0.0.0.0:1312`, `my.opsqueue.instance.example.com`, `https://services.example.com/opsqueue`
+    #[must_use]
     pub fn new(host: &str) -> Self {
         let http_client = reqwest::Client::new();
         let base_url = match host.split_once("://") {
@@ -57,6 +58,7 @@ impl Client {
             http_client,
         }
     }
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -116,7 +118,7 @@ impl Client {
         .await
     }
 
-    /// Send a HTTP request to the OpsQueue server to cancel a submission.
+    /// Send a HTTP request to the `OpsQueue` server to cancel a submission.
     ///
     /// Will return an error if the submission is already complete, failed, or
     /// cancelled, or if the submission could not be found.
@@ -305,6 +307,7 @@ pub enum InternalProducerClientError {
 }
 
 impl InternalProducerClientError {
+    #[must_use]
     pub fn is_ephemeral(&self) -> bool {
         match self {
             // In the case of an unexpected HTTP status error, developer
@@ -326,8 +329,7 @@ impl InternalProducerClientError {
                     // Any other status is considered a permanent failure however
                     inner
                         .status()
-                        .map(|status| status.is_server_error())
-                        .unwrap_or(false)
+                        .is_some_and(|status| status.is_server_error())
                 } else {
                     // Anything else is a permanent failure.
                     false

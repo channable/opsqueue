@@ -28,6 +28,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    #[must_use]
     pub fn new(reservation_expiration: Duration) -> Self {
         let reserver = Reserver::new(reservation_expiration);
         let metastate = Arc::new(MetaState::default());
@@ -38,10 +39,12 @@ impl Dispatcher {
         }
     }
 
+    #[must_use]
     pub fn metastate(&self) -> &MetaState {
         &self.metastate
     }
 
+    #[must_use]
     pub fn reserver(&self) -> &Reserver<ChunkId, ChunkId> {
         &self.reserver
     }

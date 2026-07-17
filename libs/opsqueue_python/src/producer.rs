@@ -28,7 +28,7 @@ use crate::{
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
-const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(5000);
+const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(5);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass(from_py_object, module = "opsqueue")]
@@ -45,11 +45,11 @@ impl ProducerClient {
     ///
     /// :param address: The HTTP address where the opsqueue instance is running.
     ///
-    /// :param object_store_url: The URL used to upload/download objects from e.g. GCS.
+    /// :param `object_store_url`: The URL used to upload/download objects from e.g. GCS.
     ///   use `file:///tmp/my/local/path` to use a local file when running small examples in development.
     ///   use `gs://bucket-name/path/inside/bucket` to connect to GCS in production.
     ///   Supports the formats listed here: <https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse>
-    /// :param object_store_options: A list of key-value strings as extra options for the chosen object store.
+    /// :param `object_store_options`: A list of key-value strings as extra options for the chosen object store.
     ///        For example, for GCS, see <https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants>
     #[new]
     #[pyo3(signature = (address, object_store_url, object_store_options=vec![]))]
@@ -76,6 +76,7 @@ impl ProducerClient {
         })
     }
 
+    #[must_use]
     pub fn __repr__(&self) -> String {
         format!(
             "<opsqueue_producer.ProducerClient(address={:?}, object_store_url={:?})>",
@@ -146,7 +147,7 @@ impl ProducerClient {
 
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
     ///
-    /// The returned SubmissionStatus object also includes the number of chunks finished so far,
+    /// The returned `SubmissionStatus` object also includes the number of chunks finished so far,
     /// when the submission was started/completed/failed, etc.
     ///
     /// This call does _not_ fetch the submission's chunk contents on its own.
@@ -214,7 +215,7 @@ impl ProducerClient {
 
     /// Directly inserts a submission without sending the chunks to GCS
     /// (but immediately embedding them in the DB).
-    /// NOTE: This does not support StrategicMetadata currently
+    /// NOTE: This does not support `StrategicMetadata` currently
     #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,

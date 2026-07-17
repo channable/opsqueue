@@ -4,7 +4,10 @@ use std::marker::PhantomData;
 
 use sqlx::{Sqlite, SqliteConnection, pool::PoolConnection};
 
-use super::{Connection, magic::*};
+use super::{
+    Connection,
+    magic::{Bool, False, True},
+};
 
 /// A connection to the database.
 ///
