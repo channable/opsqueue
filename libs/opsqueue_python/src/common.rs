@@ -39,6 +39,7 @@ impl SubmissionId {
         Ok(SubmissionId { id })
     }
 
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn __repr__(&self) -> String {
         format!("SubmissionId(id={})", self.id)
     }
@@ -73,6 +74,7 @@ impl ChunkIndex {
         Ok(ChunkIndex { id })
     }
 
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn __repr__(&self) -> String {
         format!("ChunkIndex(id={})", self.id)
     }
@@ -218,6 +220,16 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Build a Python-facing chunk by combining DB metadata and chunk contents.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the chunk content is stored in object storage while the submission
+    /// has no associated prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fetching chunk bytes from object storage fails.
     pub async fn from_internal(
         c: chunk::Chunk,
         s: submission::Submission,
@@ -543,6 +555,12 @@ impl SubmissionNotCancellable {
     }
 }
 
+/// Await a future while also reacting to Python interruption signals.
+///
+/// # Errors
+///
+/// Returns the underlying future error, or a fatal Python exception when
+/// an interrupt signal is detected.
 pub async fn run_unless_interrupted<T, E>(
     future: impl IntoFuture<Output = Result<T, E>>,
 ) -> Result<T, E>
@@ -592,6 +610,10 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 /// 'Tokio scheduler thread' is preemptive,
 /// the same problem now no longer occurs:
 /// Both schedulers are able to make forward progress (even on a 1-CPU machine).
+///
+/// # Panics
+///
+/// Panics if creating the Tokio runtime fails.
 #[must_use]
 pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -609,6 +631,10 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 /// Internally acquires the GIL!
 ///
 /// c.f. <https://pyo3.rs/main/doc/pyo3/types/trait.pytracebackmethods>
+///
+/// # Panics
+///
+/// Panics if formatting a Python traceback fails.
 pub fn format_pyerr(err: &PyErr) -> String {
     Python::attach(|py| {
         let msg: Option<String> = (|| {

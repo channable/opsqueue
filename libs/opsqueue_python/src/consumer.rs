@@ -54,6 +54,10 @@ impl ConsumerClient {
     ///   Supports the formats listed here: <https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse>
     /// :param `object_store_options`: A list of key-value strings as extra options for the chosen object store.
     ///        For example, for GCS, see <https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants>
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if object store client initialization fails.
     #[new]
     #[pyo3(signature = (address, object_store_url, object_store_options=vec![]))]
     pub fn new(
@@ -87,6 +91,11 @@ impl ConsumerClient {
     }
 
     #[allow(clippy::type_complexity)]
+    /// Reserve up to `max` chunks from the queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reservation fails or if chunk bytes cannot be retrieved.
     pub fn reserve_chunks(
         &self,
         py: Python<'_>,
@@ -105,6 +114,11 @@ impl ConsumerClient {
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
+    /// Complete a chunk and optionally upload output content to object storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if upload or completion request fails.
     pub fn complete_chunk(
         &self,
         py: Python<'_>,
@@ -131,6 +145,11 @@ impl ConsumerClient {
     }
 
     #[pyo3(signature = (submission_id, submission_prefix, chunk_index, failure))]
+    /// Mark a chunk as failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the failure report cannot be submitted.
     pub fn fail_chunk(
         &self,
         py: Python<'_>,
@@ -218,7 +237,7 @@ impl ConsumerClient {
         })
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::needless_pass_by_value)]
     fn reserve_chunks_gilless(
         &self,
         max: usize,
@@ -288,6 +307,11 @@ impl ConsumerClient {
         })
     }
 
+    /// Mark a chunk as failed without interacting with Python's GIL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the failure report cannot be submitted.
     pub fn fail_chunk_gilless(
         &self,
         submission_id: SubmissionId,
