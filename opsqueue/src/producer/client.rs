@@ -8,8 +8,9 @@ use http::StatusCode;
 use crate::{
     E,
     common::{
+        StrategicMetadataMap,
         errors::E::{L, R},
-        errors::{SubmissionNotCancellable, SubmissionNotFound},
+        errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
         submission::{SubmissionId, SubmissionStatus},
     },
     tracing::CarrierMap,
@@ -220,6 +221,54 @@ impl Client {
         })
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
+        .notify(|err, dur| {
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+        })
+        .await
+    }
+
+    pub async fn lookup_submission_ids_by_strategic_metadata(
+        &self,
+        strategic_metadata: &StrategicMetadataMap,
+    ) -> Result<Vec<SubmissionId>, E![TooManyMatchingSubmissions, InternalProducerClientError]>
+    {
+        (|| async {
+            let base_url = &self.base_url;
+            let response = self
+                .http_client
+                .post(format!(
+                    "{base_url}/submissions/lookup_ids_by_strategic_metadata"
+                ))
+                .json(strategic_metadata)
+                .send()
+                .await
+                .map_err(|e| R(e.into()))?;
+            let status = response.status();
+            match status {
+                // 200, the lookup succeeded.
+                StatusCode::OK => {
+                    let submission_ids = response
+                        .json::<Vec<SubmissionId>>()
+                        .await
+                        .map_err(|e| R(e.into()))?;
+                    Ok(submission_ids)
+                }
+                // 400, matched more submissions than the configured maximum.
+                StatusCode::BAD_REQUEST => {
+                    let too_many_err = response
+                        .json::<TooManyMatchingSubmissions>()
+                        .await
+                        .map_err(|e| R(e.into()))?;
+                    Err(L(too_many_err))
+                }
+                _ => Err(R(InternalProducerClientError::UnexpectedStatus(status))),
+            }
+        })
+        .retry(retry_policy())
+        .when(|e| match e {
+            L(_) => false,
+            R(client_err) => client_err.is_ephemeral(),
+        })
         .notify(|err, dur| {
             tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
         })

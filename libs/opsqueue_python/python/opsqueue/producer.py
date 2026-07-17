@@ -18,6 +18,7 @@ from opsqueue.exceptions import (
     SubmissionFailedError,
     SubmissionNotCancellableError,
     SubmissionNotFoundError,
+    TooManyMatchingSubmissionsError,
 )
 from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionId,
@@ -38,6 +39,7 @@ __all__ = [
     "SubmissionNotCancellable",
     "SubmissionNotCancellableError",
     "SubmissionNotFoundError",
+    "TooManyMatchingSubmissionsError",
     "ChunkFailed",
 ]
 
@@ -366,6 +368,25 @@ class ProducerClient:
         - `InternalProducerClientError` if there is a low-level internal error.
         """
         return self.inner.lookup_submission_id_by_prefix(prefix)
+
+    def lookup_submission_ids_by_strategic_metadata(
+        self, strategic_metadata: dict[str, int]
+    ) -> list[SubmissionId]:
+        """Attempts to find in-progress submissions where the strategic metadata
+        of that submission includes all of the key-value pairs of the given
+        'strategic_metadata'. A matching submission must include all of the
+        given key-value pairs, but it may also contain other key-value pairs.
+
+        Raises:
+        - `TooManyMatchingSubmissionsError` if the lookup matches more
+          submissions than the server's configured maximum. Narrow the query
+          with more specific strategic metadata.
+        - `InternalProducerClientError` if there is a low-level internal error.
+
+        """
+        return self.inner.lookup_submission_ids_by_strategic_metadata(  # type: ignore[no-any-return]
+            strategic_metadata
+        )
 
     def is_completed(self, submission_id: SubmissionId) -> bool:
         raise NotImplementedError

@@ -153,6 +153,34 @@ class SubmissionNotCompletedYetError(IncorrectUsageError):
     pass
 
 
+class TooManyMatchingSubmissionsError(IncorrectUsageError):
+    """
+    Raised when a strategic-metadata lookup matches more submissions
+    than the server's configured maximum (``max_submissions_returned``).
+
+    Narrow the query with more specific strategic metadata, or raise the
+    server's configured maximum.
+    """
+
+    __slots__ = ["max_submissions"]
+
+    def __init__(
+        self,
+        max_submissions: int,
+    ):
+        super().__init__()
+        self.max_submissions = max_submissions
+
+    def __str__(self) -> str:
+        return (
+            f"The lookup matched more submissions than the configured "
+            f"maximum of {self.max_submissions}"
+        )
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
 # Internal errors:
 
 

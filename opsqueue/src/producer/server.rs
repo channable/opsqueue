@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::common::errors::E::{L, R};
 use crate::common::submission::{self, SubmissionId};
+use crate::common::{MaxSubmissions, StrategicMetadataMap};
 use crate::db::{self, DBPools};
+use axum::extract;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -13,7 +15,8 @@ use tokio::sync::Notify;
 use super::common::{ChunkContents, InsertSubmission};
 
 pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
-    ServerState::new(database_pool, Arc::new(Notify::new()))
+    let max_submissions = crate::config::Config::default().max_submissions_returned;
+    ServerState::new(database_pool, Arc::new(Notify::new()), max_submissions)
         .serve_for_tests(server_addr)
         .await;
 }
@@ -22,13 +25,19 @@ pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
 pub struct ServerState {
     pool: DBPools,
     notify_on_insert: Arc<Notify>,
+    max_submissions: MaxSubmissions,
 }
 
 impl ServerState {
-    pub fn new(pool: DBPools, notify_on_insert: Arc<Notify>) -> Self {
+    pub fn new(
+        pool: DBPools,
+        notify_on_insert: Arc<Notify>,
+        max_submissions: MaxSubmissions,
+    ) -> Self {
         ServerState {
             pool,
             notify_on_insert,
+            max_submissions,
         }
     }
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
@@ -59,6 +68,10 @@ impl ServerState {
             .route(
                 "/submissions/lookup_id_by_prefix/{prefix}",
                 get(lookup_submission_id_by_prefix),
+            )
+            .route(
+                "/submissions/lookup_ids_by_strategic_metadata",
+                post(lookup_submission_ids_by_strategic_metadata),
             )
             .route("/submissions/{submission_id}", get(submission_status))
             .route("/version", get(crate::server::version_endpoint)) // We're also exposing it here so the producer client can view it
@@ -131,6 +144,30 @@ async fn lookup_submission_id_by_prefix(
     let mut conn = state.pool.reader_conn().await?;
     let submission_id = submission::db::lookup_id_by_prefix(&prefix, &mut conn).await?;
     Ok(Json(submission_id))
+}
+
+/// 200 if the query was successful.
+/// 400 if the query exceeded the maximum lookup amount.
+async fn lookup_submission_ids_by_strategic_metadata(
+    State(state): State<ServerState>,
+    extract::Json(strategic_metadata): extract::Json<StrategicMetadataMap>,
+) -> Result<Json<Vec<SubmissionId>>, Response> {
+    let mut conn = state
+        .pool
+        .reader_conn()
+        .await
+        .map_err(|e| ServerError(e.into()).into_response())?;
+    match submission::db::lookup_ids_by_strategic_metadata(
+        strategic_metadata,
+        state.max_submissions,
+        &mut conn,
+    )
+    .await
+    {
+        Ok(submission_ids) => Ok(Json(submission_ids)),
+        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
+        Err(R(too_many_err)) => Err((StatusCode::BAD_REQUEST, Json(too_many_err)).into_response()),
+    }
 }
 
 #[tracing::instrument(level = "debug", skip(state))]
