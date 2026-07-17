@@ -122,19 +122,19 @@ impl Strategy {
                 qb.push(")");
 
                 for meta_key in &prefer_distinct_metakeys {
-                  qb.push(", ");
-                  qb.push(format_args!("{meta_key}_counts AS ("));
-                  qb.push(" SELECT submission_id, opsqueue_metadata_count(");
-                  qb.push_bind(meta_key.clone());
-                  qb.push(", metadata_value) AS count");
-                  qb.push(" FROM submissions_metadata WHERE metadata_key = ");
-                  qb.push_bind(meta_key.clone());
-                  qb.push(")");
+                    qb.push(", ");
+                    qb.push(format_args!("{meta_key}_counts AS ("));
+                    qb.push(" SELECT submission_id, opsqueue_metadata_count(");
+                    qb.push_bind(meta_key.clone());
+                    qb.push(", metadata_value) AS count");
+                    qb.push(" FROM submissions_metadata WHERE metadata_key = ");
+                    qb.push_bind(meta_key.clone());
+                    qb.push(")");
                 }
 
                 qb.push(" SELECT underlying.* FROM underlying");
                 for meta_key in &prefer_distinct_metakeys {
-                  qb.push(format_args!(
+                    qb.push(format_args!(
                     " LEFT JOIN {meta_key}_counts ON underlying.submission_id = {meta_key}_counts.submission_id"
                   ));
                 }
@@ -143,7 +143,7 @@ impl Strategy {
                     if i > 0 {
                         qb.push(", ");
                     }
-                  qb.push(format_args!("{meta_key}_counts.count ASC NULLS FIRST"));
+                    qb.push(format_args!("{meta_key}_counts.count ASC NULLS FIRST"));
                 }
                 qb
             }
