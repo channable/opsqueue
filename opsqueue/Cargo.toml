@@ -79,6 +79,9 @@ sqlformat = "0.5.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 criterion = {version = "0.8", features = ["async_tokio"]}
 insta = { version = "1.47.2" }
