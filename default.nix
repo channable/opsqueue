@@ -48,6 +48,7 @@ let
       pkgs.cargo-audit
       pkgs.cargo-edit
       pkgs.cargo-insta
+      pkgs.cargo-hakari
       pkgs.cargo-nextest
       pkgs.maturin
 

@@ -81,7 +81,12 @@ lint-light *ARGS:
 
 # Run the slow linters/static analysers that need to look at everything
 [group('lint')]
-lint-heavy: clippy mypy
+lint-heavy: clippy hakari mypy
+
+# Verify the workspace-hack crate is up to date
+[group('lint')]
+hakari:
+  cargo hakari verify
 
 # Rust static analysis
 [group('lint')]
