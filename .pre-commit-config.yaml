@@ -13,6 +13,13 @@ repos:
         entry: trailing-whitespace-fixer
         language: system
         types: [text]
+      - id: typos
+        name: Typos
+        entry: typos --write-changes
+        language: system
+        types: [text]
+        exclude_types: [diff, json]
+        exclude: ^(libs/opsqueue_python/examples/capitalize_text/lipsum\.txt|libs/opsqueue_python/examples/capitalize_text/more_lipsum\.txt)$
       - id: ruff-check
         name: Ruff linting
         entry: ruff check --fix
