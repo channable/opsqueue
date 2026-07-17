@@ -2241,6 +2241,7 @@ dependencies = [
  "url",
  "uuid",
  "ux",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2260,6 +2261,7 @@ dependencies = [
  "tracing",
  "uuid",
  "ux",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4520,6 +4522,60 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bitflags",
+ "cc",
+ "chrono",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "either",
+ "event-listener",
+ "fastrand",
+ "futures-channel",
+ "futures-io",
+ "futures-sink",
+ "futures-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "libsqlite3-sys",
+ "log",
+ "num-traits",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry_sdk",
+ "rand 0.9.5",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest",
+ "rustls-pki-types",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "sha2 0.10.9",
+ "slab",
+ "smallvec",
+ "sqlx-core",
+ "sqlx-sqlite",
+ "syn 3.0.2",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-http 0.6.11",
+ "tracing-core",
+ "typenum",
+ "url",
+ "uuid",
+ "zerocopy",
+]
 
 [[package]]
 name = "writeable"

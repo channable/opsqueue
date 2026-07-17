@@ -6,7 +6,11 @@ resolver = "3"
 members = [
     "opsqueue/",
     "libs/opsqueue_python",
+    "workspace-hack",
 ]
+
+[workspace.metadata.hakari]
+hakari-package = "workspace-hack"
 
 [workspace.package]
 version = "0.36.0"
