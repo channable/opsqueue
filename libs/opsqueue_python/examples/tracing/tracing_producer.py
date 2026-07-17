@@ -1,12 +1,12 @@
 import logging
 import typing
-import opentelemetry
 import opentelemetry.context
 from opentelemetry.context import Context
 
 import contextlib
 from typing import Optional, Generator
 from opentelemetry import trace
+from opentelemetry import baggage as otel_baggage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -66,7 +66,7 @@ def added_baggage(
 
     if baggage:
         for key, value in baggage.items():
-            attached_token = opentelemetry.baggage.set_baggage(key, value, context)
+            attached_token = otel_baggage.set_baggage(key, value, context)
             attached_context_tokens.append(
                 typing.cast(Context, opentelemetry.context.attach(attached_token))
             )

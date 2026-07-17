@@ -1,6 +1,5 @@
 # Utility functions to use in nix code
-{ lib }:
-{
+{ lib }: {
   # A powerful way of filtering the right files for the src attribute of a derivation.
   fileFilter =
     {
