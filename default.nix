@@ -13,6 +13,7 @@ let
       pytest-xdist
       pytest-timeout
       multiprocess
+      matplotlib
 
       # Repeated here so MyPy sees them:
       cbor2
@@ -62,6 +63,7 @@ let
         # For the shell, libpython needs to be in the search path.
         pythonEnv
       ];
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
     };
   };
 in
