@@ -769,4 +769,70 @@ pub mod test {
 
         assert!(vals1 != vals2)
     }
+
+    /// Behavioural test for `PreferDistinct`: the next chunk should come from the
+    /// metadata value (here `company_id`) that currently has the *fewest* chunks in
+    /// progress. This guards the actual fairness ordering, which the query-plan
+    /// snapshots above do not (a query can have the right shape yet emit the wrong
+    /// order — as an earlier attempt did).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_prefer_distinct_picks_least_busy_company(pool: sqlx::SqlitePool) {
+        use crate::consumer::dispatcher::metastate::MetaStateVal;
+
+        let db_pools = crate::db::DBPools::from_test_pool(&pool);
+        let mut conn = db_pools.writer_conn().await.unwrap();
+
+        // Three companies, each with a submission of a few chunks.
+        let companies: [MetaStateVal; 3] = [100, 200, 300];
+        let mut submission_of_company = std::collections::HashMap::new();
+        for company in companies {
+            let mut strategic_metadata = StrategicMetadataMap::default();
+            strategic_metadata.insert("company_id".to_string(), company);
+            let chunks: Vec<_> = (0..3).map(|x| Some(format!("{x}").into())).collect();
+            let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+                None,
+                chunks,
+                None,
+                strategic_metadata,
+                ChunkSize::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            submission_of_company.insert(submission_id, company);
+        }
+
+        // Company 100 is heavily in progress, 300 a little, 200 not at all.
+        // Fairness should therefore prefer 200, then 300, then 100.
+        let metastate = MetaState::default();
+        for _ in 0..5 {
+            metastate.increment("company_id", &100);
+        }
+        for _ in 0..2 {
+            metastate.increment("company_id", &300);
+        }
+
+        let mut conn = db_pools.reader_conn().await.unwrap();
+        let mut query_builder = QueryBuilder::default();
+        let strategy = Strategy::PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(Strategy::Oldest),
+        };
+        let chunks: Vec<Chunk> = strategy
+            .build_query(&mut query_builder, &metastate)
+            .build_query_as()
+            .fetch(conn.get_inner())
+            .try_collect()
+            .await
+            .unwrap();
+
+        let companies_in_order: Vec<_> = chunks
+            .iter()
+            .map(|chunk| submission_of_company[&chunk.submission_id])
+            .dedup()
+            .collect();
+
+        // Least-busy company first, busiest last.
+        assert_eq!(companies_in_order, vec![200, 300, 100]);
+    }
 }
