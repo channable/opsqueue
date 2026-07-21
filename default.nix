@@ -63,6 +63,8 @@ let
         # For the shell, libpython needs to be in the search path.
         pythonEnv
       ];
+      # Fixes: libstdc++.so.6: cannot open shared object file: No such file or directory
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
     };
   };
 in
