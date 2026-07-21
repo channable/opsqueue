@@ -1,3 +1,29 @@
+/// FOR EACH shape IN [few_submissions, many_submissions]:
+///   FOR EACH strategy IN [Random, PreferDistinct]:
+///     FOR EACH backlog_size IN [100, 500, 1000, ..., 30000]:
+///
+///         // 1. SETUP
+///         Create fresh temporary SQLite database
+///         Insert `backlog_size` chunks, assigning them to companies based on `shape`
+///
+///         // 2. SIMULATE LOAD (The "Traffic Jam")
+///         FOR EACH company UP TO 256:
+///             Add fake "in-flight" counts to MetaState for this company
+///
+///         // 3. MEASURE
+///         Run 5 warmup iterations (fetch 1 chunk, discard time)
+///
+///         FOR iteration = 1 TO 30:
+///             Start Timer
+///             Execute SQL Query -> Fetch EXACTLY ONE chunk
+///             Stop Timer
+///             Save duration
+///
+///         // 4. REPORT & CLEANUP
+///         Calculate median duration
+///         Write result to terminal and CSV
+///         Delete temporary database files
+
 use futures::stream::TryStreamExt as _;
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{Chunk, ChunkSize};
