@@ -28,43 +28,58 @@ impl Strategy {
         qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
     ) -> &'a mut QueryBuilder<Sqlite> {
-        let qb = self.build_query_snippet(qb, metastate, false);
+        let qb = self.build_query_snippet_returning_chunks(qb, metastate);
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
 
-    fn build_query_snippet<'a>(
+    fn build_query_snippet_returning_chunks<'a>(
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
-        only_submissions: bool,
     ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
-            Oldest => {
-                if only_submissions {
-                    qb.push("SELECT id AS submission_id FROM submissions ORDER BY id ASC")
-                } else {
-                    qb.push("SELECT * FROM chunks ORDER BY submission_id ASC")
-                }
-            }
-            Newest => {
-                if only_submissions {
-                    qb.push("SELECT id AS submission_id FROM submissions ORDER BY id DESC")
-                } else {
-                    qb.push("SELECT * FROM chunks ORDER BY submission_id DESC")
-                }
-            }
+            Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
+            Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
             Random => {
-                if only_submissions {
-                    panic!("Random underlying strategy not supported")
-                } else {
-                    let random_offset: u16 = rand::random();
-                    qb.push("SELECT * FROM chunks WHERE random_order >= ")
-                        .push_bind(random_offset)
-                        .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
-                        .push_bind(random_offset)
-                }
+                let random_offset: u16 = rand::random();
+                qb.push("SELECT * FROM chunks WHERE random_order >= ")
+                    .push_bind(random_offset)
+                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
+                    .push_bind(random_offset)
+            }
+            PreferDistinct { .. } => {
+                qb.push("WITH underlying_submissions AS MATERIALIZED (");
+                let qb = self.build_query_snippet_returning_submission_ids(qb, metastate);
+                qb.push(") ");
+                // In SQLite, CROSS JOIN <table> ON/WHERE does NOT produce N
+                // x M rows, it acts as an INNER JOIN forcing the query
+                // planner to use '<table> as the outer loop, preserving its
+                // sort order.
+                // c.f. https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
+                qb.push(
+                    " SELECT chunks.*
+                        FROM underlying_submissions
+                        CROSS JOIN chunks
+                        WHERE chunks.submission_id = underlying_submissions.submission_id",
+                )
+            }
+        }
+    }
+
+    /// Append a query snippet resulting in an ordered "`submission_id`" column.
+    fn build_query_snippet_returning_submission_ids<'a>(
+        &'a self,
+        qb: &'a mut QueryBuilder<Sqlite>,
+        metastate: &MetaState,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        use Strategy::{Newest, Oldest, PreferDistinct, Random};
+        match self {
+            Oldest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id ASC"),
+            Newest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id DESC"),
+            Random => {
+                panic!("Random underlying strategy not supported")
             }
             PreferDistinct {
                 meta_key,
@@ -72,10 +87,10 @@ impl Strategy {
             } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
-                let qb = underlying.build_query_snippet(qb, metastate, true);
+                let qb = underlying.build_query_snippet_returning_submission_ids(qb, metastate);
                 qb.push("),");
                 // Count of in-flight chunks per submission.
-                qb.push("counts AS (SELECT key, value FROM json_each(");
+                qb.push("counts AS (SELECT key, value as count FROM json_each(");
                 match metastate.get(meta_key) {
                     None => {
                         tracing::trace!("No metastate field for key: {meta_key}");
@@ -108,27 +123,11 @@ impl Strategy {
                 );
                 qb.push_bind(meta_key);
                 qb.push(
-                    "
-                        LEFT JOIN counts c
-                            ON sm.metadata_value = c.key
-                        ORDER BY c.value ASC NULLS FIRST
+                    " LEFT JOIN counts ON sm.metadata_value = counts.key
+                        ORDER BY counts.count ASC NULLS FIRST
                     )",
                 );
-
-                if only_submissions {
-                    qb.push(" SELECT submission_id FROM ranked_submissions")
-                } else {
-                    // In SQLite, CROSS JOIN <table> ON/WHERE does NOT produce N
-                    // x M rows, it acts as an INNER JOIN forcing the query
-                    // planner to use '<table> as the outer loop, preserving its
-                    // sort order.
-                    // c.f. https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
-                    qb.push(
-                        " SELECT chunks.*
-                          FROM ranked_submissions
-                          CROSS JOIN chunks WHERE chunks.submission_id = ranked_submissions.submission_id",
-                    )
-                }
+                qb.push(" SELECT submission_id FROM ranked_submissions")
             }
         }
     }
@@ -309,53 +308,62 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id AS submission_id
+            FROM
+              submissions
+            ORDER BY
+              id ASC
+          ),
+          counts AS (
+            SELECT
+              key,
+              value as count
+            FROM
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts ON sm.metadata_value = counts.key
+            ORDER BY
+              counts.count ASC NULLS FIRST
+          )
           SELECT
-            id AS submission_id
+            submission_id
           FROM
-            submissions
-          ORDER BY
-            id ASC
-        ),
-        counts AS (
-          SELECT
-            key,
-            value
-          FROM
-            json_each(?)
-        ),
-        ranked_submissions AS MATERIALIZED (
-          SELECT
-            inner.submission_id
-          FROM
-            inner
-            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
-            AND sm.metadata_key = ?
-            LEFT JOIN counts c ON sm.metadata_value = c.key
-          ORDER BY
-            c.value ASC NULLS FIRST
+            ranked_submissions
         )
         SELECT
           chunks.*
         FROM
-          ranked_submissions
+          underlying_submissions
           CROSS JOIN chunks
         WHERE
-          chunks.submission_id = ranked_submissions.submission_id
+          chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        3, 0, MATERIALIZE ranked_submissions
-        6, 3, MATERIALIZE counts
-        9, 6, SCAN json_each VIRTUAL TABLE INDEX 1:
-        25, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        27, 3, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        38, 3, SCAN c LEFT-JOIN
-        58, 3, USE TEMP B-TREE FOR ORDER BY
-        70, 0, SCAN ranked_submissions
-        72, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE ranked_submissions
+        9, 6, MATERIALIZE counts
+        12, 9, SCAN json_each VIRTUAL TABLE INDEX 1:
+        28, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        30, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        41, 6, SCAN counts LEFT-JOIN
+        61, 6, USE TEMP B-TREE FOR ORDER BY
+        73, 3, SCAN ranked_submissions
+        84, 0, SCAN underlying_submissions
+        86, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -379,39 +387,46 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id AS submission_id
+            FROM
+              submissions
+            ORDER BY
+              id DESC
+          ),
+          counts AS (
+            SELECT
+              key,
+              value as count
+            FROM
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts ON sm.metadata_value = counts.key
+            ORDER BY
+              counts.count ASC NULLS FIRST
+          )
           SELECT
-            id AS submission_id
+            submission_id
           FROM
-            submissions
-          ORDER BY
-            id DESC
-        ),
-        counts AS (
-          SELECT
-            key,
-            value
-          FROM
-            json_each(?)
-        ),
-        ranked_submissions AS MATERIALIZED (
-          SELECT
-            inner.submission_id
-          FROM
-            inner
-            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
-            AND sm.metadata_key = ?
-            LEFT JOIN counts c ON sm.metadata_value = c.key
-          ORDER BY
-            c.value ASC NULLS FIRST
+            ranked_submissions
         )
         SELECT
           chunks.*
         FROM
-          ranked_submissions
+          underlying_submissions
           CROSS JOIN chunks
         WHERE
-          chunks.submission_id = ranked_submissions.submission_id
+          chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -566,20 +581,45 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
           WITH
           inner AS NOT MATERIALIZED (
+            WITH
+            inner AS NOT MATERIALIZED (
+              SELECT
+                id AS submission_id
+              FROM
+                submissions
+              ORDER BY
+                id ASC
+            ),
+            counts AS (
+              SELECT
+                key,
+                value as count
+              FROM
+                json_each(?)
+            ),
+            ranked_submissions AS MATERIALIZED (
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+                AND sm.metadata_key = ?
+                LEFT JOIN counts ON sm.metadata_value = counts.key
+              ORDER BY
+                counts.count ASC NULLS FIRST
+            )
             SELECT
-              id AS submission_id
+              submission_id
             FROM
-              submissions
-            ORDER BY
-              id ASC
+              ranked_submissions
           ),
           counts AS (
             SELECT
               key,
-              value
+              value as count
             FROM
               json_each(?)
           ),
@@ -590,40 +630,22 @@ pub mod test {
               inner
               LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
               AND sm.metadata_key = ?
-              LEFT JOIN counts c ON sm.metadata_value = c.key
+              LEFT JOIN counts ON sm.metadata_value = counts.key
             ORDER BY
-              c.value ASC NULLS FIRST
+              counts.count ASC NULLS FIRST
           )
           SELECT
             submission_id
           FROM
             ranked_submissions
-        ),
-        counts AS (
-          SELECT
-            key,
-            value
-          FROM
-            json_each(?)
-        ),
-        ranked_submissions AS MATERIALIZED (
-          SELECT
-            inner.submission_id
-          FROM
-            inner
-            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
-            AND sm.metadata_key = ?
-            LEFT JOIN counts c ON sm.metadata_value = c.key
-          ORDER BY
-            c.value ASC NULLS FIRST
         )
         SELECT
           chunks.*
         FROM
-          ranked_submissions
+          underlying_submissions
           CROSS JOIN chunks
         WHERE
-          chunks.submission_id = ranked_submissions.submission_id
+          chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
