@@ -37,7 +37,7 @@ impl Strategy {
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
-      ) -> &'a mut QueryBuilder<Sqlite> {
+    ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
             Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
