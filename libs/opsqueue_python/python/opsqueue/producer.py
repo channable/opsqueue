@@ -359,7 +359,7 @@ class ProducerClient:
     def lookup_submission_id_by_prefix(self, prefix: str) -> SubmissionId | None:
         """
         Attempts to find the submission ID if only the prefix of the submission
-        (AKA the path at which the submision's chunks are stored in the object store)
+        (AKA the path at which the submission's chunks are stored in the object store)
         is known.
 
         Returns `None` if no submission could be found.

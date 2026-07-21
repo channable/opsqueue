@@ -198,7 +198,7 @@ class UnexpectedOpsqueueConsumerServerResponseError(OpsqueueInternalError):
     to a sync method something other than what it had expected.
 
     This may indicate that the client and server versions are not matching,
-    or that there is an implementatoin error in the Opsqueue code.
+    or that there is an implementation error in the Opsqueue code.
     """
 
     pass
@@ -232,7 +232,7 @@ class ChunkStorageError(OpsqueueInternalError):
 
 class InternalConsumerClientError(OpsqueueInternalError):
     """
-    Raised for any othre kind of Consumer client exception
+    Raised for any other kind of Consumer client exception
     """
 
     pass
@@ -240,7 +240,7 @@ class InternalConsumerClientError(OpsqueueInternalError):
 
 class InternalProducerClientError(OpsqueueInternalError):
     """
-    Raised for any othre kind of Producer client exception
+    Raised for any other kind of Producer client exception
     """
 
     pass

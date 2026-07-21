@@ -96,6 +96,10 @@ impl ConsumerConn {
 
     /// Runs the consumer websocket connection loop
     /// Blocks until the loop is stopped (because the connection is closed intentionally or by network failure).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a websocket protocol/transport failure occurs.
     pub async fn run(mut self) -> Result<(), ConsumerConnError> {
         self.initialize().await?;
         loop {
@@ -110,10 +114,9 @@ impl ConsumerConn {
                 // When a normal message is received, handle it
                 msg = self.ws_stream.recv() => {
                     match msg {
-                        // Socket closed (stream closed before receiving WS 'close' message, ungraceful shutdown)
-                        None => return Ok(()),
                         // Socket received a close message (graceful WS shutdown)
-                        Some(Ok(Message::Close(_))) => return Ok(()),
+                        // Socket closed (stream closed before receiving WS 'close' message, ungraceful shutdown)
+                        None | Some(Ok(Message::Close(_))) => return Ok(()),
                         // Socket had a problem (protocol violation, sending too much data, closed, etc.)
                         Some(Err(err)) => return Err(ConsumerConnError::LowLevelWebsocketError(err)),
                         // Socket received a normal message
@@ -123,7 +126,7 @@ impl ConsumerConn {
                 // When we are notified that we can retry an earlier failing reservation:
                 Some(RetryReservation{nonce, max, strategy}) = self.rx2.recv() => {
                     tracing::debug!("Retrying reservation for nonce {nonce} / {max} / {strategy:?}");
-                    self.handle_incoming_client_message(Envelope {nonce, contents: ClientToServerMessage::WantToReserveChunks { max, strategy }}).await?
+                    self.handle_incoming_client_message(Envelope {nonce, contents: ClientToServerMessage::WantToReserveChunks { max, strategy }}).await?;
                 }
                 // When a message from elsewhere in the app is received, pass it forward
                 // (Currently there is only one kind of these, namely a chunk reservation having expired)
@@ -191,7 +194,7 @@ impl ConsumerConn {
             }
             _ => {
                 return Err(ConsumerConnError::UnexpectedWSMessageType(
-                    anyhow::format_err!("Unexpected message format  {:?}", msg),
+                    anyhow::format_err!("Unexpected message format  {msg:?}"),
                 ));
             }
         }
@@ -203,8 +206,8 @@ impl ConsumerConn {
         &mut self,
         msg: Envelope<ClientToServerMessage>,
     ) -> Result<(), ConsumerConnError> {
-        use ClientToServerMessage::*;
-        use SyncServerToClientResponse::*;
+        use ClientToServerMessage::{CompleteChunk, FailChunk, WantToReserveChunks};
+        use SyncServerToClientResponse::ChunksReserved;
         let maybe_response = match msg.contents {
             WantToReserveChunks { max, strategy } => {
                 let chunks_or_err = self
@@ -260,7 +263,7 @@ impl ConsumerConn {
             };
             self.ws_stream
                 .send(ServerToClientMessage::Sync(enveloped_response).into())
-                .await?
+                .await?;
         }
 
         Ok(())
@@ -282,6 +285,7 @@ pub enum ConsumerConnError {
 }
 
 impl ConsumerConnError {
+    #[must_use]
     pub fn is_internal_error(&self) -> bool {
         matches!(
             self,
@@ -321,6 +325,7 @@ pub struct ConsumerConnectionId(String);
 
 impl ConsumerConnectionId {
     /// Generate the consumer id from a UUID.
+    #[must_use]
     pub fn uuid() -> ConsumerConnectionId {
         ConsumerConnectionId(uuid::Uuid::now_v7().to_string())
     }
@@ -363,8 +368,7 @@ impl ConsumerConnectionId {
         COLORS
             .get(i)
             .map(|c| String::from(*c))
-            .map(ConsumerConnectionId)
-            .unwrap_or_else(Self::uuid)
+            .map_or_else(Self::uuid, ConsumerConnectionId)
     }
 }
 

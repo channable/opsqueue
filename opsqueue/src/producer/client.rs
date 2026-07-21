@@ -45,6 +45,11 @@ impl Client {
     /// panics.
     ///
     /// Examples: `0.0.0.0:1312`, `my.opsqueue.instance.example.com`, `https://services.example.com/opsqueue`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `host` includes a URL scheme other than `http` or `https`.
+    #[must_use]
     pub fn new(host: &str) -> Self {
         let http_client = reqwest::Client::new();
         let base_url = match host.split_once("://") {
@@ -57,6 +62,7 @@ impl Client {
             http_client,
         }
     }
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -64,6 +70,11 @@ impl Client {
     /// known to the server.
     ///
     /// This uses the `/producer/submissions/count` endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails, the server returns a non-success
+    /// status, or if the response body cannot be decoded.
     pub async fn count_submissions(&self) -> Result<u32, InternalProducerClientError> {
         (|| async {
             let base_url = &self.base_url;
@@ -89,6 +100,11 @@ impl Client {
     /// Create a new submission for consumers to pick up.
     ///
     /// This uses the POST `/producer/submissions` endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails, the server returns a non-success status,
+    /// or the submission id in the response cannot be decoded.
     pub async fn insert_submission(
         &self,
         submission: &InsertSubmission,
@@ -116,10 +132,15 @@ impl Client {
         .await
     }
 
-    /// Send a HTTP request to the OpsQueue server to cancel a submission.
+    /// Send a HTTP request to the `OpsQueue` server to cancel a submission.
     ///
     /// Will return an error if the submission is already complete, failed, or
     /// cancelled, or if the submission could not be found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission was not found, was not cancellable,
+    /// or if the underlying HTTP/serialization layer fails.
     pub async fn cancel_submission(
         &self,
         submission_id: SubmissionId,
@@ -164,8 +185,7 @@ impl Client {
         })
         .retry(retry_policy())
         .when(|e| match e {
-            L(_) => false,
-            R(L(_)) => false,
+            L(_) | R(L(_)) => false,
             R(R(client_err)) => client_err.is_ephemeral(),
         })
         .notify(|err, dur| {
@@ -177,6 +197,11 @@ impl Client {
     /// Get the status of an existing submission identified by its `submission_id`.
     ///
     /// This uses the GET `/producer/submissions` endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails, the server responds with a non-success
+    /// status, or the response payload cannot be decoded.
     pub async fn get_submission(
         &self,
         submission_id: SubmissionId,
@@ -201,6 +226,12 @@ impl Client {
         .await
     }
 
+    /// Look up a submission id by prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails, the server responds with a non-success
+    /// status, or the response payload cannot be decoded.
     pub async fn lookup_submission_id_by_prefix(
         &self,
         prefix: &str,
@@ -227,6 +258,12 @@ impl Client {
         .await
     }
 
+    /// Look up submission ids by strategic metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if too many submissions match, if the request fails,
+    /// if the server responds with an unexpected status, or if decoding fails.
     pub async fn lookup_submission_ids_by_strategic_metadata(
         &self,
         strategic_metadata: &StrategicMetadataMap,
@@ -281,6 +318,10 @@ impl Client {
     /// prefixed with a "v", for example `v0.30.5`.
     ///
     /// Upon connection failure, this will not attempt to do any retrying.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or if the server returns a non-success status.
     pub async fn server_version(&self) -> Result<String, InternalProducerClientError> {
         let base_url = &self.base_url;
         let resp = self
@@ -305,15 +346,15 @@ pub enum InternalProducerClientError {
 }
 
 impl InternalProducerClientError {
+    #[must_use]
     pub fn is_ephemeral(&self) -> bool {
         match self {
             // In the case of an unexpected HTTP status error, developer
             // intervention will be required.
-            Self::UnexpectedStatus(_) => false,
+            Self::UnexpectedStatus(_) | Self::ResponseDecodingError(_) => false,
             // In the case of an ungraceful restart, this case might theoretically trigger.
             // So even cleaner would be a tiny retry loop for this special case.
             // However, we certainly **do not** want to wait multiple minutes before returning.
-            Self::ResponseDecodingError(_) => false,
             // Reqwest doesn't make this very easy as it has a single error typed used for _everything_.
             Self::HTTPClientError(inner) => {
                 // Failures in which a connection could not be established are ephemeral,
@@ -326,8 +367,7 @@ impl InternalProducerClientError {
                     // Any other status is considered a permanent failure however
                     inner
                         .status()
-                        .map(|status| status.is_server_error())
-                        .unwrap_or(false)
+                        .is_some_and(|status| status.is_server_error())
                 } else {
                     // Anything else is a permanent failure.
                     false
@@ -340,6 +380,8 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
+    use ux::u63;
+
     use crate::{
         common::{
             StrategicMetadataMap,
@@ -399,43 +441,43 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, 0);
+        assert_eq!(count, u63::new(0));
 
         let submission = InsertSubmission {
             chunk_contents: ChunkContents::Direct {
                 contents: vec![None, None, None],
             },
             metadata: None,
-            strategic_metadata: Default::default(),
+            strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
         };
         client
-            .insert_submission(&submission, &Default::default())
+            .insert_submission(&submission, &std::collections::HashMap::default())
             .await
             .expect("Should be OK");
 
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, 1);
+        assert_eq!(count, u63::new(1));
 
         client
-            .insert_submission(&submission, &Default::default())
+            .insert_submission(&submission, &std::collections::HashMap::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission, &Default::default())
+            .insert_submission(&submission, &std::collections::HashMap::default())
             .await
             .expect("Should be OK");
         client
-            .insert_submission(&submission, &Default::default())
+            .insert_submission(&submission, &std::collections::HashMap::default())
             .await
             .expect("Should be OK");
 
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, 4);
+        assert_eq!(count, u63::new(4));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -449,11 +491,11 @@ mod tests {
                 contents: vec![None, None, None],
             },
             metadata: None,
-            strategic_metadata: Default::default(),
+            strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
         };
         let submission_id = client
-            .insert_submission(&submission, &Default::default())
+            .insert_submission(&submission, &std::collections::HashMap::default())
             .await
             .expect("Should be OK");
 

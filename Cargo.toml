@@ -27,6 +27,10 @@ restriction = { level = "allow", priority = -1 }
 style = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 
+# Prevent duplicate versions of crates from being used in the workspace. If an easy fix is not
+# possible, you can add the crate to the `allowed-duplicate-crates` list in `clippy.toml`.
+multiple_crate_versions = "deny"
+
 [profile.release]
 # Full fat LTO makes a big difference in performance, at the cost of a large
 # compile time hit. You should only use release builds when performance matters.

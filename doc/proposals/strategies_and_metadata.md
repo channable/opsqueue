@@ -51,7 +51,7 @@ At some point, this will make the other operations, especially insertion, too sl
 In the rest of this document, the strategies and their potential implementation are each described in detail, and some tricks/ideas on making the right tradeoff w.r.t. what indexes to create while keeping the database manageable are given at the end.
 
 Of the above strategies, currently `Random`, `NewestFirst` and `OldestFirst` are implemented, exactly as described below.
-The other strategies, most of which depend on the metadata of a particular submission in one way or another, are not implemented yet. Describing these composable strategies and a potential way to implement them with a balance between preformance and flexibility is the main goal of this proposal.
+The other strategies, most of which depend on the metadata of a particular submission in one way or another, are not implemented yet. Describing these composable strategies and a potential way to implement them with a balance between performance and flexibility is the main goal of this proposal.
 
 ## Assumptions & Invariants
 
@@ -84,10 +84,10 @@ Furthermore, it might be important to note:
 
 Opsqueue's consumer API consists of four main producures:
 - `reserve_chunks(max: PosInt, strategy: Strategy) -> Stream<Chunk>`
-- `complete_chunk(SubmmissionId, ChunkIndex) -> ()`
+- `complete_chunk(SubmissionId, ChunkIndex) -> ()`
 - `retry_or_fail_chunk(SubmissiionId, ChunkIndex) -> ()`
 
-`complete_chunk` and `retry_or_faill_chunk` take a super brief write lock on  the SQLite database to update the state of the particular chunk in its table,
+`complete_chunk` and `retry_or_fail_chunk` take a super brief write lock on  the SQLite database to update the state of the particular chunk in its table,
 either incrementing the number of retries, moving it to `chunks_failed` or `chunks_completed`. In very rare situations (once per submission), they do more work,
 by moving the submission to its result table as well (and for `retry_or_fail_chunk`, moving all remaining chunks of that submissionn as well).
 These two calls never block a consumer however; from the perspective of the consumer they  are fire-and-forget.
@@ -180,7 +180,7 @@ But we can normalize this further:
 
 1. There are two kinds of metadata. 'I want access to extra submission-specific info inside the consumer implementation' which can just be a BLOB, and 'I  want to customize the chhunk reservation strategy', hereafter called 'strategic metadata'.
 2. Strategic metadata is relational in nature. Rather than an arbitrary BLOB, it is a `Map<String, Value>` for each submission, meaning we can store it as submission-key-value triples in a separate metadata table.
-3. For extra efficiency, we can consider 'custom priority' yet separate from tthe other strategic metadata. This  because we probably want to make a different choice w.r.t. providing an index there than for the other kinds of metadata.
+3. For extra efficiency, we can consider 'custom priority' yet separate from the other strategic metadata. This  because we probably want to make a different choice w.r.t. providing an index there than for the other kinds of metadata.
 4. We don't have to support more than a single 'custom priority' field, because if people have a multi-tier priority system they can combine that into a single formula.
 
 The strategic metadata table would look as follows:
@@ -221,7 +221,7 @@ because they can query the metadata table directly, and then join the chunks tab
 
 Combining it with the randomm order however requires either a full table scan of the chunks, or adding a join table `chunks_x_metadata` which will be quite large as it will contain the product of the number of chunks times the number of metadata keys.
 
-We could mitigate the write amplification and larger database size somewhat by storing it in a differrent SQLite 'schema' (a different database file) that we don't persist and that isn't part of the backups, and recreating it on startup. See the 'cheaper indexes' section below for details.
+We could mitigate the write amplification and larger database size somewhat by storing it in a different SQLite 'schema' (a different database file) that we don't persist and that isn't part of the backups, and recreating it on startup. See the 'cheaper indexes' section below for details.
 
 Once we have such index, we could use the 'cutting the deck' technique with it as well, which is really nice.
 

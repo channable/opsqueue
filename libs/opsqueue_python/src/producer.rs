@@ -28,13 +28,13 @@ use crate::{
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
-const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(5000);
+const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(5);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass(from_py_object, module = "opsqueue")]
 #[derive(Debug, Clone)]
 pub struct ProducerClient {
-    producer_client: ActualClient,
+    client: ActualClient,
     object_store_client: opsqueue::object_store::ObjectStoreClient,
     runtime: Arc<tokio::runtime::Runtime>,
 }
@@ -45,12 +45,16 @@ impl ProducerClient {
     ///
     /// :param address: The HTTP address where the opsqueue instance is running.
     ///
-    /// :param object_store_url: The URL used to upload/download objects from e.g. GCS.
+    /// :param `object_store_url`: The URL used to upload/download objects from e.g. GCS.
     ///   use `file:///tmp/my/local/path` to use a local file when running small examples in development.
     ///   use `gs://bucket-name/path/inside/bucket` to connect to GCS in production.
     ///   Supports the formats listed here: <https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse>
-    /// :param object_store_options: A list of key-value strings as extra options for the chosen object store.
+    /// :param `object_store_options`: A list of key-value strings as extra options for the chosen object store.
     ///        For example, for GCS, see <https://docs.rs/object_store/0.11.2/object_store/gcp/enum.GoogleConfigKey.html#variants>
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if object store client initialization fails.
     #[new]
     #[pyo3(signature = (address, object_store_url, object_store_options=vec![]))]
     pub fn new(
@@ -63,38 +67,40 @@ impl ProducerClient {
             opsqueue::version_info()
         );
         let runtime = start_runtime();
-        let producer_client = ActualClient::new(address);
+        let client = ActualClient::new(address);
         let object_store_client =
             opsqueue::object_store::ObjectStoreClient::new(object_store_url, object_store_options)?;
 
         tracing::info!("Opsqueue ProducerClient initialized");
 
         Ok(ProducerClient {
-            producer_client,
+            client,
             object_store_client,
             runtime,
         })
     }
 
+    #[must_use]
     pub fn __repr__(&self) -> String {
         format!(
             "<opsqueue_producer.ProducerClient(address={:?}, object_store_url={:?})>",
-            self.producer_client.base_url(),
+            self.client.base_url(),
             self.object_store_client.url()
         )
     }
 
     /// Return the Opsqueue server's version information
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if contacting the server fails.
     pub fn server_version(
         &self,
         py: Python<'_>,
     ) -> CPyResult<String, E<FatalPythonException, InternalProducerClientError>> {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
-                    .server_version()
-                    .await
-                    .map_err(|e| CError(R(e)))
+                self.client.server_version().await.map_err(|e| CError(R(e)))
             })
         })
     }
@@ -102,13 +108,17 @@ impl ProducerClient {
     /// Counts the number of ongoing submissions in the queue.
     ///
     /// Completed and failed submissions are not included in the count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if contacting the server fails.
     pub fn count_submissions(
         &self,
         py: Python<'_>,
     ) -> CPyResult<u32, E<FatalPythonException, InternalProducerClientError>> {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
+                self.client
                     .count_submissions()
                     .await
                     .map_err(|e| CError(R(e)))
@@ -120,6 +130,10 @@ impl ProducerClient {
     ///
     /// Will return an error if the submission is already complete, failed, or
     /// cancelled, or if the submission could not be found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission cannot be cancelled or if the request fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn cancel_submission(
         &self,
@@ -136,7 +150,7 @@ impl ProducerClient {
     > {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
+                self.client
                     .cancel_submission(id.into())
                     .await
                     .map_err(|e| CError(R(e)))
@@ -146,10 +160,14 @@ impl ProducerClient {
 
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
     ///
-    /// The returned SubmissionStatus object also includes the number of chunks finished so far,
+    /// The returned `SubmissionStatus` object also includes the number of chunks finished so far,
     /// when the submission was started/completed/failed, etc.
     ///
     /// This call does _not_ fetch the submission's chunk contents on its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if contacting the server fails.
     pub fn get_submission_status(
         &self,
         py: Python<'_>,
@@ -158,7 +176,7 @@ impl ProducerClient {
     {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
+                self.client
                     .get_submission(id.into())
                     .await
                     .map_err(|e| CError(R(e)))
@@ -171,6 +189,10 @@ impl ProducerClient {
     /// Attempts to find the submission ID if only the prefix of the submission
     /// (AKA the path at which the submission's chunks are stored in the object store)
     /// is known.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if contacting the server fails.
     pub fn lookup_submission_id_by_prefix(
         &self,
         py: Python<'_>,
@@ -178,7 +200,7 @@ impl ProducerClient {
     ) -> CPyResult<Option<SubmissionId>, E<FatalPythonException, InternalProducerClientError>> {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
+                self.client
                     .lookup_submission_id_by_prefix(prefix)
                     .await
                     .map(|opt| opt.map(Into::into))
@@ -189,6 +211,11 @@ impl ProducerClient {
 
     /// Attempts to find the IDs of submission matching ALL key-values pairs of
     /// the given strategic metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if too many submissions match or if the request fails.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn lookup_submission_ids_by_strategic_metadata(
         &self,
         py: Python<'_>,
@@ -203,7 +230,7 @@ impl ProducerClient {
     > {
         py.detach(|| {
             self.block_unless_interrupted(async {
-                self.producer_client
+                self.client
                     .lookup_submission_ids_by_strategic_metadata(&strategic_metadata)
                     .await
                     .map(|res| res.into_iter().map(Into::into).collect())
@@ -214,7 +241,11 @@ impl ProducerClient {
 
     /// Directly inserts a submission without sending the chunks to GCS
     /// (but immediately embedding them in the DB).
-    /// NOTE: This does not support StrategicMetadata currently
+    /// NOTE: This does not support `StrategicMetadata` currently
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if submission insertion fails.
     #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,
@@ -224,11 +255,11 @@ impl ProducerClient {
         chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
-        let strategic_metadata = Default::default();
+        let strategic_metadata = std::collections::HashMap::default();
 
         py.detach(|| {
             let submission = opsqueue::producer::InsertSubmission {
-                chunk_size: chunk_size.map(|n| chunk::ChunkSize(n as i64)),
+                chunk_size: chunk_size.map(|n| chunk::ChunkSize(n.cast_signed())),
                 chunk_contents: ChunkContents::Direct {
                     contents: chunk_contents,
                 },
@@ -236,7 +267,7 @@ impl ProducerClient {
                 strategic_metadata,
             };
             self.block_unless_interrupted(async move {
-                self.producer_client
+                self.client
                     .insert_submission(&submission, &otel_trace_carrier)
                     .await
                     .map_err(|e| R(e).into())
@@ -247,6 +278,11 @@ impl ProducerClient {
 
     #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::type_complexity)]
+    /// Insert submission chunks via object storage and enqueue the submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if chunk upload or submission insertion fails.
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
@@ -295,7 +331,7 @@ impl ProducerClient {
                     metadata,
                     strategic_metadata: strategic_metadata.unwrap_or_default(),
                 };
-                self.producer_client
+                self.client
                     .insert_submission(&submission, &otel_trace_carrier)
                     .await
                     .map(|submission_id| {
@@ -308,6 +344,11 @@ impl ProducerClient {
     }
 
     #[allow(clippy::result_large_err, clippy::type_complexity)]
+    /// Try streaming completed submission chunks without waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission is incomplete/failed or if the request fails.
     pub fn try_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
@@ -337,6 +378,11 @@ impl ProducerClient {
 
     #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     #[allow(clippy::result_large_err, clippy::type_complexity)]
+    /// Submit chunks and then stream the completed output chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if upload, submission creation, or streaming fails.
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
@@ -387,6 +433,10 @@ impl ProducerClient {
     /// to reduce the latency of tiny submissions.
     /// This interval is then doubled for each subsequent poll,
     /// until we check every few seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling or output streaming fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub fn blocking_stream_completed_submission_chunks(
         &self,
@@ -407,6 +457,11 @@ impl ProducerClient {
         })
     }
 
+    /// Return an awaitable that resolves to an async iterator of output chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Python error if creating the awaitable fails.
     pub fn async_stream_completed_submission_chunks<'p>(
         &self,
         py: Python<'p>,
@@ -485,12 +540,7 @@ impl ProducerClient {
         Option<PyChunksIter>,
         E![crate::errors::SubmissionFailed, InternalProducerClientError],
     > {
-        match self
-            .producer_client
-            .get_submission(id.into())
-            .await
-            .map_err(R)?
-        {
+        match self.client.get_submission(id.into()).await.map_err(R)? {
             Some(submission::SubmissionStatus::Completed(submission)) => {
                 tracing::debug!(
                     "Submission {} completed! Streaming result-chunks from object store",
@@ -498,7 +548,7 @@ impl ProducerClient {
                 );
                 let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
-                    PyChunksIter::new(self, prefix, submission.chunks_total.into()).await;
+                    PyChunksIter::new(self, prefix, submission.chunks_total.into());
 
                 Ok(Some(py_chunks_iter))
             }
@@ -524,11 +574,10 @@ pub struct PyChunksIter {
 }
 
 impl PyChunksIter {
-    pub(crate) async fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
+    pub(crate) fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
         let stream = client
             .object_store_client
             .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
-            .await
             .map_err(CError)
             .boxed();
         Self {

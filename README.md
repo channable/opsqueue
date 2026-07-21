@@ -280,7 +280,7 @@ just test-integration`
 ```
 
 This will set up the required steps below automatically.
-Any arguments passsed are passed on to `pytest`, e.g.:
+Any arguments passed are passed on to `pytest`, e.g.:
 
 ```bash
 just test-integration -vvvvvv -s -k

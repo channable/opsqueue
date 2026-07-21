@@ -40,6 +40,12 @@ impl ServerState {
             max_submissions,
         }
     }
+
+    /// Run a test-only producer HTTP server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if binding the server socket fails or if serving fails unexpectedly.
     pub async fn serve_for_tests(self, server_addr: Box<str>) {
         let app = Router::new().nest("/producer", self.build_router());
 
@@ -106,7 +112,7 @@ where
 /// 200 if the submission was successfully cancelled.
 /// 404 if the submission could not be found.
 /// 409 if the submission could not be cancelled.
-/// 500 if a DatabaseError occurred.
+/// 500 if a `DatabaseError` occurred.
 async fn cancel_submission(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
@@ -117,7 +123,7 @@ async fn cancel_submission(
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
     match submission::db::cancel_submission(submission_id, &mut conn).await {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
         Err(R(L(not_found_err))) => {
             Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
@@ -209,16 +215,16 @@ pub struct InsertSubmissionResponse {
     pub id: SubmissionId,
 }
 
-async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u32>, ServerError> {
+async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions(&mut conn).await?;
-    Ok(Json(count.try_into()?))
+    Ok(Json(u64::from(count)))
 }
 
 async fn submissions_count_completed(
     State(state): State<ServerState>,
-) -> Result<Json<u32>, ServerError> {
+) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions_completed(&mut conn).await?;
-    Ok(Json(count.try_into()?))
+    Ok(Json(u64::from(count)))
 }

@@ -34,6 +34,7 @@ let
       pkgs.pre-commit
       pkgs.python3Packages.pre-commit-hooks
       pkgs.ruff
+      pkgs.typos
 
       # For compiling the Rust parts
       pkgs.rustToolchain

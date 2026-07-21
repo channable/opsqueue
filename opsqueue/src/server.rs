@@ -1,6 +1,7 @@
 //! Defines the HTTP endpoints that are used by both the `producer` and `consumer` APIs
 use std::{
     any::Any,
+    mem,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -23,6 +24,11 @@ fn retry_policy() -> impl BackoffBuilder {
 }
 
 #[cfg(feature = "server-logic")]
+/// Start serving producer and consumer endpoints.
+///
+/// # Errors
+///
+/// Returns an error if binding or serving the HTTP server fails.
 pub async fn serve_producer_and_consumer(
     config: &'static crate::config::Config,
     server_addr: &str,
@@ -39,7 +45,7 @@ pub async fn serve_producer_and_consumer(
             config,
             pool.clone(),
             reservation_expiration,
-            cancellation_token.clone(),
+            cancellation_token,
             app_healthy_flag.clone(),
             prometheus_config.clone(),
         );
@@ -70,7 +76,7 @@ pub async fn serve_producer_and_consumer(
     .await.inspect_err(|_|{
         // Drop the pipe after the server start retries have been exhausted. This ensures that the
         // parent process can safely block on reading from the pipe.
-        config.report_bound_port_pipe.take();
+        mem::drop(config.report_bound_port_pipe.take());
     })
 }
 
@@ -79,7 +85,7 @@ pub fn build_router(
     config: &'static crate::config::Config,
     pool: DBPools,
     reservation_expiration: Duration,
-    cancellation_token: CancellationToken,
+    cancellation_token: &CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
     prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
@@ -149,6 +155,7 @@ pub async fn version_endpoint() -> String {
     crate::version_info()
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn handle_panic(err: Box<dyn Any + Send + 'static>) -> Response<String> {
     let details = if let Some(s) = err.downcast_ref::<String>() {
         s.clone()
@@ -203,7 +210,7 @@ pub async fn app_watchdog(
 
         select! {
             () = cancellation_token.cancelled() => break,
-            _ = tokio::time::sleep(Duration::from_secs(10)) => {},
+            () = tokio::time::sleep(Duration::from_secs(10)) => {},
         }
     }
     // Set to unhealthy when shutting down

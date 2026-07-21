@@ -6,20 +6,26 @@ pub mod chunk;
 pub mod errors;
 pub mod submission;
 
-/// As values, we support the largest number value SQLite supports by itself,
+/// As values, we support the largest number value `SQLite` supports by itself,
 /// which should be sufficient for most 'ID' fields, which is what this feature is intended for.
 ///
 /// If you really need to use strings or UUIDs with a `PreferDistinct` strategy,
-/// consider hashing them and using that hash as MetaStateVal.
+/// consider hashing them and using that hash as `MetaStateVal`.
 pub type MetaStateVal = i64;
 pub type StrategicMetadataMap = FxHashMap<String, MetaStateVal>;
 
 /// Maximum number of submissions a lookup may return.
-/// Guarantees: 0 < MaxSubmissions 1 < i64::MAX;
+/// Guarantees: `0 < MaxSubmissions && MaxSubmissions + 1 < i64::MAX`;
 #[derive(Debug, Clone, Copy)]
 pub struct MaxSubmissions(NonZero<u64>);
 
 impl MaxSubmissions {
+    /// Create a validated `MaxSubmissions`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is too large to safely convert to `i64`
+    /// during SQL binding.
     pub fn new(value: NonZero<u64>) -> Result<Self, MaxSubmissionsTooLarge> {
         if u64::from(value) < i64::MAX as u64 {
             Ok(Self(value))

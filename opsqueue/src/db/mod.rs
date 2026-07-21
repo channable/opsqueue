@@ -176,7 +176,7 @@ where
 ///
 /// The write pool only contains a single connection,
 /// ensuring that any write-contention happens *in async Rust* rather than
-/// on a blocking background thread that deals with the blocking SQLite API.
+/// on a blocking background thread that deals with the blocking `SQLite` API.
 ///
 /// Conversely, we have _many_ read connections,
 /// ensuring that usually there need not be any waiting for any
@@ -222,16 +222,22 @@ impl DBPools {
         }
     }
     /// Access the pool containing the reader connections.
+    #[must_use]
     pub fn reader_pool(&self) -> &ReaderPool {
         &self.read_pool
     }
     /// Access the pool containing the writer connection.
+    #[must_use]
     pub fn writer_pool(&self) -> &WriterPool {
         &self.write_pool
     }
     /// Access a reader connection.
     ///
     /// Such a connection can't be used to make changes to the state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring a reader connection fails.
     pub async fn reader_conn(&self) -> sqlx::Result<Reader<NoTransaction>> {
         self.read_pool.reader_conn().await
     }
@@ -239,6 +245,10 @@ impl DBPools {
     ///
     /// This connection can be used both for functions requiring read-only access and for functions
     /// that make changes to the state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the writer connection fails.
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.write_pool.writer_conn().await
     }
@@ -270,6 +280,7 @@ where
     W: magic::Bool,
 {
     /// Wrap the [`SqlitePool`] to add a type-level tag identifying it as either a reader or a writer pool.
+    #[must_use]
     pub fn new(pool: SqlitePool) -> Pool<W> {
         Pool {
             inner: pool,
@@ -277,6 +288,10 @@ where
         }
     }
     /// Acquire a new connection from the underlying pool and wrap it in our typed connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if pool acquisition fails.
     pub async fn acquire(&self) -> sqlx::Result<Conn<W>> {
         self.inner.acquire().await.map(Conn::new)
     }
@@ -288,10 +303,19 @@ impl WriterPool {
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
     /// [`DBPools`]: DBPools
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the connection fails.
     pub async fn writer_conn(&self) -> sqlx::Result<Writer<NoTransaction>> {
         self.acquire().await
     }
 
+    /// Perform an explicit WAL checkpoint using the writer connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection acquisition or checkpoint execution fails.
     pub async fn perform_explicit_wal_checkpoint(&self) -> sqlx::Result<()> {
         let conn = self.writer_conn().await?;
         perform_explicit_wal_checkpoint(conn).await
@@ -301,7 +325,11 @@ impl WriterPool {
 /// Performs an explicit, non-passive WAL checkpoint
 /// We use the 'RESTART' strategy, which will do the most work but will briefly block the writer *and* all readers
 ///
-/// c.f. https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
+/// c.f. <https://www.sqlite.org/pragma.html#pragma_wal_checkpoint>
+///
+/// # Errors
+///
+/// Returns an error if the checkpoint query fails.
 pub async fn perform_explicit_wal_checkpoint(mut conn: impl WriterConnection) -> sqlx::Result<()> {
     let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
         .fetch_one(conn.get_inner())
@@ -316,6 +344,10 @@ impl ReaderPool {
     /// See [`DBPools`] for further explanation about readers and writers.
     ///
     /// [`DBPools`]: DBPools
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the connection fails.
     pub async fn reader_conn(&self) -> sqlx::Result<Reader<NoTransaction>> {
         self.acquire().await
     }
@@ -369,7 +401,7 @@ pub mod magic {
     impl Bool for False {}
 }
 
-/// Connects to the SQLite database, creating it if it doesn't exist yet, and migrating it
+/// Connects to the `SQLite` database, creating it if it doesn't exist yet, and migrating it
 /// if it isn't up to date.
 ///
 /// This function should be called on app startup; it will panic when the database cannot be
@@ -405,17 +437,17 @@ fn db_options(database_filename: &str) -> SqliteConnectOptions {
 }
 
 async fn ensure_db_exists(database_filename: &str) {
-    if !Sqlite::database_exists(database_filename)
+    if Sqlite::database_exists(database_filename)
         .await
         .unwrap_or(false)
     {
+        tracing::info!("Starting up using existing sqlite DB {}", database_filename);
+    } else {
         tracing::info!("Creating backing sqlite DB {}", database_filename);
         Sqlite::create_database(database_filename)
             .await
             .expect("Could not create backing sqlite DB");
         tracing::info!("Finished creating backing sqlite DB {}", database_filename);
-    } else {
-        tracing::info!("Starting up using existing sqlite DB {}", database_filename);
     }
 }
 
@@ -447,7 +479,7 @@ async fn db_connect_read_pool(
 /// Connect the writer pool.
 ///
 /// It intentionally only contains a single connection
-/// as SQLite only allows a single write at a time
+/// as `SQLite` only allows a single write at a time
 async fn db_connect_write_pool(database_filename: &str) -> WriterPool {
     SqlitePoolOptions::new()
         .min_connections(1)

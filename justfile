@@ -86,12 +86,12 @@ lint-heavy: clippy mypy
 # Rust static analysis
 [group('lint')]
 clippy:
-  cargo clippy --no-deps --fix --allow-dirty --allow-staged -- -Dwarnings
-  cargo clippy --no-deps -- -Dwarnings
-  cargo clippy --no-deps --fix --allow-dirty --allow-staged --no-default-features -- -Dwarnings
-  cargo clippy --no-deps --no-default-features -- -Dwarnings
-  cargo clippy --no-deps --fix --allow-dirty --allow-staged --all-features -- -Dwarnings
-  cargo clippy --no-deps --all-features -- -Dwarnings
+  cargo clippy --no-deps --all-targets --fix --allow-dirty --allow-staged -- -Dwarnings
+  cargo clippy --no-deps --all-targets -- -Dwarnings
+  cargo clippy --no-deps --all-targets --no-default-features --fix --allow-dirty --allow-staged -- -Dwarnings
+  cargo clippy --no-deps --all-targets --no-default-features -- -Dwarnings
+  cargo clippy --no-deps --all-targets --all-features --fix --allow-dirty --allow-staged -- -Dwarnings
+  cargo clippy --no-deps --all-targets --all-features -- -Dwarnings
 
 # Python static analysis type-checker
 [group('lint')]

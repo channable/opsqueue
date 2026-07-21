@@ -38,7 +38,7 @@ pub enum ServerToClientMessage {
     Init(ConsumerConfig),
 }
 
-/// Responses to earlier ClientToServerMessages
+/// Responses to earlier `ClientToServerMessages`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncServerToClientResponse {
     #[allow(clippy::type_complexity)]
@@ -61,12 +61,12 @@ pub struct Envelope<T> {
 /// the opsqueue server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsumerConfig {
-    /// Specifies how long the heartbeat window is. See also [Config::max_missable_heartbeats].
+    /// Specifies how long the heartbeat window is. See also [`Config::max_missable_heartbeats`].
     ///
     /// [Config::max_missable_heartbeats]: crate::config::Config::max_missable_heartbeats
     pub max_missable_heartbeats: usize,
     /// Specifies how long the heartbeat window is. This value is determined by the
-    /// [Config::heartbeat_interval] option set on the server.
+    /// [`Config::heartbeat_interval`] option set on the server.
     ///
     /// [Config::heartbeat_interval]: crate::config::Config::heartbeat_interval
     pub heartbeat_interval: Duration,

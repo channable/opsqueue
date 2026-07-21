@@ -44,12 +44,13 @@ pub mod config;
 pub const VERSION_CARGO_SEMVER: &str = env!("CARGO_PKG_VERSION");
 
 #[allow(clippy::const_is_empty)]
+#[must_use]
 pub fn version_info() -> String {
     format!("v{VERSION_CARGO_SEMVER}")
 }
 
 /// Shared constant with the migrations that all the tests can reference, to avoid the generated
 /// code bloat as described in
-/// https://kobzol.github.io/rust/2026/06/21/optimizing-sqlx-test-rebuild-time.html
+/// <https://kobzol.github.io/rust/2026/06/21/optimizing-sqlx-test-rebuild-time.html>
 #[cfg(all(test, feature = "server-logic"))]
 const MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();

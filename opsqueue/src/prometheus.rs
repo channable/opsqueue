@@ -44,6 +44,7 @@ pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_fail_chunk_duration_sec
 
 pub const OPERATIONS_BACKLOG_GAUGE: &str = "operations_in_backlog_count";
 
+#[allow(clippy::too_many_lines)]
 pub fn describe_metrics() {
     describe_counter!(
         SUBMISSIONS_TOTAL_COUNTER,
@@ -165,6 +166,11 @@ pub type PrometheusConfig = (
 );
 
 #[must_use]
+/// Build Prometheus layer and recorder handle.
+///
+/// # Panics
+///
+/// Panics if Prometheus recorder installation fails.
 pub fn setup_prometheus() -> (
     GenericMetricLayer<'static, PrometheusHandle, axum_prometheus::Handle>,
     PrometheusHandle,
@@ -186,15 +192,22 @@ pub fn setup_prometheus() -> (
     (metric_layer, metric_handle)
 }
 
-/// Returns the number of seconds contained by this TimeDelta as f64, with nanosecond precision.
+/// Returns the number of seconds contained by this `TimeDelta` as f64, with nanosecond precision.
 ///
 /// Adapted from <https://doc.rust-lang.org/std/time/struct.Duration.html#method.as_secs_f64>
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
 pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
-    (td.num_seconds() as f64) + (td.subsec_nanos() as f64) / NANOS_PER_SEC
+    (td.num_seconds() as f64) + f64::from(td.subsec_nanos()) / NANOS_PER_SEC
 }
 
 /// Calculates the backlog-size metrics used for autoscaling.
+///
+/// # Errors
+///
+/// Returns an error if acquiring a DB connection or reading metrics fails.
+#[allow(clippy::cast_precision_loss)]
 pub async fn calculate_scaling_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
     let mut conn = db_pool.reader_conn().await?;
     let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
@@ -217,8 +230,8 @@ pub async fn periodically_calculate_scaling_metrics(
     const METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
     loop {
         tokio::select! {
-            _ = cancellation_token.cancelled() => break,
-            _ = tokio::time::sleep(METRICS_INTERVAL) => {
+            () = cancellation_token.cancelled() => break,
+            () = tokio::time::sleep(METRICS_INTERVAL) => {
                 if let Err(e) = calculate_scaling_metrics(db_pool).await {
                     tracing::error!("Error calculating scaling metrics: {}", e);
                 }

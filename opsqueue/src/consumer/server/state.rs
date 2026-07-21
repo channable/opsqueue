@@ -38,6 +38,7 @@ impl Drop for ConsumerState {
 }
 
 impl ConsumerState {
+    #[must_use]
     pub fn new(server_state: &Arc<ServerState>) -> Self {
         Self {
             reservations: Arc::new(Mutex::new(HashSet::new())),
@@ -47,6 +48,15 @@ impl ConsumerState {
 
     #[tracing::instrument(skip(self, stale_chunks_notifier))]
     #[allow(clippy::type_complexity)]
+    /// Fetch and reserve chunks for this connection state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reservations mutex is poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid `limit` values or underlying database failures.
     pub async fn fetch_and_reserve_chunks(
         &mut self,
         strategy: strategy::Strategy,
