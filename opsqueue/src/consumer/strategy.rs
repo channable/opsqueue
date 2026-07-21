@@ -118,13 +118,15 @@ impl Strategy {
                 if only_submissions {
                     qb.push(" SELECT submission_id FROM ranked_submissions")
                 } else {
-                    // In SQLite, CROSS JOIN ON does NOT produce N x M rows, it
-                    // forces the query planner to use 'ranked_submissions' as
-                    // the outer loop, preserving the sort order.
+                    // In SQLite, CROSS JOIN <table> ON/WHERE does NOT produce N
+                    // x M rows, it acts as an INNER JOIN forcing the query
+                    // planner to use '<table> as the outer loop, preserving its
+                    // sort order.
+                    // c.f. https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
                     qb.push(
                         " SELECT chunks.*
                           FROM ranked_submissions
-                          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id",
+                          CROSS JOIN chunks WHERE chunks.submission_id = ranked_submissions.submission_id",
                     )
                 }
             }
@@ -337,7 +339,9 @@ pub mod test {
           chunks.*
         FROM
           ranked_submissions
-          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
+          CROSS JOIN chunks
+        WHERE
+          chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -405,7 +409,9 @@ pub mod test {
           chunks.*
         FROM
           ranked_submissions
-          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
+          CROSS JOIN chunks
+        WHERE
+          chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -615,7 +621,9 @@ pub mod test {
           chunks.*
         FROM
           ranked_submissions
-          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
+          CROSS JOIN chunks
+        WHERE
+          chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -762,5 +770,68 @@ pub mod test {
             .unwrap();
 
         assert!(vals1 != vals2);
+    }
+
+    /// Test for `PreferDistinct` that the next chunk should come from the
+    /// submission where the associated metadata value (here `company_id`) has
+    /// the *fewest* in-flight chunks in progress.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_prefer_distinct_picks_least_busy_company(pool: sqlx::SqlitePool) {
+        use crate::consumer::dispatcher::metastate::MetaStateVal;
+
+        let db_pools = crate::db::DBPools::from_test_pool(&pool);
+        let mut conn = db_pools.writer_conn().await.unwrap();
+
+        // Three companies, each with one submission of a few chunks.
+        let company_ids: [MetaStateVal; 3] = [1, 2, 3];
+        // For each inserted submission, keep track of the associated company.
+        let mut company_id_per_submission = std::collections::HashMap::new();
+        let chunks_per_company = 2;
+        for company_id in company_ids {
+            let strategic_metadata =
+                StrategicMetadataMap::from_iter([("company_id".to_string(), company_id)]);
+            let chunks: Vec<_> = (0..chunks_per_company)
+                .map(|x| Some(x.to_string().into()))
+                .collect();
+            let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+                None,
+                chunks,
+                None,
+                strategic_metadata,
+                ChunkSize::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            company_id_per_submission.insert(submission_id, company_id);
+        }
+
+        // Company 1 is heavily in progress, 2 not at all, 3 a little.
+        let metastate = MetaState::default();
+        for _ in 0..chunks_per_company {
+            metastate.increment("company_id", 1);
+        }
+        assert!(chunks_per_company > 1);
+        metastate.increment("company_id", 3);
+
+        let strategy = Strategy::PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(Strategy::Oldest),
+        };
+        let chunks: Vec<Chunk> = strategy
+            .build_query(&mut QueryBuilder::default(), &metastate)
+            .build_query_as()
+            .fetch(conn.get_inner())
+            .try_collect()
+            .await
+            .unwrap();
+
+        let company_selection_order: Vec<_> = chunks
+            .iter()
+            .map(|chunk| company_id_per_submission[&chunk.submission_id])
+            .collect();
+
+        // Least-busy company first, busiest last.
+        assert_eq!(company_selection_order, vec![2, 2, 3, 3, 1, 1]);
     }
 }
