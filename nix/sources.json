@@ -5,10 +5,10 @@
         "homepage": "https://crane.dev",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "469fd08d0bcf6926321fa973c6777fbc87785dd7",
-        "sha256": "1acw9xb1cxdj9c7h5dajcqjz7wmlvwfhiqy4069b71j8hk0clmaa",
+        "rev": "7930f6c291de6f83c257839d434592aa085f290a",
+        "sha256": "0y49sj1pn2garc7gn7424qa68xn03cz6zrfcvnjcbzsm28vdci2f",
         "type": "tarball",
-        "url": "https://github.com/ipetkov/crane/archive/469fd08d0bcf6926321fa973c6777fbc87785dd7.tar.gz",
+        "url": "https://github.com/ipetkov/crane/archive/7930f6c291de6f83c257839d434592aa085f290a.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "nixpkgs": {
@@ -29,10 +29,10 @@
         "homepage": "",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "e3fa5cf86b93914b8f312b2a1ca14fbb139c655c",
-        "sha256": "04ci7amdr6xxdd802dv0i2csvwlqyj603w9kv40r7jn343vqmihy",
+        "rev": "47759faaddf38fadaf172151ca9df8adae9c0b2e",
+        "sha256": "01cwagfvd1bv4qgqpjcar6v0k66kcpnk4j2k71kdhhsj5yc81bqc",
         "type": "tarball",
-        "url": "https://github.com/oxalica/rust-overlay/archive/e3fa5cf86b93914b8f312b2a1ca14fbb139c655c.tar.gz",
+        "url": "https://github.com/oxalica/rust-overlay/archive/47759faaddf38fadaf172151ca9df8adae9c0b2e.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     }
 }
