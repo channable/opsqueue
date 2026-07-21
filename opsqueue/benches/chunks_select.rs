@@ -1,4 +1,5 @@
 use futures::stream::TryStreamExt as _;
+
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{Chunk, ChunkSize};
 use opsqueue::common::submission::db::insert_submission_from_chunks;
@@ -15,6 +16,8 @@ const BACKLOG_SIZES: &[usize] = &[
     100, 500, 1_000, 2_000, 5_000, 7_500, 10_000, 15_000, 20_000, 25_000, 30_000,
 ];
 const SAMPLES: usize = 30;
+const WARMUP: usize = 5;
+const MAX_IN_FLIGHT: usize = 256;
 
 static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -31,7 +34,7 @@ fn strategies() -> [(&'static str, Strategy); 2] {
     ]
 }
 
-/// Returns (submissions, `chunks_per_submission`) for a given shape.
+/// (submissions, chunks per submission) for a shape given a total chunk budget.
 fn layout(shape: &str, total_chunks: usize) -> (usize, usize) {
     match shape {
         "many_submissions_few_chunks" => (total_chunks, 1),
@@ -43,11 +46,14 @@ fn layout(shape: &str, total_chunks: usize) -> (usize, usize) {
     }
 }
 
-/// Seeds a fresh temp DB with the given backlog shape.
+/// Seeds a fresh DB with a backlog shape and populates realistic in-flight `MetaState`.
 async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, PathBuf) {
     let (submissions, chunks_per_submission) = layout(shape, total_chunks);
     let unique = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("opsqueue_bench_{unique}.sqlite"));
+
+    // Ensure clean state
+    let _ = std::fs::remove_file(&path);
 
     let db_pools = db::open_and_setup(path.to_str().unwrap(), NonZero::new(16).unwrap()).await;
     let mut conn = db_pools.writer_conn().await.unwrap();
@@ -68,14 +74,22 @@ async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, Path
         )
         .await
         .unwrap();
+        // THIS is what simulates a busy queue and causes the degradation curve!
+        if usize::try_from(company).unwrap() < MAX_IN_FLIGHT {
+            for _ in 0..=(company % 5) {
+                metastate.increment("company_id", company);
+            }
+        }
     }
+
     (db_pools, metastate, path)
 }
 
-/// Runs selection query and fetches just the first chunk.
+/// Runs the selection query and fetches just the first chunk.
 async fn select_first_chunk(db_pools: &db::DBPools, strategy: &Strategy, metastate: &MetaState) {
     let mut conn = db_pools.reader_conn().await.unwrap();
     let mut query = sqlx::QueryBuilder::default();
+
     let chunk: Option<Chunk> = strategy
         .build_query(&mut query, metastate)
         .build_query_as()
@@ -95,6 +109,22 @@ fn median_us(mut samples: Vec<f64>) -> f64 {
     samples[samples.len() / 2]
 }
 
+/// Executes warmup + sample runs for a given DB state and returns median latency in µs.
+async fn bench_strategy(db_pools: &db::DBPools, strategy: &Strategy, metastate: &MetaState) -> f64 {
+    let mut samples = Vec::with_capacity(SAMPLES);
+
+    for i in 0..(WARMUP + SAMPLES) {
+        let start = Instant::now();
+        select_first_chunk(db_pools, strategy, metastate).await;
+
+        if i >= WARMUP {
+            samples.push(start.elapsed().as_secs_f64() * 1e6);
+        }
+    }
+
+    median_us(samples)
+}
+
 fn get_csv_path() -> PathBuf {
     if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
         PathBuf::from(target_dir).join("chunks_select_bench.csv")
@@ -107,6 +137,7 @@ fn get_csv_path() -> PathBuf {
 fn main() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
+    // Setup CSV output
     let csv_path = get_csv_path();
     if let Some(parent) = csv_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -127,18 +158,12 @@ fn main() {
             for &size in BACKLOG_SIZES {
                 let (db_pools, metastate, path) = runtime.block_on(seed(shape, size));
 
-                let mut samples = Vec::with_capacity(SAMPLES);
-                for _ in 0..SAMPLES {
-                    let start = Instant::now();
-                    runtime.block_on(select_first_chunk(&db_pools, &strategy, &metastate));
-                    samples.push(start.elapsed().as_secs_f64() * 1e6);
-                }
+                let median = runtime.block_on(bench_strategy(&db_pools, &strategy, &metastate));
 
-                let median = median_us(samples);
                 println!("{shape:<30} {strategy_label:<35} {size:<12} {median:<10.1}");
                 writeln!(csv, "{shape},\"{strategy_label}\",{size},{median:.1}").unwrap();
 
-                // Cleanup DB files
+                // Cleanup DB files explicitly
                 drop(db_pools);
                 let _ = std::fs::remove_file(&path);
                 let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
