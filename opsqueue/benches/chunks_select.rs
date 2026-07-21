@@ -1,5 +1,4 @@
 use futures::stream::TryStreamExt as _;
-
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{Chunk, ChunkSize};
 use opsqueue::common::submission::db::insert_submission_from_chunks;
@@ -13,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 const BACKLOG_SIZES: &[usize] = &[
-    100, 500, 1_000, 2_000, 5_000, 7_500, 10_000, 15_000, 20_000, 25_000, 30_000,
+    100, 500, 1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 15_000, 20_000, 30_000,
 ];
 const SAMPLES: usize = 30;
 const WARMUP: usize = 5;
@@ -74,6 +73,7 @@ async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, Path
         )
         .await
         .unwrap();
+
         // THIS is what simulates a busy queue and causes the degradation curve!
         if usize::try_from(company).unwrap() < MAX_IN_FLIGHT {
             for _ in 0..=(company % 5) {
