@@ -42,13 +42,7 @@ impl Strategy {
         match self {
             Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
             Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
-            Random => {
-                let random_offset: u16 = rand::random();
-                qb.push("SELECT * FROM chunks WHERE random_order >= ")
-                    .push_bind(random_offset)
-                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
-                    .push_bind(random_offset)
-            }
+            Random => Self::push_random_order_query(qb, "*", "chunks"),
             PreferDistinct { .. } => {
                 qb.push("WITH underlying_submissions AS MATERIALIZED (");
                 let qb = self.build_query_snippet_returning_submission_ids(qb, metastate);
@@ -78,9 +72,7 @@ impl Strategy {
         match self {
             Oldest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id ASC"),
             Newest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id DESC"),
-            Random => {
-                panic!("Random underlying strategy not supported")
-            }
+            Random => Self::push_random_order_query(qb, "id as submission_id", "submissions"),
             PreferDistinct {
                 meta_key,
                 underlying,
@@ -130,6 +122,24 @@ impl Strategy {
                 qb.push(" SELECT submission_id FROM ranked_submissions")
             }
         }
+    }
+
+    /// Append a query snippet to select from the `random_order` column on the given
+    /// table using the "cutting the deck" technique.
+    fn push_random_order_query<'a>(
+        qb: &'a mut QueryBuilder<Sqlite>,
+        columns: &str,
+        table_name: &str,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        let random_offset: u16 = rand::random();
+        qb.push(format!(
+            "SELECT {columns} FROM {table_name} WHERE random_order >= "
+        ))
+        .push_bind(random_offset)
+        .push(format!(
+            " UNION ALL SELECT {columns} FROM {table_name} WHERE random_order < "
+        ))
+        .push_bind(random_offset)
     }
 }
 
@@ -430,17 +440,19 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        3, 0, MATERIALIZE ranked_submissions
-        6, 3, MATERIALIZE counts
-        9, 6, SCAN json_each VIRTUAL TABLE INDEX 1:
-        25, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        27, 3, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        38, 3, SCAN c LEFT-JOIN
-        58, 3, USE TEMP B-TREE FOR ORDER BY
-        70, 0, SCAN ranked_submissions
-        72, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE ranked_submissions
+        9, 6, MATERIALIZE counts
+        12, 9, SCAN json_each VIRTUAL TABLE INDEX 1:
+        28, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        30, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        41, 6, SCAN counts LEFT-JOIN
+        61, 6, USE TEMP B-TREE FOR ORDER BY
+        73, 3, SCAN ranked_submissions
+        84, 0, SCAN underlying_submissions
+        86, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -464,96 +476,75 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order >= ?
+            UNION ALL
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order < ?
+          ),
+          counts AS (
+            SELECT
+              key,
+              value as count
+            FROM
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts ON sm.metadata_value = counts.key
+            ORDER BY
+              counts.count ASC NULLS FIRST
+          )
           SELECT
-            *
+            submission_id
           FROM
-            chunks
-          WHERE
-            random_order >= ?
-          UNION ALL
-          SELECT
-            *
-          FROM
-            chunks
-          WHERE
-            random_order < ?
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            ranked_submissions
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
+          underlying_submissions
+          CROSS JOIN chunks
         WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        7, 4, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        16, 4, CORRELATED SCALAR SUBQUERY 5
-        20, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        30, 16, LIST SUBQUERY 3
-        32, 30, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 3, UNION ALL
-        61, 58, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        71, 58, CORRELATED SCALAR SUBQUERY 5
-        75, 71, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        85, 71, LIST SUBQUERY 3
-        87, 85, SCAN json_each VIRTUAL TABLE INDEX 0:
-        113, 3, UNION ALL
-        114, 113, COMPOUND QUERY
-        115, 114, LEFT-MOST SUBQUERY
-        118, 115, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        127, 115, CORRELATED SCALAR SUBQUERY 7
-        131, 127, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        141, 127, LIST SUBQUERY 3
-        143, 141, SCAN json_each VIRTUAL TABLE INDEX 0:
-        169, 114, UNION ALL
-        172, 169, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        182, 169, CORRELATED SCALAR SUBQUERY 7
-        186, 182, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        196, 182, LIST SUBQUERY 3
-        198, 196, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE ranked_submissions
+        8, 6, CO-ROUTINE inner
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        38, 6, MATERIALIZE counts
+        41, 38, SCAN json_each VIRTUAL TABLE INDEX 1:
+        56, 6, SCAN inner
+        59, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        71, 6, SCAN counts LEFT-JOIN
+        91, 6, USE TEMP B-TREE FOR ORDER BY
+        103, 3, SCAN ranked_submissions
+        114, 0, SCAN underlying_submissions
+        116, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -649,101 +640,26 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        5, 4, COMPOUND QUERY
-        6, 5, LEFT-MOST SUBQUERY
-        9, 6, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        18, 6, CORRELATED SCALAR SUBQUERY 5
-        22, 18, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        32, 18, LIST SUBQUERY 3
-        34, 32, SCAN json_each VIRTUAL TABLE INDEX 0:
-        52, 6, CORRELATED SCALAR SUBQUERY 11
-        56, 52, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        66, 52, LIST SUBQUERY 9
-        68, 66, SCAN json_each VIRTUAL TABLE INDEX 0:
-        94, 5, UNION ALL
-        97, 94, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        107, 94, CORRELATED SCALAR SUBQUERY 5
-        111, 107, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        121, 107, LIST SUBQUERY 3
-        123, 121, SCAN json_each VIRTUAL TABLE INDEX 0:
-        141, 94, CORRELATED SCALAR SUBQUERY 11
-        145, 141, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        155, 141, LIST SUBQUERY 9
-        157, 155, SCAN json_each VIRTUAL TABLE INDEX 0:
-        183, 5, UNION ALL
-        184, 183, COMPOUND QUERY
-        185, 184, LEFT-MOST SUBQUERY
-        188, 185, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        197, 185, CORRELATED SCALAR SUBQUERY 7
-        201, 197, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        211, 197, LIST SUBQUERY 3
-        213, 211, SCAN json_each VIRTUAL TABLE INDEX 0:
-        231, 185, CORRELATED SCALAR SUBQUERY 11
-        235, 231, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        245, 231, LIST SUBQUERY 9
-        247, 245, SCAN json_each VIRTUAL TABLE INDEX 0:
-        273, 184, UNION ALL
-        276, 273, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        286, 273, CORRELATED SCALAR SUBQUERY 7
-        290, 286, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        300, 286, LIST SUBQUERY 3
-        302, 300, SCAN json_each VIRTUAL TABLE INDEX 0:
-        320, 273, CORRELATED SCALAR SUBQUERY 11
-        324, 320, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        334, 320, LIST SUBQUERY 9
-        336, 334, SCAN json_each VIRTUAL TABLE INDEX 0:
-        362, 184, UNION ALL
-        363, 362, COMPOUND QUERY
-        364, 363, LEFT-MOST SUBQUERY
-        365, 364, COMPOUND QUERY
-        366, 365, LEFT-MOST SUBQUERY
-        369, 366, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        378, 366, CORRELATED SCALAR SUBQUERY 5
-        382, 378, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        392, 378, LIST SUBQUERY 3
-        394, 392, SCAN json_each VIRTUAL TABLE INDEX 0:
-        412, 366, CORRELATED SCALAR SUBQUERY 13
-        416, 412, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        426, 412, LIST SUBQUERY 9
-        428, 426, SCAN json_each VIRTUAL TABLE INDEX 0:
-        454, 365, UNION ALL
-        457, 454, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        467, 454, CORRELATED SCALAR SUBQUERY 5
-        471, 467, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        481, 467, LIST SUBQUERY 3
-        483, 481, SCAN json_each VIRTUAL TABLE INDEX 0:
-        501, 454, CORRELATED SCALAR SUBQUERY 13
-        505, 501, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        515, 501, LIST SUBQUERY 9
-        517, 515, SCAN json_each VIRTUAL TABLE INDEX 0:
-        543, 365, UNION ALL
-        544, 543, COMPOUND QUERY
-        545, 544, LEFT-MOST SUBQUERY
-        548, 545, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        557, 545, CORRELATED SCALAR SUBQUERY 7
-        561, 557, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        571, 557, LIST SUBQUERY 3
-        573, 571, SCAN json_each VIRTUAL TABLE INDEX 0:
-        591, 545, CORRELATED SCALAR SUBQUERY 13
-        595, 591, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        605, 591, LIST SUBQUERY 9
-        607, 605, SCAN json_each VIRTUAL TABLE INDEX 0:
-        633, 544, UNION ALL
-        636, 633, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        646, 633, CORRELATED SCALAR SUBQUERY 7
-        650, 646, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        660, 646, LIST SUBQUERY 3
-        662, 660, SCAN json_each VIRTUAL TABLE INDEX 0:
-        680, 633, CORRELATED SCALAR SUBQUERY 13
-        684, 680, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        694, 680, LIST SUBQUERY 9
-        696, 694, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE ranked_submissions
+        9, 6, MATERIALIZE ranked_submissions
+        12, 9, MATERIALIZE counts
+        15, 12, SCAN json_each VIRTUAL TABLE INDEX 1:
+        31, 9, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        33, 9, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        44, 9, SCAN counts LEFT-JOIN
+        64, 9, USE TEMP B-TREE FOR ORDER BY
+        75, 6, MATERIALIZE counts
+        78, 75, SCAN json_each VIRTUAL TABLE INDEX 1:
+        95, 6, SCAN ranked_submissions
+        97, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        109, 6, SCAN counts LEFT-JOIN
+        129, 6, USE TEMP B-TREE FOR ORDER BY
+        141, 3, SCAN ranked_submissions
+        152, 0, SCAN underlying_submissions
+        154, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
