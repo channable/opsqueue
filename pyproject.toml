@@ -1,0 +1,5 @@
+[tool.mypy]
+strict = true
+follow_imports = "normal"
+show_error_codes = true
+warn_unused_configs = true

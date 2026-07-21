@@ -22,5 +22,4 @@ in
   python = python3;
 
   opsqueue = final.callPackage ../opsqueue/opsqueue.nix { };
-
 }
