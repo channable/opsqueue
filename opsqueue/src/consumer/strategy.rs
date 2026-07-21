@@ -28,7 +28,7 @@ impl Strategy {
         qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
     ) -> &'a mut QueryBuilder<Sqlite> {
-        let qb = self.build_query_snippet(qb, metastate);
+        let qb = self.build_query_snippet(qb, metastate, false);
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
@@ -37,56 +37,96 @@ impl Strategy {
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
         metastate: &MetaState,
+        only_submissions: bool,
     ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
-            Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
-            Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
-            Random => {
-                let random_offset: u16 = rand::random();
-                qb.push("SELECT * FROM chunks WHERE random_order >= ")
-                    .push_bind(random_offset)
-                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
-                    .push_bind(random_offset)
+            Oldest => {
+                if only_submissions {
+                    qb.push("SELECT id AS submission_id FROM submissions ORDER BY id ASC")
+                } else {
+                    qb.push("SELECT * FROM chunks ORDER BY submission_id ASC")
+                }
             }
-
+            Newest => {
+                if only_submissions {
+                    qb.push("SELECT id AS submission_id FROM submissions ORDER BY id DESC")
+                } else {
+                    qb.push("SELECT * FROM chunks ORDER BY submission_id DESC")
+                }
+            }
+            Random => {
+                if only_submissions {
+                    panic!("Random underlying strategy not supported")
+                } else {
+                    let random_offset: u16 = rand::random();
+                    qb.push("SELECT * FROM chunks WHERE random_order >= ")
+                        .push_bind(random_offset)
+                        .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
+                        .push_bind(random_offset)
+                }
+            }
             PreferDistinct {
                 meta_key,
                 underlying,
             } => {
-                let qb = qb.push(format_args!("WITH inner_{meta_key} AS NOT MATERIALIZED ("));
-                let qb = underlying.build_query_snippet(qb, metastate);
-                qb.push(format_args!(
-                    r"),
-                taken_{meta_key} AS (
-                    SELECT * FROM submissions_metadata
-                    WHERE
-                    submissions_metadata.metadata_key = ",
-                ));
-                qb.push_bind(meta_key);
-                qb.push(
-                    r" AND submissions_metadata.metadata_value IN (SELECT value FROM json_each(",
-                );
+                // Unique submission IDs from the underlying strategy.
+                let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
+                let qb = underlying.build_query_snippet(qb, metastate, true);
+                qb.push("),");
+                // Count of in-flight chunks per submission.
+                qb.push("counts AS (SELECT key, value FROM json_each(");
                 match metastate.get(meta_key) {
                     None => {
-                        tracing::trace!("No metastatefield for key: {meta_key}");
+                        tracing::trace!("No metastate field for key: {meta_key}");
+                        qb.push_bind("{}");
                     }
                     Some(field) => {
-                        let taken_values: Vec<_> = field.too_high_counts(1).collect();
-                        let taken_values_string =
-                            serde_json::to_string(&taken_values).expect("Always valid JSON");
+                        let counts_map: std::collections::HashMap<_, _> = field
+                            .vals_to_counts
+                            .iter()
+                            .map(|kv| (*kv.key(), *kv.value()))
+                            .collect();
+                        let counts_json =
+                            serde_json::to_string(&counts_map).expect("Always valid JSON");
                         tracing::trace!(
-                            "Taken values that are left out of PreferDistinct: {taken_values_string:?}"
+                            "Granular active counts for PreferDistinct: {counts_json:?}"
                         );
-                        qb.push_bind(taken_values_string);
+                        qb.push_bind(counts_json);
                     }
                 }
-                qb.push(format_args!("))
-                )
-                SELECT * FROM inner_{meta_key} WHERE NOT EXISTS (SELECT 1 FROM taken_{meta_key} WHERE inner_{meta_key}.submission_id = taken_{meta_key}.submission_id)
-                UNION ALL
-                SELECT * FROM inner_{meta_key} WHERE EXISTS (SELECT 1 FROM taken_{meta_key} WHERE inner_{meta_key}.submission_id = taken_{meta_key}.submission_id)
-                "))
+                qb.push(")),");
+                // Submissions ranked by in-flight chunks.
+                qb.push(
+                    // MATERIALIZED is necessary to preserve the order.
+                    "ranked_submissions AS MATERIALIZED (
+                        SELECT inner.submission_id
+                        FROM inner
+                        LEFT JOIN submissions_metadata sm
+                            ON inner.submission_id = sm.submission_id
+                            AND sm.metadata_key = ",
+                );
+                qb.push_bind(meta_key);
+                qb.push(
+                    "
+                        LEFT JOIN counts c
+                            ON sm.metadata_value = c.key
+                        ORDER BY c.value ASC NULLS FIRST
+                    )",
+                );
+
+                if only_submissions {
+                    qb.push(" SELECT submission_id FROM ranked_submissions")
+                } else {
+                    // In SQLite, CROSS JOIN ON does NOT produce N x M rows, it
+                    // forces the query planner to use 'ranked_submissions' as
+                    // the outer loop, preserving the sort order.
+                    qb.push(
+                        " SELECT chunks.*
+                          FROM ranked_submissions
+                          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id",
+                    )
+                }
             }
         }
     }
@@ -140,6 +180,24 @@ pub mod test {
         assert!(
             !explained.contains("B-TREE"),
             "Query should contain no temporary B-tree construction, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+    }
+
+    /// Weaker invariant than `assert_streaming_query`, used by `PreferDistinct`
+    /// which deliberately materializes and sorts the set of in-flight
+    /// submissions to rank them by metadata value. That bounded sort is
+    /// considered acceptable; what must not happen is a full scan or sort of
+    /// the potentially very large `chunks`.
+    fn assert_streaming_chunks(qb: &sqlx::QueryBuilder<Sqlite>, explained: &str) {
+        let query_binding = qb.sql();
+        let query = query_binding.as_str();
+        assert!(
+            !explained.contains("SCAN chunks"),
+            "Query should never scan the whole `chunks` backlog, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+        assert!(
+            explained.contains("SEARCH chunks"),
+            "Query should reach `chunks` via an index seek, but it did not.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
         );
     }
 
@@ -249,73 +307,51 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        inner AS NOT MATERIALIZED (
           SELECT
-            *
+            id AS submission_id
           FROM
-            chunks
+            submissions
           ORDER BY
-            submission_id ASC
+            id ASC
         ),
-        taken_company_id AS (
+        counts AS (
           SELECT
-            *
+            key,
+            value
           FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            json_each(?)
+        ),
+        ranked_submissions AS MATERIALIZED (
+          SELECT
+            inner.submission_id
+          FROM
+            inner
+            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+            AND sm.metadata_key = ?
+            LEFT JOIN counts c ON sm.metadata_value = c.key
+          ORDER BY
+            c.value ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
-        WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          ranked_submissions
+          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE ranked_submissions
+        6, 3, MATERIALIZE counts
+        9, 6, SCAN json_each VIRTUAL TABLE INDEX 1:
+        25, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        27, 3, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        38, 3, SCAN c LEFT-JOIN
+        58, 3, USE TEMP B-TREE FOR ORDER BY
+        70, 0, SCAN ranked_submissions
+        72, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -339,73 +375,51 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        inner AS NOT MATERIALIZED (
           SELECT
-            *
+            id AS submission_id
           FROM
-            chunks
+            submissions
           ORDER BY
-            submission_id DESC
+            id DESC
         ),
-        taken_company_id AS (
+        counts AS (
           SELECT
-            *
+            key,
+            value
           FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            json_each(?)
+        ),
+        ranked_submissions AS MATERIALIZED (
+          SELECT
+            inner.submission_id
+          FROM
+            inner
+            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+            AND sm.metadata_key = ?
+            LEFT JOIN counts c ON sm.metadata_value = c.key
+          ORDER BY
+            c.value ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
-        WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          ranked_submissions
+          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE ranked_submissions
+        6, 3, MATERIALIZE counts
+        9, 6, SCAN json_each VIRTUAL TABLE INDEX 1:
+        25, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        27, 3, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        38, 3, SCAN c LEFT-JOIN
+        58, 3, USE TEMP B-TREE FOR ORDER BY
+        70, 0, SCAN ranked_submissions
+        72, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -532,7 +546,7 @@ pub mod test {
             meta_key: "company_id".to_string(),
             underlying: Box::new(PreferDistinct {
                 meta_key: "priority".to_string(),
-                underlying: Box::new(Random),
+                underlying: Box::new(Oldest),
             }),
         };
 
@@ -546,106 +560,62 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        inner AS NOT MATERIALIZED (
           WITH
-          inner_priority AS NOT MATERIALIZED (
+          inner AS NOT MATERIALIZED (
             SELECT
-              *
+              id AS submission_id
             FROM
-              chunks
-            WHERE
-              random_order >= ?
-            UNION ALL
-            SELECT
-              *
-            FROM
-              chunks
-            WHERE
-              random_order < ?
+              submissions
+            ORDER BY
+              id ASC
           ),
-          taken_priority AS (
+          counts AS (
             SELECT
-              *
+              key,
+              value
             FROM
-              submissions_metadata
-            WHERE
-              submissions_metadata.metadata_key = ?
-              AND submissions_metadata.metadata_value IN (
-                SELECT
-                  value
-                FROM
-                  json_each()
-              )
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts c ON sm.metadata_value = c.key
+            ORDER BY
+              c.value ASC NULLS FIRST
           )
           SELECT
-            *
+            submission_id
           FROM
-            inner_priority
-          WHERE
-            NOT EXISTS (
-              SELECT
-                1
-              FROM
-                taken_priority
-              WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
-          UNION ALL
-          SELECT
-            *
-          FROM
-            inner_priority
-          WHERE
-            EXISTS (
-              SELECT
-                1
-              FROM
-                taken_priority
-              WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
+            ranked_submissions
         ),
-        taken_company_id AS (
+        counts AS (
           SELECT
-            *
+            key,
+            value
           FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            json_each(?)
+        ),
+        ranked_submissions AS MATERIALIZED (
+          SELECT
+            inner.submission_id
+          FROM
+            inner
+            LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+            AND sm.metadata_key = ?
+            LEFT JOIN counts c ON sm.metadata_value = c.key
+          ORDER BY
+            c.value ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
-        WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          ranked_submissions
+          CROSS JOIN chunks ON chunks.submission_id = ranked_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
