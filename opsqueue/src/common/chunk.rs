@@ -237,14 +237,14 @@ pub mod db {
     impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
         fn encode_by_ref(
             &self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
             <i64 as sqlx::Encode<'q, Sqlite>>::encode_by_ref(&i64::from(*self), buf)
         }
 
         fn encode(
             self,
-            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+            buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError>
         where
             Self: Sized,
