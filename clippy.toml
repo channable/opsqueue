@@ -12,6 +12,8 @@ allowed-duplicate-crates = [
     "sha2",
     "syn",
     "thiserror",
+    "tokio-tungstenite",
     "tower-http",
+    "tungstenite",
     "windows-sys",
 ]
