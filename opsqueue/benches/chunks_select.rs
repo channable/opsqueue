@@ -113,14 +113,11 @@ async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, Dispatcher, Pat
 /// Runs the selection query and fetches just the first chunk.
 async fn select_first_chunk(db_pools: &db::DBPools, strategy: &Strategy, dispatcher: &Dispatcher) {
     let mut conn = db_pools.reader_conn().await.unwrap();
-    dispatcher
-        .register_reserved_chunk_lookup(conn.get_inner())
-        .await
-        .unwrap();
+    dispatcher.register_lookups(conn.get_inner()).await.unwrap();
     let mut query = sqlx::QueryBuilder::default();
 
     let chunk: Option<Chunk> = strategy
-        .build_query(&mut query, dispatcher.metastate())
+        .build_query(&mut query)
         .build_query_as()
         .fetch(conn.get_inner())
         .try_next()
