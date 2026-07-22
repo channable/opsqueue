@@ -8,7 +8,6 @@ use crate::{
     },
     db::{Connection, Pool, ReaderPool, magic::Bool},
 };
-use futures::FutureExt;
 use futures::stream::{StreamExt as _, TryStreamExt as _};
 use libsqlite3_sys as ffi;
 use metastate::MetaState;
@@ -23,61 +22,65 @@ use std::sync::Arc;
 use super::strategy;
 use crate::common::StrategicMetadataMap;
 
-unsafe extern "C" fn sqlite_reserved_chunk_lookup(
+pub unsafe extern "C" fn sqlite_reserved_chunk_lookup(
     context: *mut ffi::sqlite3_context,
     n_args: i32,
     args: *mut *mut ffi::sqlite3_value,
 ) {
-    if n_args != 2 {
-        tracing::error!(
-            n_args,
-            "opsqueue_is_reserved called with unexpected argument count"
-        );
-        // Fail open: this callback is an optimization only.
-        ffi::sqlite3_result_int(context, 0);
-        return;
+    unsafe {
+        if n_args != 2 {
+            tracing::error!(
+                n_args,
+                "opsqueue_is_reserved called with unexpected argument count"
+            );
+            // Fail open: this callback is an optimization only.
+            ffi::sqlite3_result_int(context, 0);
+            return;
+        }
+
+        let user_data = ffi::sqlite3_user_data(context) as *const Reserver<ChunkId, ChunkId>;
+        if user_data.is_null() {
+            tracing::error!("opsqueue_is_reserved called without registered reserver user_data");
+            // Fail open: this callback is an optimization only.
+            ffi::sqlite3_result_int(context, 0);
+            return;
+        }
+
+        let submission_id_raw = ffi::sqlite3_value_int64(*args.add(0));
+        let chunk_index_raw = ffi::sqlite3_value_int64(*args.add(1));
+
+        let Ok(submission_id) = SubmissionId::try_from(submission_id_raw) else {
+            tracing::error!(
+                submission_id_raw,
+                "opsqueue_is_reserved got invalid submission_id"
+            );
+            // Fail open: this callback is an optimization only.
+            ffi::sqlite3_result_int(context, 0);
+            return;
+        };
+        let Ok(chunk_index) = ChunkIndex::try_from(chunk_index_raw) else {
+            tracing::error!(
+                chunk_index_raw,
+                "opsqueue_is_reserved got invalid chunk_index"
+            );
+            // Fail open: this callback is an optimization only.
+            ffi::sqlite3_result_int(context, 0);
+            return;
+        };
+
+        let chunk_id = ChunkId::from((submission_id, chunk_index));
+        let is_reserved = (*user_data).is_reserved(&chunk_id);
+        ffi::sqlite3_result_int(context, i32::from(is_reserved));
     }
-
-    let user_data = ffi::sqlite3_user_data(context) as *const Reserver<ChunkId, ChunkId>;
-    if user_data.is_null() {
-        tracing::error!("opsqueue_is_reserved called without registered reserver user_data");
-        // Fail open: this callback is an optimization only.
-        ffi::sqlite3_result_int(context, 0);
-        return;
-    }
-
-    let submission_id_raw = ffi::sqlite3_value_int64(*args.add(0));
-    let chunk_index_raw = ffi::sqlite3_value_int64(*args.add(1));
-
-    let Ok(submission_id) = SubmissionId::try_from(submission_id_raw) else {
-        tracing::error!(
-            submission_id_raw,
-            "opsqueue_is_reserved got invalid submission_id"
-        );
-        // Fail open: this callback is an optimization only.
-        ffi::sqlite3_result_int(context, 0);
-        return;
-    };
-    let Ok(chunk_index) = ChunkIndex::try_from(chunk_index_raw) else {
-        tracing::error!(
-            chunk_index_raw,
-            "opsqueue_is_reserved got invalid chunk_index"
-        );
-        // Fail open: this callback is an optimization only.
-        ffi::sqlite3_result_int(context, 0);
-        return;
-    };
-
-    let chunk_id = ChunkId::from((submission_id, chunk_index));
-    let is_reserved = (*user_data).is_reserved(&chunk_id);
-    ffi::sqlite3_result_int(context, i32::from(is_reserved));
 }
 
 unsafe extern "C" fn sqlite_reserved_chunk_lookup_destructor(ptr: *mut std::ffi::c_void) {
-    if ptr.is_null() {
-        return;
+    unsafe {
+        if ptr.is_null() {
+            return;
+        }
+        let _boxed: Box<Reserver<ChunkId, ChunkId>> = Box::from_raw(ptr.cast());
     }
-    let _boxed: Box<Reserver<ChunkId, ChunkId>> = Box::from_raw(ptr.cast());
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +151,7 @@ impl Dispatcher {
             .await
     }
 
-    async fn register_reserved_chunk_lookup(
+    pub async fn register_reserved_chunk_lookup(
         &self,
         conn: &mut sqlx::SqliteConnection,
     ) -> Result<(), sqlx::Error> {
@@ -264,7 +267,7 @@ mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn fetch_and_reserve_chunks_excludes_already_reserved(db: sqlx::SqlitePool) {
         let pools = DBPools::from_test_pool(&db);
-        let dispatcher = Dispatcher::new(Duration::from_secs(60));
+        let dispatcher = Dispatcher::new(Duration::from_mins(1));
         let (stale_chunks_notifier, mut _stale_chunks_receiver) = unbounded_channel::<ChunkId>();
 
         let mut writer_conn = pools.writer_conn().await.unwrap();

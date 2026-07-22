@@ -1,6 +1,6 @@
-/// FOR EACH shape IN [few_submissions, many_submissions]:
-///   FOR EACH strategy IN [Random, PreferDistinct]:
-///     FOR EACH backlog_size IN [100, 500, 1000, ..., 30000]:
+/// FOR EACH shape IN [`few_submissions`, `many_submissions`]:
+///   FOR EACH strategy IN [Random, `PreferDistinct`]:
+///     FOR EACH `backlog_size` IN [100, 500, 1000, ..., 30000]:
 ///
 ///         // 1. SETUP
 ///         Create fresh temporary SQLite database
@@ -27,14 +27,14 @@ use futures::stream::TryStreamExt as _;
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{Chunk, ChunkSize};
 use opsqueue::common::submission::db::insert_submission_from_chunks;
-use opsqueue::consumer::dispatcher::metastate::MetaState;
+use opsqueue::consumer::dispatcher::Dispatcher;
 use opsqueue::consumer::strategy::Strategy;
 use opsqueue::db::{self, Connection as _};
 use std::io::Write;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const BACKLOG_SIZES: &[usize] = &[
     100, 500, 1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 15_000, 20_000, 30_000,
@@ -71,7 +71,7 @@ fn layout(shape: &str, total_chunks: usize) -> (usize, usize) {
 }
 
 /// Seeds a fresh DB with a backlog shape and populates realistic in-flight `MetaState`.
-async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, PathBuf) {
+async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, Dispatcher, PathBuf) {
     let (submissions, chunks_per_submission) = layout(shape, total_chunks);
     let unique = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("opsqueue_bench_{unique}.sqlite"));
@@ -81,7 +81,7 @@ async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, Path
 
     let db_pools = db::open_and_setup(path.to_str().unwrap(), NonZero::new(16).unwrap()).await;
     let mut conn = db_pools.writer_conn().await.unwrap();
-    let metastate = MetaState::default();
+    let dispatcher = Dispatcher::new(Duration::from_mins(1));
 
     for company in 0..i64::try_from(submissions).unwrap() {
         let mut metadata = StrategicMetadataMap::default();
@@ -102,21 +102,25 @@ async fn seed(shape: &str, total_chunks: usize) -> (db::DBPools, MetaState, Path
         // THIS is what simulates a busy queue and causes the degradation curve!
         if usize::try_from(company).unwrap() < MAX_IN_FLIGHT {
             for _ in 0..=(company % 5) {
-                metastate.increment("company_id", company);
+                dispatcher.metastate().increment("company_id", company);
             }
         }
     }
 
-    (db_pools, metastate, path)
+    (db_pools, dispatcher, path)
 }
 
 /// Runs the selection query and fetches just the first chunk.
-async fn select_first_chunk(db_pools: &db::DBPools, strategy: &Strategy, metastate: &MetaState) {
+async fn select_first_chunk(db_pools: &db::DBPools, strategy: &Strategy, dispatcher: &Dispatcher) {
     let mut conn = db_pools.reader_conn().await.unwrap();
+    dispatcher
+        .register_reserved_chunk_lookup(conn.get_inner())
+        .await
+        .unwrap();
     let mut query = sqlx::QueryBuilder::default();
 
     let chunk: Option<Chunk> = strategy
-        .build_query(&mut query, metastate)
+        .build_query(&mut query, dispatcher.metastate())
         .build_query_as()
         .fetch(conn.get_inner())
         .try_next()
@@ -135,12 +139,16 @@ fn median_us(mut samples: Vec<f64>) -> f64 {
 }
 
 /// Executes warmup + sample runs for a given DB state and returns median latency in µs.
-async fn bench_strategy(db_pools: &db::DBPools, strategy: &Strategy, metastate: &MetaState) -> f64 {
+async fn bench_strategy(
+    db_pools: &db::DBPools,
+    strategy: &Strategy,
+    dispatcher: &Dispatcher,
+) -> f64 {
     let mut samples = Vec::with_capacity(SAMPLES);
 
     for i in 0..(WARMUP + SAMPLES) {
         let start = Instant::now();
-        select_first_chunk(db_pools, strategy, metastate).await;
+        select_first_chunk(db_pools, strategy, dispatcher).await;
 
         if i >= WARMUP {
             samples.push(start.elapsed().as_secs_f64() * 1e6);
@@ -181,9 +189,9 @@ fn main() {
     for shape in ["few_submissions_many_chunks", "many_submissions_few_chunks"] {
         for (strategy_label, strategy) in strategies() {
             for &size in BACKLOG_SIZES {
-                let (db_pools, metastate, path) = runtime.block_on(seed(shape, size));
+                let (db_pools, dispatcher, path) = runtime.block_on(seed(shape, size));
 
-                let median = runtime.block_on(bench_strategy(&db_pools, &strategy, &metastate));
+                let median = runtime.block_on(bench_strategy(&db_pools, &strategy, &dispatcher));
 
                 println!("{shape:<30} {strategy_label:<35} {size:<12} {median:<10.1}");
                 writeln!(csv, "{shape},\"{strategy_label}\",{size},{median:.1}").unwrap();

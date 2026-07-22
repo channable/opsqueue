@@ -138,7 +138,7 @@ impl TryFrom<i64> for ChunkIndex {
             return Err(crate::common::errors::TryFromIntError(()));
         }
 
-        Ok(Self(u63::new(value as u64)))
+        Ok(Self(u63::new(value.cast_unsigned())))
     }
 }
 
