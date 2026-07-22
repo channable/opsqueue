@@ -40,9 +40,18 @@ impl Strategy {
     ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
-            Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
-            Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
-            Random => Self::push_random_order_query(qb, "*", "chunks"),
+            Oldest => qb
+                .push("SELECT * FROM chunks")
+                .push(" WHERE opsqueue_is_reserved(submission_id, chunk_index) = 0")
+                .push(" ORDER BY submission_id ASC"),
+            Newest => qb
+                .push("SELECT * FROM chunks")
+                .push(" WHERE opsqueue_is_reserved(submission_id, chunk_index) = 0")
+                .push(" ORDER BY submission_id DESC"),
+            Random => {
+                Self::push_random_order_query(qb, "*", "chunks");
+                qb.push(" AND opsqueue_is_reserved(submission_id, chunk_index) = 0")
+            }
             PreferDistinct { .. } => {
                 qb.push("WITH underlying_submissions AS MATERIALIZED (");
                 let qb = self.build_query_snippet_returning_submission_ids(qb, metastate);
@@ -57,7 +66,8 @@ impl Strategy {
                         FROM underlying_submissions
                         CROSS JOIN chunks
                         WHERE chunks.submission_id = underlying_submissions.submission_id",
-                )
+                );
+                qb.push(" AND opsqueue_is_reserved(submission_id, chunk_index) = 0")
             }
         }
     }
@@ -149,21 +159,49 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use crate::common::StrategicMetadataMap;
-    use crate::common::chunk::ChunkSize;
-
-    use super::*;
     use itertools::Itertools;
+    use libsqlite3_sys as ffi;
     use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
-    async fn explain(qb: &mut sqlx::QueryBuilder<Sqlite>, conn: &mut SqliteConnection) -> String {
-        let formatted_query = format(
-            qb.sql().as_str(),
-            &QueryParams::None,
-            &FormatOptions::default(),
-        );
+    use super::*;
+    use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::ChunkSize;
+
+    unsafe extern "C" fn sqlite_reserved_chunk_lookup_noop(
+        context: *mut ffi::sqlite3_context,
+        _n_args: i32,
+        _args: *mut *mut ffi::sqlite3_value,
+    ) {
+        ffi::sqlite3_result_int(context, 0);
+    }
+
+    async fn register_reserved_lookup_noop(conn: &mut SqliteConnection) {
+        let mut handle = conn.lock_handle().await.unwrap();
+        let sqlite = handle.as_raw_handle().as_ptr();
+        let function_name = b"opsqueue_is_reserved\0";
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                function_name.as_ptr().cast(),
+                2,
+                ffi::SQLITE_UTF8,
+                std::ptr::null_mut(),
+                Some(sqlite_reserved_chunk_lookup_noop),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(rc, ffi::SQLITE_OK, "register opsqueue_is_reserved failed");
+    }
+
+    async fn explain(
+        qb: &mut sqlx::QueryBuilder<'_, Sqlite>,
+        conn: &mut SqliteConnection,
+    ) -> String {
+        let formatted_query = format(qb.sql(), &QueryParams::None, &FormatOptions::default());
 
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
             "EXPLAIN QUERY PLAN {formatted_query}"
@@ -215,6 +253,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let mut qb = QueryBuilder::new("");
         let metastate = MetaState::default();
 
@@ -226,6 +265,8 @@ pub mod test {
           *
         FROM
           chunks
+        WHERE
+          opsqueue_is_reserved(submission_id, chunk_index) = 0
         ORDER BY
           submission_id ASC
         ");
@@ -238,6 +279,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let mut qb = QueryBuilder::new("");
         let metastate = MetaState::default();
 
@@ -249,6 +291,8 @@ pub mod test {
           *
         FROM
           chunks
+        WHERE
+          opsqueue_is_reserved(submission_id, chunk_index) = 0
         ORDER BY
           submission_id DESC
         ");
@@ -261,6 +305,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_random(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let metastate = MetaState::default();
         let mut qb = QueryBuilder::new("");
 
@@ -278,6 +323,7 @@ pub mod test {
           chunks
         WHERE
           random_order >= ?
+          AND opsqueue_is_reserved(submission_id, chunk_index) = 0
         UNION ALL
         SELECT
           *
@@ -285,6 +331,7 @@ pub mod test {
           chunks
         WHERE
           random_order < ?
+          AND opsqueue_is_reserved(submission_id, chunk_index) = 0
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -293,8 +340,8 @@ pub mod test {
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
         5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        22, 1, UNION ALL
-        25, 22, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        26, 1, UNION ALL
+        29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
         ");
     }
 
@@ -302,6 +349,7 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_oldest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let metastate = MetaState::default();
 
         let strategy = PreferDistinct {
@@ -381,6 +429,7 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_newest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let metastate = MetaState::default();
 
         let strategy = PreferDistinct {
@@ -460,6 +509,7 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_random(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let metastate = MetaState::default();
 
         let strategy = PreferDistinct {
@@ -552,6 +602,7 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_nested(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
+        register_reserved_lookup_noop(&mut conn).await;
         let metastate = MetaState::default();
 
         let strategy = PreferDistinct {
@@ -689,6 +740,7 @@ pub mod test {
         .unwrap();
 
         let mut conn = db_pools.reader_conn().await.unwrap();
+        register_reserved_lookup_noop(conn.get_inner()).await;
         let mut query_builder = QueryBuilder::default();
         let vals1: Vec<Chunk> = Strategy::Random
             .build_query(&mut query_builder, &MetaState::default())

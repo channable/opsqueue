@@ -23,7 +23,6 @@
 ///         Calculate median duration
 ///         Write result to terminal and CSV
 ///         Delete temporary database files
-
 use futures::stream::TryStreamExt as _;
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{Chunk, ChunkSize};
