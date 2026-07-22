@@ -289,7 +289,6 @@ pub mod db {
     use axum_prometheus::metrics::{counter, histogram};
     use chunk::ChunkSize;
     use sqlx::{QueryBuilder, Sqlite, query, query_scalar};
-    use ux::u63;
 
     use super::{
         Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
@@ -1047,12 +1046,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count completed submissions.
@@ -1060,12 +1063,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_completed;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count failed submissions.
@@ -1073,12 +1080,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_failed;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Transactionally removes all completed/failed submissions,
@@ -1380,7 +1391,7 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
 
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -1392,7 +1403,7 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1465,15 +1476,9 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1498,15 +1503,9 @@ pub mod test {
         )
         .await
         .unwrap();
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1625,18 +1624,12 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(5)
-        );
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
 
         let mut conn2 = db.writer_conn().await.unwrap();
         cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(2)
-        );
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
 
         let _sub1 = submission_status(old_four_unfailed, &mut conn)
             .await
@@ -1667,15 +1660,9 @@ pub mod test {
         .await
         .expect("insertion failed");
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     /// Removes the given top-level key from a JSON object, panicking if it was not present.

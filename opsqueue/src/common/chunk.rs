@@ -226,7 +226,6 @@ impl Chunk {
 pub mod db {
     use super::{
         Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, ChunkSize, DateTime, SubmissionId,
-        Utc, u63,
     };
     use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
     use crate::db::{Connection, True, WriterConnection};
@@ -620,13 +619,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count completed chunks.
@@ -634,13 +636,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_completed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_completed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_completed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count failed chunks.
@@ -648,13 +653,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_failed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Looks up the number of operations in the backlog.
@@ -692,11 +700,11 @@ pub mod test {
             vec![1, 2, 3, 4, 5].into(),
         );
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         insert_chunk(chunk.clone(), &mut conn)
             .await
             .expect("Insert chunk failed");
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -752,12 +760,12 @@ pub mod test {
         .await
         .expect("complete chunk failed");
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(
             count_chunks_completed(&mut conn).await.unwrap(),
-            u63::new(1)
+            1
         );
-        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -775,7 +783,7 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 1);
 
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -824,11 +832,11 @@ pub mod test {
         .await
         .expect("Succeed chunk failed");
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(
             count_chunks_completed(&mut conn).await.unwrap(),
-            u63::new(0)
+            0
         );
-        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 1);
     }
 }

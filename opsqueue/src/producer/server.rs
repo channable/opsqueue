@@ -218,7 +218,7 @@ pub struct InsertSubmissionResponse {
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions(&mut conn).await?;
-    Ok(Json(u64::from(count)))
+    Ok(Json(count))
 }
 
 async fn submissions_count_completed(
@@ -226,5 +226,5 @@ async fn submissions_count_completed(
 ) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions_completed(&mut conn).await?;
-    Ok(Json(u64::from(count)))
+    Ok(Json(count))
 }

@@ -380,7 +380,6 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use ux::u63;
 
     use crate::{
         common::{
@@ -441,7 +440,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(0));
+        assert_eq!(count, 0);
 
         let submission = InsertSubmission {
             chunk_contents: ChunkContents::Direct {
@@ -459,7 +458,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(1));
+        assert_eq!(count, 1);
 
         client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -477,7 +476,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(4));
+        assert_eq!(count, 4);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

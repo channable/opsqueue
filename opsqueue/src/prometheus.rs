@@ -210,9 +210,7 @@ pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
 #[allow(clippy::cast_precision_loss)]
 pub async fn calculate_scaling_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
     let mut conn = db_pool.reader_conn().await?;
-    let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
-        .await?
-        .into();
+    let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn).await?;
     gauge!(CHUNKS_BACKLOG_GAUGE).set(chunks_backlog_count as f64);
     let ops_backlog_count: f64 =
         crate::common::chunk::db::count_ops_in_backlog_estimate(&mut conn).await?;
