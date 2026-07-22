@@ -7,7 +7,7 @@ use opsqueue::common::errors::{
     ChunkNotFound, E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
     TooManyMatchingSubmissions, UnexpectedOpsqueueConsumerServerResponse,
 };
-use pyo3::exceptions::PyBaseException;
+use pyo3::exceptions::{PyBaseException, PyTimeoutError};
 use pyo3::{Bound, PyErr, Python, import_exception};
 
 use crate::common;
@@ -198,6 +198,12 @@ impl From<CError<opsqueue::object_store::NewObjectStoreClientError>> for PyErr {
 impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
     fn from(value: CError<UnexpectedOpsqueueConsumerServerResponse>) -> Self {
         UnexpectedOpsqueueConsumerServerResponseError::new_err(value.0.to_string())
+    }
+}
+
+impl From<CError<tokio::time::error::Elapsed>> for PyErr {
+    fn from(_value: CError<tokio::time::error::Elapsed>) -> Self {
+        PyTimeoutError::new_err("timeout was reached")
     }
 }
 

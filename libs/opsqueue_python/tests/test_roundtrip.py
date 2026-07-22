@@ -29,6 +29,8 @@ from conftest import (
 import logging
 import pytest
 
+SUBMISSION_COMPLETED_TIMEOUT = 10.0
+
 
 def increment(data: int) -> int:
     return data + 1
@@ -56,7 +58,10 @@ def test_roundtrip(
         input_iter = range(0, 100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
-            input_iter, chunk_size=20, strategic_metadata={"id": 42}
+            input_iter,
+            chunk_size=20,
+            strategic_metadata={"id": 42},
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
         )
         res = sum(output_iter)
 
@@ -128,6 +133,7 @@ def test_complete_then_fail_chunks(
             input_iter,
             chunk_size=chunk_size,
             strategic_metadata={"id": 42, "second_id": 69},
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
         )
         res = sum(output_iter)
 
@@ -146,7 +152,9 @@ def test_empty_submission(opsqueue: OpsqueueProcess) -> None:
 
     input_iter: list[int] = []
     output_iter: Iterator[int] = producer_client.run_submission(
-        input_iter, chunk_size=20
+        input_iter,
+        chunk_size=20,
+        timeout=SUBMISSION_COMPLETED_TIMEOUT,
     )
     res = sum(output_iter)
     assert res == 0
@@ -182,7 +190,10 @@ def test_roundtrip_explicit_serialization_format(
         input_iter = range(0, 100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
-            input_iter, chunk_size=20, serialization_format=serialization_format
+            input_iter,
+            chunk_size=20,
+            serialization_format=serialization_format,
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
         )
         res = sum(output_iter)
 
@@ -225,7 +236,11 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
         input_iter = range(0, 100)
 
         with pytest.raises(SubmissionFailedError) as exc_info:
-            producer_client.run_submission(input_iter, chunk_size=20)
+            producer_client.run_submission(
+                input_iter,
+                chunk_size=20,
+                timeout=SUBMISSION_COMPLETED_TIMEOUT,
+            )
 
         # We expect the intended attributes to be there:
         assert isinstance(exc_info.value.failure, str)
@@ -265,7 +280,10 @@ def test_chunk_roundtrip(
         input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(0, 10))
         output_iter: Iterator[list[int]] = map(
             lambda c: cbor2.loads(c),
-            producer_client.run_submission_chunks(input_iter),
+            producer_client.run_submission_chunks(
+                input_iter,
+                timeout=SUBMISSION_COMPLETED_TIMEOUT,
+            ),
         )
         import itertools
 
@@ -304,7 +322,9 @@ def test_many_consumers(
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
         input_iter = range(0, 1000)
         output_iter: Iterator[int] = producer_client.run_submission(
-            input_iter, chunk_size=100
+            input_iter,
+            chunk_size=100,
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
         )
         res = sum(output_iter)
 
@@ -379,7 +399,10 @@ def test_metadata_in_submission_complete(
 
     with background_process(run_consumer):
         # Wait for the submission to complete.
-        producer_client.blocking_stream_completed_submission(submission_id)
+        producer_client.blocking_stream_completed_submission(
+            submission_id,
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
+        )
         submission = producer_client.get_submission_status(submission_id)
         assert submission is not None
         assert isinstance(submission.submission, SubmissionCompleted)
@@ -423,7 +446,10 @@ def test_metadata_in_submission_failed(
 
         with pytest.raises(SubmissionFailedError) as exc_info:
             # Wait for the submission to fail.
-            producer_client.blocking_stream_completed_submission(submission_id)
+            producer_client.blocking_stream_completed_submission(
+                submission_id,
+                timeout=SUBMISSION_COMPLETED_TIMEOUT,
+            )
         assert_submission_failed_has_metadata(exc_info.value.submission)
 
         submission = producer_client.get_submission_status(submission_id)
@@ -511,7 +537,10 @@ def test_cancel_complete_submission(
 
     with background_process(run_consumer):
         # Wait for the submission to complete.
-        producer_client.blocking_stream_completed_submission(submission_id)
+        producer_client.blocking_stream_completed_submission(
+            submission_id,
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
+        )
         submission = producer_client.get_submission_status(submission_id)
         assert submission is not None
         assert isinstance(submission.submission, SubmissionCompleted)
@@ -544,7 +573,10 @@ def test_cancel_failed_submission(
 
     with background_process(run_consumer):
         with pytest.raises(SubmissionFailedError):
-            producer_client.blocking_stream_completed_submission(submission_id)
+            producer_client.blocking_stream_completed_submission(
+                submission_id,
+                timeout=SUBMISSION_COMPLETED_TIMEOUT,
+            )
         # Cancelling the failed submission should fail.
         with pytest.raises(SubmissionNotCancellableError) as exc_info:
             producer_client.cancel_submission(submission_id)
@@ -576,7 +608,10 @@ def test_failed_submission_includes_chunks_done(opsqueue: OpsqueueProcess) -> No
 
     with background_process(run_consumer):
         with pytest.raises(SubmissionFailedError) as exc_info:
-            producer_client.blocking_stream_completed_submission(submission_id)
+            producer_client.blocking_stream_completed_submission(
+                submission_id,
+                timeout=SUBMISSION_COMPLETED_TIMEOUT,
+            )
         assert exc_info.value.submission.chunks_done == len(chunks) - 1
 
 
@@ -667,3 +702,25 @@ def test_lookup_too_many_submission_ids_by_strategic_metadata() -> None:
             )
         assert exc.type is TooManyMatchingSubmissionsError
         assert exc.value.max_submissions == max_
+
+
+def test_run_submission_timeout(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_run_submission_timeout"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+
+        def process_op(x: int) -> int:
+            time.sleep(2.0)
+            return x
+
+        consumer_client.run_each_op(process_op)
+
+    with background_process(run_consumer) as _consumer:
+        with pytest.raises(TimeoutError):
+            producer_client.run_submission(
+                [1],
+                chunk_size=1,
+                timeout=0.1,
+            )
