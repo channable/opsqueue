@@ -3,7 +3,6 @@ ALTER TABLE submissions ADD COLUMN random_order INTEGER NOT NULL GENERATED ALWAY
     (((id + (id >> 22)) % 65536) * 40503) % 65536
 ) VIRTUAL;
 
--- 3. Create the index on the submissions table to support random ordering queries
 CREATE INDEX random_submissions_order ON submissions (
       random_order
     , id
