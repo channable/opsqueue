@@ -791,6 +791,6 @@ pub mod test {
             .await
             .unwrap();
 
-        assert!(vals1 != vals2);
+        assert_ne!(vals1, vals2);
     }
 }
