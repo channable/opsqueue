@@ -45,6 +45,7 @@ test = [
     "pytest-xdist==3.8.0",
     "multiprocess==0.70.19",
     "pytest-timeout==2.4.0",
+    "matplotlib>=3.11.1",
 ]
 
 [tool.pytest.ini_options]

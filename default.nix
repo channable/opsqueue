@@ -72,6 +72,8 @@ let
         # This is needed for the libsqlite3-sys crate to find the correct sqlite3.
         export PKG_CONFIG_PATH="${pkgs.sqlite.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:''${PKG_CONFIG_PATH}}"
       '';
+      # Fixes: libstdc++.so.6: cannot open shared object file: No such file or directory
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
     };
   };
 in
