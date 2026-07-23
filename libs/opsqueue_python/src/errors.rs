@@ -2,16 +2,14 @@
 /// so we have nice IDE support for docs-on-hover and for 'go to definition'.
 use std::error::Error;
 
-use opsqueue::common::chunk::ChunkId;
 use opsqueue::common::errors::{
-    ChunkNotFound, E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound,
-    TooManyMatchingSubmissions, UnexpectedOpsqueueConsumerServerResponse,
+    E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions,
+    UnexpectedOpsqueueConsumerServerResponse,
 };
 use pyo3::exceptions::{PyBaseException, PyTimeoutError};
 use pyo3::{Bound, PyErr, Python, import_exception};
 
 use crate::common;
-use crate::common::{ChunkIndex, SubmissionId};
 
 // Expected errors:
 import_exception!(opsqueue.exceptions, SubmissionFailedError);
@@ -19,7 +17,6 @@ import_exception!(opsqueue.exceptions, SubmissionFailedError);
 // Incorrect usage errors:
 import_exception!(opsqueue.exceptions, IncorrectUsageError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
-import_exception!(opsqueue.exceptions, ChunkNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
 import_exception!(opsqueue.exceptions, TooManyMatchingSubmissionsError);
@@ -170,22 +167,6 @@ impl From<CError<crate::producer::SubmissionNotCompletedYetError>> for PyErr {
     fn from(value: CError<crate::producer::SubmissionNotCompletedYetError>) -> Self {
         let submission_id = value.0.0;
         SubmissionNotCompletedYetError::new_err((value.0.to_string(), submission_id))
-    }
-}
-
-impl From<CError<ChunkNotFound>> for PyErr {
-    fn from(value: CError<ChunkNotFound>) -> Self {
-        let ChunkId {
-            submission_id,
-            chunk_index,
-        } = value.0.0;
-        ChunkNotFoundError::new_err((
-            value.0.to_string(),
-            (
-                SubmissionId::from(submission_id),
-                ChunkIndex::from(chunk_index),
-            ),
-        ))
     }
 }
 
