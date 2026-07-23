@@ -1,4 +1,3 @@
-use crossbeam_skiplist::SkipSet;
 use dashmap::{DashMap, Entry};
 use rustc_hash::FxBuildHasher;
 use tracing;
@@ -70,7 +69,6 @@ pub type MetaStateVal = i64;
 #[derive(Debug, Default)]
 pub struct MetaStateField {
     vals_to_counts: DashMap<MetaStateVal, usize, FxBuildHasher>,
-    counts_to_vals: SkipSet<(usize, MetaStateVal)>,
 }
 
 impl MetaStateField {
@@ -80,55 +78,31 @@ impl MetaStateField {
     }
 
     fn increment(&self, val: MetaStateVal) {
-        match self.vals_to_counts.entry(val) {
-            Entry::Vacant(entry) => {
-                self.counts_to_vals.insert((1, *entry.key()));
-                entry.insert(1);
-            }
-            Entry::Occupied(mut entry) => {
-                // The entry is now locked, so we can also safely update the relevant element of the SkipSet
-                let count = entry.get();
-                let mut set_entry = (*count, *entry.key());
-                self.counts_to_vals.remove(&set_entry);
-                set_entry.0 += 1;
-                self.counts_to_vals.insert(set_entry);
-                *entry.get_mut() += 1;
-            }
-        }
+        self.vals_to_counts
+            .entry(val)
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
     }
 
     fn decrement(&self, val: MetaStateVal) {
-        match self.vals_to_counts.entry(val) {
-            Entry::Vacant(_entry) => {
-                unreachable!()
-            }
-            Entry::Occupied(mut entry) => {
-                // The entry is now locked, so we can also safely update the relevant element of the SkipSet
-                let count = entry.get();
-                let mut set_entry = (*count, *entry.key());
-                if *count == 1 {
-                    *entry.get_mut() -= 1;
-                    self.counts_to_vals.remove(&set_entry);
-                    entry.remove();
-                } else {
-                    *entry.get_mut() -= 1;
-                    self.counts_to_vals.remove(&set_entry);
-                    set_entry.0 -= 1;
-                    self.counts_to_vals.insert(set_entry);
-                }
-            }
+        if let Entry::Occupied(entry) = self
+            .vals_to_counts
+            .entry(val)
+            .and_modify(|count| *count -= 1)
+            && *entry.get() == 0
+        {
+            entry.remove();
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.vals_to_counts.is_empty()
     }
 
-    pub fn too_high_counts(&self, max: usize) -> impl Iterator<Item = MetaStateVal> + '_ {
-        tracing::debug!("metastate: {self:?}");
-        self.counts_to_vals
-            .range((max, 0)..)
-            .map(|entry| entry.value().1)
+    #[must_use]
+    pub fn get(&self, val: &MetaStateVal) -> Option<usize> {
+        self.vals_to_counts.get(val).map(|count| *count)
     }
 }
 
@@ -158,14 +132,14 @@ mod tests {
             sut.increment(key, val);
         }
 
-        dbg!(&sut);
-
-        let too_highs: Vec<_> = sut
-            .get(key)
-            .expect("Should exist at this stage")
-            .too_high_counts(group_size)
-            .collect();
-        assert_eq!(too_highs.len(), n_groups);
+        {
+            // We have to release the selected state_field before we can decrement it, otherwise we
+            // would deadlock on the DashMap lock.
+            let state_field = sut.get(key).expect("Should exist at this stage");
+            for group in 0..n_groups {
+                assert_eq!(state_field.get(&(group as i64)), Some(group_size));
+            }
+        }
 
         // Decrement in a different order
         vals.shuffle(&mut rand::rng());

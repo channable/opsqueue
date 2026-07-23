@@ -1,14 +1,16 @@
 #[cfg(feature = "server-logic")]
+use std::string::ToString;
+
+#[cfg(feature = "server-logic")]
 use futures::stream::BoxStream;
+
 use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "server-logic")]
 use sqlx::{QueryBuilder, Sqlite};
 
 #[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
-
-#[cfg(feature = "server-logic")]
-use super::dispatcher::metastate::MetaState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
@@ -21,74 +23,185 @@ pub enum Strategy {
     },
 }
 
+pub struct MetaKeysIter<'a> {
+    strategy: &'a Strategy,
+}
+
+impl<'a> MetaKeysIter<'a> {
+    #[must_use]
+    pub fn take(self) -> &'a Strategy {
+        self.strategy
+    }
+}
+
+impl<'a> Iterator for MetaKeysIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.strategy {
+            Strategy::Oldest | Strategy::Newest | Strategy::Random => None,
+            Strategy::PreferDistinct {
+                meta_key,
+                underlying,
+            } => {
+                self.strategy = underlying.as_ref();
+                Some(meta_key.as_str())
+            }
+        }
+    }
+}
+
+impl Strategy {
+    #[must_use]
+    pub fn iter(&self) -> MetaKeysIter<'_> {
+        MetaKeysIter { strategy: self }
+    }
+}
+
+impl<'a> IntoIterator for &'a Strategy {
+    type Item = &'a str;
+    type IntoIter = MetaKeysIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 #[cfg(feature = "server-logic")]
 impl Strategy {
     pub fn build_query<'a>(
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
-        metastate: &MetaState,
     ) -> &'a mut QueryBuilder<Sqlite> {
-        let qb = self.build_query_snippet(qb, metastate);
+        let qb = self.build_query_snippet_returning_chunks(qb);
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
 
-    fn build_query_snippet<'a>(
+    fn build_query_snippet_returning_chunks<'a>(
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
-        metastate: &MetaState,
     ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
         match self {
-            Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
-            Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
-            Random => {
-                let random_offset: u16 = rand::random();
-                qb.push("SELECT * FROM chunks WHERE random_order >= ")
-                    .push_bind(random_offset)
-                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
-                    .push_bind(random_offset)
-            }
-
-            PreferDistinct {
-                meta_key,
-                underlying,
-            } => {
-                let qb = qb.push(format_args!("WITH inner_{meta_key} AS NOT MATERIALIZED ("));
-                let qb = underlying.build_query_snippet(qb, metastate);
-                qb.push(format_args!(
-                    r"),
-                taken_{meta_key} AS (
-                    SELECT * FROM submissions_metadata
-                    WHERE
-                    submissions_metadata.metadata_key = ",
-                ));
-                qb.push_bind(meta_key);
+            Oldest => qb
+                .push("SELECT * FROM chunks")
+                .push(" WHERE opsqueue_is_reserved(submission_id, chunk_index) = 0")
+                .push(" ORDER BY submission_id ASC"),
+            Newest => qb
+                .push("SELECT * FROM chunks")
+                .push(" WHERE opsqueue_is_reserved(submission_id, chunk_index) = 0")
+                .push(" ORDER BY submission_id DESC"),
+            Random => Self::push_random_order_query(
+                qb,
+                "*",
+                "chunks",
+                Some("opsqueue_is_reserved(submission_id, chunk_index) = 0"),
+            ),
+            PreferDistinct { .. } => {
+                qb.push("WITH underlying_submissions AS MATERIALIZED (");
+                let qb = self.build_query_snippet_returning_submission_ids(qb);
+                qb.push(") ");
+                // In SQLite, CROSS JOIN <table> ON/WHERE does NOT produce N
+                // x M rows, it acts as an INNER JOIN forcing the query
+                // planner to use '<table> as the outer loop, preserving its
+                // sort order.
+                // c.f. https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
                 qb.push(
-                    r" AND submissions_metadata.metadata_value IN (SELECT value FROM json_each(",
-                );
-                match metastate.get(meta_key) {
-                    None => {
-                        tracing::trace!("No metastatefield for key: {meta_key}");
-                    }
-                    Some(field) => {
-                        let taken_values: Vec<_> = field.too_high_counts(1).collect();
-                        let taken_values_string =
-                            serde_json::to_string(&taken_values).expect("Always valid JSON");
-                        tracing::trace!(
-                            "Taken values that are left out of PreferDistinct: {taken_values_string:?}"
-                        );
-                        qb.push_bind(taken_values_string);
-                    }
-                }
-                qb.push(format_args!("))
+                    " SELECT chunks.*
+                        FROM underlying_submissions
+                        CROSS JOIN chunks
+                        WHERE opsqueue_is_reserved(chunks.submission_id, chunk_index) = 0
+                        AND chunks.submission_id = underlying_submissions.submission_id",
                 )
-                SELECT * FROM inner_{meta_key} WHERE NOT EXISTS (SELECT 1 FROM taken_{meta_key} WHERE inner_{meta_key}.submission_id = taken_{meta_key}.submission_id)
-                UNION ALL
-                SELECT * FROM inner_{meta_key} WHERE EXISTS (SELECT 1 FROM taken_{meta_key} WHERE inner_{meta_key}.submission_id = taken_{meta_key}.submission_id)
-                "))
             }
         }
+    }
+
+    /// Append a query snippet resulting in an ordered "`submission_id`" column.
+    fn build_query_snippet_returning_submission_ids<'a>(
+        &'a self,
+        qb: &'a mut QueryBuilder<Sqlite>,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        use Strategy::{Newest, Oldest, PreferDistinct, Random};
+        match self {
+            Oldest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id ASC"),
+            Newest => qb.push("SELECT id AS submission_id FROM submissions ORDER BY id DESC"),
+            Random => Self::push_random_order_query(qb, "id as submission_id", "submissions", None),
+            PreferDistinct { .. } => {
+                let mut metaiter = self.iter();
+                let prefer_distinct_metakeys = metaiter
+                    .by_ref()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let underlying = metaiter.take();
+                // Unique submission IDs from the underlying strategy.
+                let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
+                let qb = underlying.build_query_snippet_returning_submission_ids(qb);
+                qb.push(")");
+                // Count of in-flight chunks per submission, for each meta key.
+                // Notice the GROUP BY: this is to avoid duplicate FFI calls for the same values.
+                for (i, meta_key) in prefer_distinct_metakeys.iter().enumerate() {
+                    qb.push(format_args!(
+                        ", counts_{i} AS (
+                           SELECT submission_id, ffi_meta_counts.count
+                           FROM submissions_metadata sm
+                           JOIN ( SELECT metadata_value, opsqueue_metadata_count ("
+                    ));
+                    qb.push_bind(meta_key.clone());
+                    qb.push(
+                        ", metadata_value) AS count
+                            FROM submissions_metadata
+                            WHERE metadata_key = ",
+                    );
+                    qb.push_bind(meta_key.clone());
+                    qb.push(
+                        " GROUP BY metadata_value
+                            ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+                            WHERE sm.metadata_key = ",
+                    );
+                    qb.push_bind(meta_key.clone());
+                    qb.push(")");
+                }
+                // Submissions ranked by in-flight chunks.
+                qb.push(" SELECT inner.submission_id FROM inner");
+                for i in 0..prefer_distinct_metakeys.len() {
+                    qb.push(format_args!(
+                        " LEFT JOIN counts_{i} ON inner.submission_id = counts_{i}.submission_id",
+                    ));
+                }
+                qb.push(" ORDER BY ");
+                for i in 0..prefer_distinct_metakeys.len() {
+                    if i > 0 {
+                        qb.push(", ");
+                    }
+                    qb.push(format_args!("counts_{i}.count ASC NULLS FIRST"));
+                }
+                qb
+            }
+        }
+    }
+
+    fn push_random_order_query<'a>(
+        qb: &'a mut QueryBuilder<Sqlite>,
+        columns: &str,
+        table_name: &str,
+        condition: Option<&str>,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        let random_offset: u16 = rand::random();
+        let push_select = |qb: &mut QueryBuilder<Sqlite>, operator: &str| {
+            qb.push(format!(
+                "SELECT {columns} FROM {table_name} WHERE random_order {operator} "
+            ))
+            .push_bind(random_offset);
+            if let Some(condition_) = condition {
+                qb.push(format!(" AND {condition_}"));
+            }
+        };
+        push_select(qb, ">=");
+        qb.push(" UNION ALL ");
+        push_select(qb, "<");
+        qb
     }
 }
 
@@ -98,14 +211,75 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
-    use crate::common::StrategicMetadataMap;
-    use crate::common::chunk::ChunkSize;
-
-    use super::*;
     use itertools::Itertools;
+    use libsqlite3_sys as ffi;
     use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
+
+    use super::*;
+    use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::ChunkSize;
+
+    unsafe extern "C" fn sqlite_reserved_chunk_lookup_noop(
+        context: *mut ffi::sqlite3_context,
+        _n_args: i32,
+        _args: *mut *mut ffi::sqlite3_value,
+    ) {
+        unsafe {
+            ffi::sqlite3_result_int(context, 0);
+        }
+    }
+
+    unsafe extern "C" fn sqlite_metadata_count_lookup_noop(
+        context: *mut ffi::sqlite3_context,
+        _n_args: i32,
+        _args: *mut *mut ffi::sqlite3_value,
+    ) {
+        unsafe {
+            ffi::sqlite3_result_null(context);
+        }
+    }
+
+    async fn register_lookup_noops(conn: &mut SqliteConnection) {
+        let mut handle = conn.lock_handle().await.unwrap();
+        let sqlite = handle.as_raw_handle().as_ptr();
+        let function_name = b"opsqueue_is_reserved\0";
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                function_name.as_ptr().cast(),
+                2,
+                ffi::SQLITE_UTF8,
+                std::ptr::null_mut(),
+                Some(sqlite_reserved_chunk_lookup_noop),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(rc, ffi::SQLITE_OK, "register opsqueue_is_reserved failed");
+
+        let function_name = b"opsqueue_metadata_count\0";
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                function_name.as_ptr().cast(),
+                2,
+                ffi::SQLITE_UTF8,
+                std::ptr::null_mut(),
+                Some(sqlite_metadata_count_lookup_noop),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(
+            rc,
+            ffi::SQLITE_OK,
+            "register opsqueue_metadata_count failed"
+        );
+    }
 
     async fn explain(qb: &mut sqlx::QueryBuilder<Sqlite>, conn: &mut SqliteConnection) -> String {
         let formatted_query = format(
@@ -143,13 +317,31 @@ pub mod test {
         );
     }
 
+    /// Weaker invariant than `assert_streaming_query`, used by `PreferDistinct`
+    /// which deliberately materializes and sorts the set of in-flight
+    /// submissions to rank them by metadata value. That bounded sort is
+    /// considered acceptable; what must not happen is a full scan or sort of
+    /// the potentially very large `chunks`.
+    fn assert_streaming_chunks(qb: &sqlx::QueryBuilder<Sqlite>, explained: &str) {
+        let query_binding = qb.sql();
+        let query = query_binding.as_str();
+        assert!(
+            !explained.contains("SCAN chunks"),
+            "Query should never scan the whole `chunks` backlog, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+        assert!(
+            explained.contains("SEARCH chunks"),
+            "Query should reach `chunks` via an index seek, but it did not.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
         let mut qb = QueryBuilder::new("");
-        let metastate = MetaState::default();
 
-        let qb = Strategy::Oldest.build_query(&mut qb, &metastate);
+        let qb = Strategy::Oldest.build_query(&mut qb);
         let options = FormatOptions::default();
         let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
@@ -157,6 +349,8 @@ pub mod test {
           *
         FROM
           chunks
+        WHERE
+          opsqueue_is_reserved(submission_id, chunk_index) = 0
         ORDER BY
           submission_id ASC
         ");
@@ -169,10 +363,10 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
         let mut qb = QueryBuilder::new("");
-        let metastate = MetaState::default();
 
-        let qb = Strategy::Newest.build_query(&mut qb, &metastate);
+        let qb = Strategy::Newest.build_query(&mut qb);
         let options = FormatOptions::default();
         let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
@@ -180,6 +374,8 @@ pub mod test {
           *
         FROM
           chunks
+        WHERE
+          opsqueue_is_reserved(submission_id, chunk_index) = 0
         ORDER BY
           submission_id DESC
         ");
@@ -192,10 +388,10 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_random(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
-        let metastate = MetaState::default();
+        register_lookup_noops(&mut conn).await;
         let mut qb = QueryBuilder::new("");
 
-        let qb = Strategy::Random.build_query(&mut qb, &metastate);
+        let qb = Strategy::Random.build_query(&mut qb);
 
         let formatted_query = format(
             qb.sql().as_str(),
@@ -209,6 +405,7 @@ pub mod test {
           chunks
         WHERE
           random_order >= ?
+          AND opsqueue_is_reserved(submission_id, chunk_index) = 0
         UNION ALL
         SELECT
           *
@@ -216,16 +413,17 @@ pub mod test {
           chunks
         WHERE
           random_order < ?
+          AND opsqueue_is_reserved(submission_id, chunk_index) = 0
         ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
-        insta::assert_snapshot!(explained, @r"
+        insta::assert_snapshot!(explained, @"
         1, 0, COMPOUND QUERY
         2, 1, LEFT-MOST SUBQUERY
         5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        22, 1, UNION ALL
-        25, 22, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        26, 1, UNION ALL
+        29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
         ");
     }
 
@@ -233,14 +431,14 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_oldest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
-        let metastate = MetaState::default();
+        register_lookup_noops(&mut conn).await;
 
         let strategy = PreferDistinct {
             meta_key: "company_id".to_string(),
             underlying: Box::new(Oldest),
         };
         let mut qb = QueryBuilder::new("");
-        let qb = strategy.build_query(&mut qb, &metastate);
+        let qb = strategy.build_query(&mut qb);
 
         let formatted_query = format(
             qb.sql().as_str(),
@@ -249,73 +447,52 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id AS submission_id
+            FROM
+              submissions
+            ORDER BY
+              id ASC
+          ),
+          counts_0 AS (
+            SELECT
+              submission_id,
+              ffi_meta_counts.count
+            FROM
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+            WHERE
+              sm.metadata_key = ?
+          )
           SELECT
-            *
+            inner.submission_id
           FROM
-            chunks
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
           ORDER BY
-            submission_id ASC
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
+          underlying_submissions
+          CROSS JOIN chunks
         WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        ");
-
-        let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
-        insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+          opsqueue_is_reserved(chunks.submission_id, chunk_index) = 0
+          AND chunks.submission_id = underlying_submissions.submission_id
         ");
     }
 
@@ -323,14 +500,14 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_newest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
-        let metastate = MetaState::default();
+        register_lookup_noops(&mut conn).await;
 
         let strategy = PreferDistinct {
             meta_key: "company_id".to_string(),
             underlying: Box::new(Newest),
         };
         let mut qb = QueryBuilder::new("");
-        let qb = strategy.build_query(&mut qb, &metastate);
+        let qb = strategy.build_query(&mut qb);
 
         let formatted_query = format(
             qb.sql().as_str(),
@@ -339,73 +516,70 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id AS submission_id
+            FROM
+              submissions
+            ORDER BY
+              id DESC
+          ),
+          counts_0 AS (
+            SELECT
+              submission_id,
+              ffi_meta_counts.count
+            FROM
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+            WHERE
+              sm.metadata_key = ?
+          )
           SELECT
-            *
+            inner.submission_id
           FROM
-            chunks
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
           ORDER BY
-            submission_id DESC
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
+          underlying_submissions
+          CROSS JOIN chunks
         WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          opsqueue_is_reserved(chunks.submission_id, chunk_index) = 0
+          AND chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        85, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        91, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        101, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        119, 3, USE TEMP B-TREE FOR ORDER BY
+        131, 0, SCAN underlying_submissions
+        133, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -413,14 +587,14 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_random(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
-        let metastate = MetaState::default();
+        register_lookup_noops(&mut conn).await;
 
         let strategy = PreferDistinct {
             meta_key: "company_id".to_string(),
             underlying: Box::new(Random),
         };
         let mut qb = QueryBuilder::new("");
-        let qb = strategy.build_query(&mut qb, &metastate);
+        let qb = strategy.build_query(&mut qb);
 
         let formatted_query = format(
             qb.sql().as_str(),
@@ -429,96 +603,83 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order >= ?
+            UNION ALL
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order < ?
+          ),
+          counts_0 AS (
+            SELECT
+              submission_id,
+              ffi_meta_counts.count
+            FROM
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+            WHERE
+              sm.metadata_key = ?
+          )
           SELECT
-            *
+            inner.submission_id
           FROM
-            chunks
-          WHERE
-            random_order >= ?
-          UNION ALL
-          SELECT
-            *
-          FROM
-            chunks
-          WHERE
-            random_order < ?
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
+          underlying_submissions
+          CROSS JOIN chunks
         WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          opsqueue_is_reserved(chunks.submission_id, chunk_index) = 0
+          AND chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        7, 4, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        16, 4, CORRELATED SCALAR SUBQUERY 5
-        20, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        30, 16, LIST SUBQUERY 3
-        32, 30, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 3, UNION ALL
-        61, 58, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        71, 58, CORRELATED SCALAR SUBQUERY 5
-        75, 71, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        85, 71, LIST SUBQUERY 3
-        87, 85, SCAN json_each VIRTUAL TABLE INDEX 0:
-        113, 3, UNION ALL
-        114, 113, COMPOUND QUERY
-        115, 114, LEFT-MOST SUBQUERY
-        118, 115, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        127, 115, CORRELATED SCALAR SUBQUERY 7
-        131, 127, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        141, 127, LIST SUBQUERY 3
-        143, 141, SCAN json_each VIRTUAL TABLE INDEX 0:
-        169, 114, UNION ALL
-        172, 169, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        182, 169, CORRELATED SCALAR SUBQUERY 7
-        186, 182, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        196, 182, LIST SUBQUERY 3
-        198, 196, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE underlying_submissions
+        5, 3, CO-ROUTINE inner
+        6, 5, COMPOUND QUERY
+        7, 6, LEFT-MOST SUBQUERY
+        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        19, 6, UNION ALL
+        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        35, 3, MATERIALIZE counts_0
+        37, 35, CO-ROUTINE ffi_meta_counts
+        43, 37, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        77, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        85, 35, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        97, 35, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        113, 3, SCAN inner
+        120, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        130, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        149, 3, USE TEMP B-TREE FOR ORDER BY
+        161, 0, SCAN underlying_submissions
+        163, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -526,18 +687,18 @@ pub mod test {
     pub async fn test_query_plan_prefer_distinct_nested(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
-        let metastate = MetaState::default();
+        register_lookup_noops(&mut conn).await;
 
         let strategy = PreferDistinct {
             meta_key: "company_id".to_string(),
             underlying: Box::new(PreferDistinct {
                 meta_key: "priority".to_string(),
-                underlying: Box::new(Random),
+                underlying: Box::new(Oldest),
             }),
         };
 
         let mut qb = QueryBuilder::new("");
-        let qb = strategy.build_query(&mut qb, &metastate);
+        let qb = strategy.build_query(&mut qb);
 
         let formatted_query = format(
             qb.sql().as_str(),
@@ -546,204 +707,125 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submissions AS MATERIALIZED (
           WITH
-          inner_priority AS NOT MATERIALIZED (
+          inner AS NOT MATERIALIZED (
             SELECT
-              *
+              id AS submission_id
             FROM
-              chunks
-            WHERE
-              random_order >= ?
-            UNION ALL
-            SELECT
-              *
-            FROM
-              chunks
-            WHERE
-              random_order < ?
+              submissions
+            ORDER BY
+              id ASC
           ),
-          taken_priority AS (
+          counts_0 AS (
             SELECT
-              *
+              submission_id,
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
-            WHERE
-              submissions_metadata.metadata_key = ?
-              AND submissions_metadata.metadata_value IN (
+              submissions_metadata sm
+              JOIN (
                 SELECT
-                  value
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
                 FROM
-                  json_each()
-              )
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+            WHERE
+              sm.metadata_key = ?
+          ),
+          counts_1 AS (
+            SELECT
+              submission_id,
+              ffi_meta_counts.count
+            FROM
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+            WHERE
+              sm.metadata_key = ?
           )
           SELECT
-            *
+            inner.submission_id
           FROM
-            inner_priority
-          WHERE
-            NOT EXISTS (
-              SELECT
-                1
-              FROM
-                taken_priority
-              WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
-          UNION ALL
-          SELECT
-            *
-          FROM
-            inner_priority
-          WHERE
-            EXISTS (
-              SELECT
-                1
-              FROM
-                taken_priority
-              WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+            LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST,
+            counts_1.count ASC NULLS FIRST
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
+          underlying_submissions
+          CROSS JOIN chunks
         WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          opsqueue_is_reserved(chunks.submission_id, chunk_index) = 0
+          AND chunks.submission_id = underlying_submissions.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        5, 4, COMPOUND QUERY
-        6, 5, LEFT-MOST SUBQUERY
-        9, 6, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        18, 6, CORRELATED SCALAR SUBQUERY 5
-        22, 18, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        32, 18, LIST SUBQUERY 3
-        34, 32, SCAN json_each VIRTUAL TABLE INDEX 0:
-        52, 6, CORRELATED SCALAR SUBQUERY 11
-        56, 52, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        66, 52, LIST SUBQUERY 9
-        68, 66, SCAN json_each VIRTUAL TABLE INDEX 0:
-        94, 5, UNION ALL
-        97, 94, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        107, 94, CORRELATED SCALAR SUBQUERY 5
-        111, 107, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        121, 107, LIST SUBQUERY 3
-        123, 121, SCAN json_each VIRTUAL TABLE INDEX 0:
-        141, 94, CORRELATED SCALAR SUBQUERY 11
-        145, 141, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        155, 141, LIST SUBQUERY 9
-        157, 155, SCAN json_each VIRTUAL TABLE INDEX 0:
-        183, 5, UNION ALL
-        184, 183, COMPOUND QUERY
-        185, 184, LEFT-MOST SUBQUERY
-        188, 185, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        197, 185, CORRELATED SCALAR SUBQUERY 7
-        201, 197, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        211, 197, LIST SUBQUERY 3
-        213, 211, SCAN json_each VIRTUAL TABLE INDEX 0:
-        231, 185, CORRELATED SCALAR SUBQUERY 11
-        235, 231, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        245, 231, LIST SUBQUERY 9
-        247, 245, SCAN json_each VIRTUAL TABLE INDEX 0:
-        273, 184, UNION ALL
-        276, 273, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        286, 273, CORRELATED SCALAR SUBQUERY 7
-        290, 286, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        300, 286, LIST SUBQUERY 3
-        302, 300, SCAN json_each VIRTUAL TABLE INDEX 0:
-        320, 273, CORRELATED SCALAR SUBQUERY 11
-        324, 320, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        334, 320, LIST SUBQUERY 9
-        336, 334, SCAN json_each VIRTUAL TABLE INDEX 0:
-        362, 184, UNION ALL
-        363, 362, COMPOUND QUERY
-        364, 363, LEFT-MOST SUBQUERY
-        365, 364, COMPOUND QUERY
-        366, 365, LEFT-MOST SUBQUERY
-        369, 366, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        378, 366, CORRELATED SCALAR SUBQUERY 5
-        382, 378, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        392, 378, LIST SUBQUERY 3
-        394, 392, SCAN json_each VIRTUAL TABLE INDEX 0:
-        412, 366, CORRELATED SCALAR SUBQUERY 13
-        416, 412, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        426, 412, LIST SUBQUERY 9
-        428, 426, SCAN json_each VIRTUAL TABLE INDEX 0:
-        454, 365, UNION ALL
-        457, 454, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        467, 454, CORRELATED SCALAR SUBQUERY 5
-        471, 467, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        481, 467, LIST SUBQUERY 3
-        483, 481, SCAN json_each VIRTUAL TABLE INDEX 0:
-        501, 454, CORRELATED SCALAR SUBQUERY 13
-        505, 501, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        515, 501, LIST SUBQUERY 9
-        517, 515, SCAN json_each VIRTUAL TABLE INDEX 0:
-        543, 365, UNION ALL
-        544, 543, COMPOUND QUERY
-        545, 544, LEFT-MOST SUBQUERY
-        548, 545, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        557, 545, CORRELATED SCALAR SUBQUERY 7
-        561, 557, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        571, 557, LIST SUBQUERY 3
-        573, 571, SCAN json_each VIRTUAL TABLE INDEX 0:
-        591, 545, CORRELATED SCALAR SUBQUERY 13
-        595, 591, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        605, 591, LIST SUBQUERY 9
-        607, 605, SCAN json_each VIRTUAL TABLE INDEX 0:
-        633, 544, UNION ALL
-        636, 633, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        646, 633, CORRELATED SCALAR SUBQUERY 7
-        650, 646, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        660, 646, LIST SUBQUERY 3
-        662, 660, SCAN json_each VIRTUAL TABLE INDEX 0:
-        680, 633, CORRELATED SCALAR SUBQUERY 13
-        684, 680, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        694, 680, LIST SUBQUERY 9
-        696, 694, SCAN json_each VIRTUAL TABLE INDEX 0:
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        84, 3, MATERIALIZE counts_1
+        86, 84, CO-ROUTINE ffi_meta_counts
+        92, 86, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        126, 84, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        134, 84, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        146, 84, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        163, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        169, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        179, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        191, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        201, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        224, 3, USE TEMP B-TREE FOR ORDER BY
+        236, 0, SCAN underlying_submissions
+        238, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        ");
+
+        let explained = explain(qb, &mut conn).await;
+        insta::assert_snapshot!(explained, @"
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        84, 3, MATERIALIZE counts_1
+        86, 84, CO-ROUTINE ffi_meta_counts
+        92, 86, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        126, 84, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        134, 84, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        146, 84, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        163, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        169, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        179, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        191, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        201, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        224, 3, USE TEMP B-TREE FOR ORDER BY
+        236, 0, SCAN underlying_submissions
+        238, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -773,9 +855,10 @@ pub mod test {
         .unwrap();
 
         let mut conn = db_pools.reader_conn().await.unwrap();
+        register_lookup_noops(conn.get_inner()).await;
         let mut query_builder = QueryBuilder::default();
         let vals1: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder, &MetaState::default())
+            .build_query(&mut query_builder)
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()
@@ -784,7 +867,7 @@ pub mod test {
 
         let mut query_builder = QueryBuilder::default();
         let vals2: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder, &MetaState::default())
+            .build_query(&mut query_builder)
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()

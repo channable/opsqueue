@@ -130,6 +130,18 @@ impl From<ChunkIndex> for i64 {
     }
 }
 
+impl TryFrom<i64> for ChunkIndex {
+    type Error = crate::common::errors::TryFromIntError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            return Err(crate::common::errors::TryFromIntError(()));
+        }
+
+        Ok(Self(u63::new(value.cast_unsigned())))
+    }
+}
+
 impl TryFrom<u64> for ChunkIndex {
     type Error = crate::common::errors::TryFromIntError;
     fn try_from(value: u64) -> Result<Self, Self::Error> {

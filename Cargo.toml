@@ -1,7 +1,7 @@
 [workspace]
 
-# Resolver 3 is default in the 2024 Edition, but the workspace doesn't know that
-resolver = "3"
+# Resolver 2 is default in the 2021 Edition, but the workspace doesn't know that
+resolver = "2"
 
 members = [
     "opsqueue/",
@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.36.0"
+version = "0.35.5"
 
 [workspace.lints.clippy]
 cargo = { level = "deny", priority = -1 }
@@ -26,10 +26,6 @@ perf = { level = "deny", priority = -1 }
 restriction = { level = "allow", priority = -1 }
 style = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }
-
-# Prevent duplicate versions of crates from being used in the workspace. If an easy fix is not
-# possible, you can add the crate to the `allowed-duplicate-crates` list in `clippy.toml`.
-multiple_crate_versions = "deny"
 
 [profile.release]
 # Full fat LTO makes a big difference in performance, at the cost of a large

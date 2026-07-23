@@ -667,3 +667,32 @@ def test_lookup_too_many_submission_ids_by_strategic_metadata() -> None:
             )
         assert exc.type is TooManyMatchingSubmissionsError
         assert exc.value.max_submissions == max_
+
+
+def test_prefer_distinct_strategy_fairness(opsqueue: OpsqueueProcess) -> None:
+    """Test the PreferDistinct strategy fairly interleaves chunks from different
+    submissions based on their strategic metadata.
+
+    """
+    url = "file:///tmp/opsqueue/test_prefer_distinct_fairness"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+    company_ids = [1, 2, 3]
+    chunks_per_company = 4
+    company_id_per_submission = {}
+    for company_id in company_ids:
+        sub_id = producer_client.insert_submission(
+            [company_id] * chunks_per_company,
+            chunk_size=1,
+            strategic_metadata={"company_id": company_id},
+        )
+        company_id_per_submission[sub_id] = company_id
+    strategy = strategy_from_description(("PreferDistinct", "company_id", "Oldest"))
+    reserved_company_order = []
+    # Fetch 1 chunk at a time. Because we don't complete chunks, opsqueue's
+    # metastate tracks them as reserved, increasing the busy count for that
+    # company.
+    for _ in range(len(company_ids) * chunks_per_company):
+        [chunk] = consumer_client.reserve_chunks(strategy=strategy)
+        reserved_company_order.append(company_id_per_submission[chunk.submission_id])
+    assert reserved_company_order == [1, 2, 3] * chunks_per_company
