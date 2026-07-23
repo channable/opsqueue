@@ -140,13 +140,26 @@ impl Strategy {
                 let qb = underlying.build_query_snippet_returning_submission_ids(qb);
                 qb.push(")");
                 // Count of in-flight chunks per submission, for each meta key.
+                // Notice the GROUP BY: this is to avoid duplicate FFI calls for the same values.
                 for (i, meta_key) in prefer_distinct_metakeys.iter().enumerate() {
-                    qb.push(", ");
-                    qb.push(format_args!("counts_{i} AS ("));
-                    qb.push(" SELECT submission_id, opsqueue_metadata_count(");
+                    qb.push(format_args!(
+                        ", counts_{i} AS (
+                           SELECT submission_id, ffi_meta_counts.count
+                           FROM submissions_metadata sm
+                           JOIN ( SELECT metadata_value, opsqueue_metadata_count ("
+                    ));
                     qb.push_bind(meta_key.clone());
-                    qb.push(", metadata_value) AS count");
-                    qb.push(" FROM submissions_metadata WHERE metadata_key = ");
+                    qb.push(
+                        ", metadata_value) AS count
+                            FROM submissions_metadata
+                            WHERE metadata_key = ",
+                    );
+                    qb.push_bind(meta_key.clone());
+                    qb.push(
+                        " GROUP BY metadata_value
+                            ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
+                            WHERE sm.metadata_key = ",
+                    );
                     qb.push_bind(meta_key.clone());
                     qb.push(")");
                 }
@@ -447,11 +460,22 @@ pub mod test {
           counts_0 AS (
             SELECT
               submission_id,
-              opsqueue_metadata_count(?, metadata_value) AS count
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
             WHERE
-              metadata_key = ?
+              sm.metadata_key = ?
           )
           SELECT
             inner.submission_id
@@ -505,11 +529,22 @@ pub mod test {
           counts_0 AS (
             SELECT
               submission_id,
-              opsqueue_metadata_count(?, metadata_value) AS count
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
             WHERE
-              metadata_key = ?
+              sm.metadata_key = ?
           )
           SELECT
             inner.submission_id
@@ -533,11 +568,18 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        8, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        10, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        32, 3, USE TEMP B-TREE FOR ORDER BY
-        44, 0, SCAN underlying_submissions
-        46, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        85, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        91, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        101, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        119, 3, USE TEMP B-TREE FOR ORDER BY
+        131, 0, SCAN underlying_submissions
+        133, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -581,11 +623,22 @@ pub mod test {
           counts_0 AS (
             SELECT
               submission_id,
-              opsqueue_metadata_count(?, metadata_value) AS count
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
             WHERE
-              metadata_key = ?
+              sm.metadata_key = ?
           )
           SELECT
             inner.submission_id
@@ -615,11 +668,18 @@ pub mod test {
         10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
         19, 6, UNION ALL
         22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        36, 3, SCAN inner
-        39, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        62, 3, USE TEMP B-TREE FOR ORDER BY
-        74, 0, SCAN underlying_submissions
-        76, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        35, 3, MATERIALIZE counts_0
+        37, 35, CO-ROUTINE ffi_meta_counts
+        43, 37, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        77, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        85, 35, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        97, 35, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        113, 3, SCAN inner
+        120, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        130, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        149, 3, USE TEMP B-TREE FOR ORDER BY
+        161, 0, SCAN underlying_submissions
+        163, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -660,20 +720,42 @@ pub mod test {
           counts_0 AS (
             SELECT
               submission_id,
-              opsqueue_metadata_count(?, metadata_value) AS count
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
             WHERE
-              metadata_key = ?
+              sm.metadata_key = ?
           ),
           counts_1 AS (
             SELECT
               submission_id,
-              opsqueue_metadata_count(?, metadata_value) AS count
+              ffi_meta_counts.count
             FROM
-              submissions_metadata
+              submissions_metadata sm
+              JOIN (
+                SELECT
+                  metadata_value,
+                  opsqueue_metadata_count (?, metadata_value) AS count
+                FROM
+                  submissions_metadata
+                WHERE
+                  metadata_key = ?
+                GROUP BY
+                  metadata_value
+              ) ffi_meta_counts ON sm.metadata_value = ffi_meta_counts.metadata_value
             WHERE
-              metadata_key = ?
+              sm.metadata_key = ?
           )
           SELECT
             inner.submission_id
@@ -699,23 +781,51 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        9, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        11, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        20, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        50, 3, USE TEMP B-TREE FOR ORDER BY
-        62, 0, SCAN underlying_submissions
-        64, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        84, 3, MATERIALIZE counts_1
+        86, 84, CO-ROUTINE ffi_meta_counts
+        92, 86, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        126, 84, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        134, 84, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        146, 84, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        163, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        169, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        179, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        191, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        201, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        224, 3, USE TEMP B-TREE FOR ORDER BY
+        236, 0, SCAN underlying_submissions
+        238, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
 
         let explained = explain(qb, &mut conn).await;
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        9, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        11, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        20, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        50, 3, USE TEMP B-TREE FOR ORDER BY
-        62, 0, SCAN underlying_submissions
-        64, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        6, 3, MATERIALIZE counts_0
+        8, 6, CO-ROUTINE ffi_meta_counts
+        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        56, 6, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        68, 6, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        84, 3, MATERIALIZE counts_1
+        86, 84, CO-ROUTINE ffi_meta_counts
+        92, 86, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        126, 84, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
+        134, 84, BLOOM FILTER ON ffi_meta_counts (metadata_value=?)
+        146, 84, SEARCH ffi_meta_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
+        163, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        169, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        179, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        191, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        201, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        224, 3, USE TEMP B-TREE FOR ORDER BY
+        236, 0, SCAN underlying_submissions
+        238, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
