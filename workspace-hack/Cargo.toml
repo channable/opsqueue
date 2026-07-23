@@ -16,6 +16,7 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 anyhow = { version = "1" }
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 base64 = { version = "0.22" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 crossbeam-epoch = { version = "0.9" }
@@ -46,7 +47,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 sha2 = { version = "0.10" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
-sqlx-core = { version = "0.9", features = ["_rt-tokio", "any", "chrono", "json", "migrate", "offline"] }
+sqlx-core = { version = "0.9", features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "any", "chrono", "json", "migrate", "offline"] }
 sqlx-sqlite = { version = "0.9", default-features = false, features = ["bundled", "chrono", "deserialize", "json", "load-extension", "migrate", "offline", "unlock-notify"] }
 thiserror = { version = "2" }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -60,6 +61,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [build-dependencies]
 anyhow = { version = "1" }
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 base64 = { version = "0.22" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 crossbeam-utils = { version = "0.8" }
@@ -72,13 +74,14 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = { version = "0.10" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
-sqlx-core = { version = "0.9", features = ["_rt-tokio", "any", "chrono", "json", "migrate", "offline"] }
+sqlx-core = { version = "0.9", features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "any", "chrono", "json", "migrate", "offline"] }
 sqlx-sqlite = { version = "0.9", default-features = false, features = ["bundled", "chrono", "deserialize", "json", "load-extension", "migrate", "offline", "unlock-notify"] }
 syn = { version = "3", features = ["full", "visit-mut"] }
 thiserror = { version = "2" }
@@ -96,7 +99,6 @@ tower = { version = "0.5", default-features = false, features = ["balance", "buf
 tower-http = { version = "0.6", features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-cc = { version = "1", default-features = false, features = ["parallel"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 
 ### END HAKARI SECTION

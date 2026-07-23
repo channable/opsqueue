@@ -36,7 +36,8 @@ let
   commonArgs = {
     inherit src version pname;
     strictDeps = true;
-    nativeBuildInputs = [ ];
+    nativeBuildInputs = [ pkgs.pkg-config ];
+    buildInputs = [ pkgs.sqlite ];
     cargoExtraArgs = "--package opsqueue";
     doCheck = true;
   };
@@ -53,6 +54,7 @@ craneLib.buildPackage (
     # Needed for the SQLx macros:
     env = {
       DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
+      LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
     };
 
   }

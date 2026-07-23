@@ -59,7 +59,8 @@ let
     inherit version pname;
     src = depsSrc;
     strictDeps = true;
-    nativeBuildInputs = [ python ];
+    nativeBuildInputs = [ python pkgs.pkg-config ];
+    buildInputs = [ pkgs.sqlite ];
     cargoExtraArgs = "--package opsqueue_python";
     doCheck = false;
   };
@@ -77,6 +78,7 @@ let
       // {
         inherit cargoArtifacts;
         src = wheelSrc;
+        env.LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
       }
     )).overrideAttrs
       (old: {

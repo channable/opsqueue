@@ -3137,6 +3137,7 @@ dependencies = [
  "log",
  "memchr",
  "percent-encoding",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3146,6 +3147,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -4249,9 +4251,9 @@ name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base64",
  "bitflags",
- "cc",
  "chrono",
  "crossbeam-epoch",
  "crossbeam-utils",

@@ -52,6 +52,8 @@ let
       pkgs.cargo-nextest
       pkgs.maturin
 
+      # Resolve native sqlite from Nix for libsqlite3-sys
+      pkgs.pkg-config
       # sqlite3 binary, for easy debugging/introspection
       pkgs.sqlite
     ];
@@ -64,6 +66,10 @@ let
         # For the shell, libpython needs to be in the search path.
         pythonEnv
       ];
+      shellHook = ''
+        export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
+        export PKG_CONFIG_PATH="${pkgs.sqlite.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:''${PKG_CONFIG_PATH}}"
+      '';
     };
   };
 in
