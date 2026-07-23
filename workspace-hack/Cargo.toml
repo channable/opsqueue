@@ -91,11 +91,13 @@ url = { version = "2", features = ["serde"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "http2", "server", "service"] }
+libc = { version = "0.2", features = ["extra_traits"] }
 tower = { version = "0.5", default-features = false, features = ["balance", "buffer", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 cc = { version = "1", default-features = false, features = ["parallel"] }
+libc = { version = "0.2", features = ["extra_traits"] }
 
 ### END HAKARI SECTION
 
