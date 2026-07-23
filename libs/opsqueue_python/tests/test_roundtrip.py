@@ -27,6 +27,7 @@ from conftest import (
     strategy_from_description,
 )
 import logging
+import time
 import pytest
 
 SUBMISSION_COMPLETED_TIMEOUT = 10.0
@@ -724,3 +725,68 @@ def test_run_submission_timeout(opsqueue: OpsqueueProcess) -> None:
                 chunk_size=1,
                 timeout=0.1,
             )
+
+
+def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
+    """Unpausing a paused submission makes it available to consumers again,
+    and it can be completed normally afterwards."""
+    url = "file:///tmp/opsqueue/test_unpause_and_complete"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission(
+        (1, 2, 3), chunk_size=1, paused=True
+    )
+
+    assert isinstance(
+        producer_client.get_submission_status(submission_id), SubmissionStatus.Paused
+    )
+
+    producer_client.unpause_submission(submission_id)
+    assert isinstance(
+        producer_client.get_submission_status(submission_id),
+        SubmissionStatus.InProgress,
+    )
+
+    def run_consumer() -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        consumer_client.run_each_op(lambda x: x)
+
+    with background_process(run_consumer):
+        producer_client.blocking_stream_completed_submission(submission_id)
+        assert isinstance(
+            producer_client.get_submission_status(submission_id),
+            SubmissionStatus.Completed,
+        )
+
+
+def test_unpause_not_found(opsqueue: OpsqueueProcess) -> None:
+    """Unpausing a submission that is not paused (e.g. in-progress) raises
+    SubmissionNotFoundError."""
+    url = "file:///tmp/opsqueue/test_unpause_not_found"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission(
+        (1, 2, 3), chunk_size=1, paused=False
+    )
+    assert isinstance(
+        producer_client.get_submission_status(submission_id),
+        SubmissionStatus.InProgress,
+    )
+    with pytest.raises(SubmissionNotFoundError):
+        producer_client.unpause_submission(submission_id)
+
+
+def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
+    """A paused submission can be cancelled; its status becomes Cancelled."""
+    url = "file:///tmp/opsqueue/test_cancel_paused"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission(
+        (1, 2, 3), chunk_size=1, paused=True
+    )
+
+    assert isinstance(
+        producer_client.get_submission_status(submission_id), SubmissionStatus.Paused
+    )
+
+    producer_client.cancel_submission(submission_id)
+    assert isinstance(
+        producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
+    )

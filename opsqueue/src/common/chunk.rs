@@ -601,6 +601,93 @@ pub mod db {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if a SQL query fails.
+    #[tracing::instrument(skip(chunks, conn))]
+    pub async fn insert_many_paused_chunks(
+        chunks: &[Chunk],
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        const ROWS_PER_QUERY: usize = 1000;
+
+        let mut iter = chunks.iter().peekable();
+        while iter.peek().is_some() {
+            let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
+
+            let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "INSERT INTO chunks_paused (submission_id, chunk_index, input_content) ",
+            );
+            query_builder.push_values(query_chunks, |mut b, chunk| {
+                b.push_bind(chunk.submission_id)
+                    .push_bind(chunk.chunk_index)
+                    .push_bind(chunk.input_content.clone());
+            });
+            let query = query_builder.build();
+
+            query.execute(conn.get_inner()).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Move all chunks of a paused submission from `chunks_paused` back to `chunks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SQL query fails.
+    #[tracing::instrument(skip(conn))]
+    pub async fn restore_paused_chunks(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        sqlx::query!(
+            "
+    INSERT INTO chunks (submission_id, chunk_index, input_content, retries)
+    SELECT submission_id, chunk_index, input_content, retries FROM chunks_paused WHERE submission_id = $1;
+
+    DELETE FROM chunks_paused WHERE submission_id = $2;
+    ",
+            submission_id,
+            submission_id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+        Ok(())
+    }
+
+    /// Skip (cancel) all chunks of a paused submission by moving them from
+    /// `chunks_paused` to `chunks_failed` with `skipped = true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SQL query fails.
+    #[tracing::instrument(skip(conn))]
+    pub async fn skip_remaining_paused_chunks(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        let now = chrono::prelude::Utc::now();
+
+        let query_res = sqlx::query!(
+            "
+    INSERT INTO chunks_failed
+    (submission_id, chunk_index, input_content, failure, skipped, failed_at)
+    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks_paused WHERE submission_id = $2;
+
+    DELETE FROM chunks_paused WHERE submission_id = $3;
+    ",
+            now,
+            submission_id,
+            submission_id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+
+        counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
+        Ok(())
+    }
+
     /// Mark all remaining chunks for a submission as skipped/failed.
     ///
     /// # Errors
@@ -679,6 +766,23 @@ pub mod db {
     #[tracing::instrument(skip(db))]
     pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_failed;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
+    /// Count paused chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_chunks_paused(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_paused;")
             .fetch_one(db.get_inner())
             .await?;
         Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
@@ -780,10 +884,7 @@ pub mod test {
         .expect("complete chunk failed");
 
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
-        assert_eq!(
-            count_chunks_completed(&mut conn).await.unwrap(),
-            1
-        );
+        assert_eq!(count_chunks_completed(&mut conn).await.unwrap(), 1);
         assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 0);
     }
 
@@ -797,6 +898,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -852,10 +954,7 @@ pub mod test {
         .expect("Succeed chunk failed");
 
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
-        assert_eq!(
-            count_chunks_completed(&mut conn).await.unwrap(),
-            0
-        );
+        assert_eq!(count_chunks_completed(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 1);
     }
 }

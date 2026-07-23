@@ -159,6 +159,36 @@ impl ProducerClient {
         })
     }
 
+    /// Unpause a paused submission, making it available to consumers again.
+    ///
+    /// Will return an error if the submission is not currently paused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission is not found or if an internal client error occurs.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub fn unpause_submission(
+        &self,
+        py: Python<'_>,
+        id: SubmissionId,
+    ) -> CPyResult<
+        (),
+        E![
+            FatalPythonException,
+            SubmissionNotFound,
+            InternalProducerClientError
+        ],
+    > {
+        py.detach(|| {
+            self.block_unless_interrupted(async {
+                self.client
+                    .unpause_submission(id.into())
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+        })
+    }
+
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
     ///
     /// The returned `SubmissionStatus` object also includes the number of chunks finished so far,
@@ -247,7 +277,7 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if submission insertion fails.
-    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false))]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
@@ -255,6 +285,7 @@ impl ProducerClient {
         metadata: Option<submission::Metadata>,
         chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
+        paused: bool,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         let strategic_metadata = std::collections::HashMap::default();
 
@@ -266,6 +297,7 @@ impl ProducerClient {
                 },
                 metadata,
                 strategic_metadata,
+                paused,
             };
             self.block_unless_interrupted(async move {
                 self.client
@@ -277,8 +309,8 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
-    #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false))]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     /// Insert submission chunks via object storage and enqueue the submission.
     ///
     /// # Errors
@@ -292,6 +324,7 @@ impl ProducerClient {
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<i64>,
         otel_trace_carrier: CarrierMap,
+        paused: bool,
     ) -> CPyResult<
         SubmissionId,
         E![
@@ -331,6 +364,7 @@ impl ProducerClient {
                     },
                     metadata,
                     strategic_metadata: strategic_metadata.unwrap_or_default(),
+                    paused,
                 };
                 self.client
                     .insert_submission(&submission, &otel_trace_carrier)
