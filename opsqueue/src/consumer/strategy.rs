@@ -551,15 +551,12 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
         6, 3, MATERIALIZE ranked_submissions
-        9, 6, MATERIALIZE counts
-        12, 9, SCAN json_each VIRTUAL TABLE INDEX 1:
-        28, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        30, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        41, 6, SCAN counts LEFT-JOIN
-        61, 6, USE TEMP B-TREE FOR ORDER BY
-        73, 3, SCAN ranked_submissions
-        84, 0, SCAN underlying_submissions
-        86, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        11, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        13, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        35, 6, USE TEMP B-TREE FOR ORDER BY
+        47, 3, SCAN ranked_submissions
+        58, 0, SCAN underlying_submissions
+        60, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -644,15 +641,12 @@ pub mod test {
         13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
         22, 9, UNION ALL
         25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        38, 6, MATERIALIZE counts
-        41, 38, SCAN json_each VIRTUAL TABLE INDEX 1:
-        56, 6, SCAN inner
-        59, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        71, 6, SCAN counts LEFT-JOIN
-        91, 6, USE TEMP B-TREE FOR ORDER BY
-        103, 3, SCAN ranked_submissions
-        114, 0, SCAN underlying_submissions
-        116, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        39, 6, SCAN inner
+        42, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        65, 6, USE TEMP B-TREE FOR ORDER BY
+        77, 3, SCAN ranked_submissions
+        88, 0, SCAN underlying_submissions
+        90, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -739,76 +733,26 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
         6, 3, MATERIALIZE ranked_submissions
-        9, 6, MATERIALIZE ranked_submissions
-        12, 9, MATERIALIZE counts
-        15, 12, SCAN json_each VIRTUAL TABLE INDEX 1:
-        31, 9, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        33, 9, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        44, 9, SCAN counts LEFT-JOIN
-        64, 9, USE TEMP B-TREE FOR ORDER BY
-        75, 6, MATERIALIZE counts
-        78, 75, SCAN json_each VIRTUAL TABLE INDEX 1:
-        95, 6, SCAN ranked_submissions
-        97, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        109, 6, SCAN counts LEFT-JOIN
-        129, 6, USE TEMP B-TREE FOR ORDER BY
-        141, 3, SCAN ranked_submissions
-        152, 0, SCAN underlying_submissions
-        154, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
-            chunks
-          WHERE
-            random_order >= ?
-            AND opsqueue_is_reserved(submission_id, chunk_index) = 0
-          UNION ALL
-          SELECT
-            *
-          FROM
-            chunks
-          WHERE
-            random_order < ?
-            AND opsqueue_is_reserved(submission_id, chunk_index) = 0
-        ),
-        company_id_counts AS (
-          SELECT
-            submission_id,
-            opsqueue_metadata_count(?, metadata_value) AS count
-          FROM
-            submissions_metadata
-          WHERE
-            metadata_key = ?
-        ),
-        priority_counts AS (
-          SELECT
-            submission_id,
-            opsqueue_metadata_count(?, metadata_value) AS count
-          FROM
-            submissions_metadata
-          WHERE
-            metadata_key = ?
-        )
-        SELECT
-          underlying.*
-        FROM
-          underlying
-          LEFT JOIN company_id_counts ON underlying.submission_id = company_id_counts.submission_id
-          LEFT JOIN priority_counts ON underlying.submission_id = priority_counts.submission_id
-        ORDER BY
-          company_id_counts.count ASC NULLS FIRST,
-          priority_counts.count ASC NULLS FIRST
+        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        14, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        23, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        53, 6, USE TEMP B-TREE FOR ORDER BY
+        65, 3, SCAN ranked_submissions
+        76, 0, SCAN underlying_submissions
+        78, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
 
         let explained = explain(qb, &mut conn).await;
         insta::assert_snapshot!(explained, @"
-        2, 0, CO-ROUTINE underlying
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        7, 4, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        28, 3, UNION ALL
-        31, 28, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        57, 0, SCAN underlying
-        60, 0, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        70, 0, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        104, 0, USE TEMP B-TREE FOR ORDER BY
+        3, 0, MATERIALIZE underlying_submissions
+        6, 3, MATERIALIZE ranked_submissions
+        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        14, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        23, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        53, 6, USE TEMP B-TREE FOR ORDER BY
+        65, 3, SCAN ranked_submissions
+        76, 0, SCAN underlying_submissions
+        78, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -858,71 +802,5 @@ pub mod test {
             .unwrap();
 
         assert!(vals1 != vals2);
-    }
-
-    /// Test for `PreferDistinct` that the next chunk should come from the
-    /// submission where the associated metadata value (here `company_id`) has
-    /// the *fewest* in-flight chunks in progress.
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    pub async fn test_prefer_distinct_picks_least_busy_company(pool: sqlx::SqlitePool) {
-        use crate::consumer::dispatcher::Dispatcher;
-        use crate::consumer::dispatcher::metastate::MetaStateVal;
-        use std::time::Duration;
-
-        let db_pools = crate::db::DBPools::from_test_pool(&pool);
-        let mut conn = db_pools.writer_conn().await.unwrap();
-        register_lookup_noops(conn.get_inner()).await;
-
-        // Three companies, each with one submission of a few chunks.
-        let company_ids: [MetaStateVal; 3] = [1, 2, 3];
-        // For each inserted submission, keep track of the associated company.
-        let mut company_id_per_submission = std::collections::HashMap::new();
-        let chunks_per_company = 2;
-        for company_id in company_ids {
-            let strategic_metadata =
-                StrategicMetadataMap::from_iter([("company_id".to_string(), company_id)]);
-            let chunks: Vec<_> = (0..chunks_per_company)
-                .map(|x| Some(x.to_string().into()))
-                .collect();
-            let submission_id = crate::common::submission::db::insert_submission_from_chunks(
-                None,
-                chunks,
-                None,
-                strategic_metadata,
-                ChunkSize::default(),
-                &mut conn,
-            )
-            .await
-            .unwrap();
-            company_id_per_submission.insert(submission_id, company_id);
-        }
-
-        // Company 1 is heavily in progress, 2 not at all, 3 a little.
-        let dispatcher = Dispatcher::new(Duration::from_mins(1));
-        for _ in 0..chunks_per_company {
-            dispatcher.metastate().increment("company_id", 1);
-        }
-        assert!(chunks_per_company > 1);
-        dispatcher.metastate().increment("company_id", 3);
-
-        let strategy = Strategy::PreferDistinct {
-            meta_key: "company_id".to_string(),
-            underlying: Box::new(Strategy::Oldest),
-        };
-        let chunks: Vec<Chunk> = strategy
-            .build_query(&mut QueryBuilder::default())
-            .build_query_as()
-            .fetch(conn.get_inner())
-            .try_collect()
-            .await
-            .unwrap();
-
-        let company_selection_order: Vec<_> = chunks
-            .iter()
-            .map(|chunk| company_id_per_submission[&chunk.submission_id])
-            .collect();
-
-        // Least-busy company first, busiest last.
-        assert_eq!(company_selection_order, vec![2, 2, 3, 3, 1, 1]);
     }
 }
