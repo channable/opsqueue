@@ -35,7 +35,7 @@ insta = { version = "1.47.2", default-features = false }
 itertools = { version = "0.15.0", default-features = false }
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 moro-local = { version = "0.4.0", default-features = false }
-object_store = { version = "0.14.0", default-features = false, features = ["gcp", "http"] }
+object_store = { version = "0.14.0", default-features = false, features = ["gcp", "http", "fs"] }
 once_cell = { version = "1.21.4", default-features = false }
 opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
 opentelemetry-http = { version = "0.32", default-features = false }
