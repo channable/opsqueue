@@ -59,7 +59,6 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true }
 moro-local.workspace = true
 thiserror.workspace = true
 either.workspace = true
-serde-error.workspace = true
 backon.workspace = true
 rand.workspace = true
 rustc-hash.workspace = true
@@ -80,17 +79,7 @@ workspace-hack.workspace = true
 workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 insta.workspace = true
-assert_matches.workspace = true
-
-# [[bench]]
-# name = "chunks_select"
-# harness = false
-
-# [[bench]]
-# name = "submissions_insert"
-# harness = false
 
 [features]
 # Dependencies only in use by the server-logic:

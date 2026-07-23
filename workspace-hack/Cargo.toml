@@ -29,12 +29,11 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
 libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-num-traits = { version = "0.2" }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 opentelemetry = { version = "0.32" }
 opentelemetry-http = { version = "0.32", features = ["reqwest-blocking"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["internal-logs", "logs", "metrics", "rt-tokio", "trace"] }
 rand = { version = "0.9" }
-regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std", "unicode-perl", "unicode-word-boundary"] }
 regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode-perl"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "rustls", "stream"] }
@@ -69,7 +68,7 @@ futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-num-traits = { version = "0.2" }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
