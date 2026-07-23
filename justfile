@@ -75,6 +75,18 @@ nix-test-integration *TEST_ARGS: nix-build
 
   timeout --signal term --kill-after {{pytest_timeout_kill_seconds}} {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
+# Benchmark query cost and render a graph.
+[group('bench')]
+bench-chunks-select:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cargo bench --bench chunks_select
+
+  cd libs/opsqueue_python
+  source "./.setup_local_venv.sh"
+  cd -
+  python opsqueue/benches/plot_chunks_select.py
+
 # Run all linters, fast and slow
 [group('lint')]
 lint: (lint-light "--all-files") lint-heavy

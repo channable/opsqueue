@@ -79,7 +79,14 @@ workspace-hack.workspace = true
 workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 insta.workspace = true
+assert_matches.workspace = true
+
+[[bench]]
+name = "chunks_select"
+harness = false
+required-features = ["server-logic"]
 
 [features]
 # Dependencies only in use by the server-logic:
