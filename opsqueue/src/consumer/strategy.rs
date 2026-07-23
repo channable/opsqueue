@@ -151,12 +151,7 @@ impl Strategy {
                     qb.push(")");
                 }
                 // Submissions ranked by in-flight chunks.
-                qb.push(
-                    // MATERIALIZED is necessary to preserve the order.
-                    ", ranked_submissions AS MATERIALIZED (
-                        SELECT inner.submission_id
-                        FROM inner",
-                );
+                qb.push(" SELECT inner.submission_id FROM inner");
                 for i in 0..prefer_distinct_metakeys.len() {
                     qb.push(format_args!(
                         " LEFT JOIN counts_{i} ON inner.submission_id = counts_{i}.submission_id",
@@ -169,7 +164,7 @@ impl Strategy {
                     }
                     qb.push(format_args!("counts_{i}.count ASC NULLS FIRST"));
                 }
-                qb.push(" ) SELECT submission_id FROM ranked_submissions")
+                qb
             }
         }
     }
@@ -457,20 +452,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
-            ORDER BY
-              counts_0.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -521,20 +510,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
-            ORDER BY
-              counts_0.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -550,13 +533,11 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        6, 3, MATERIALIZE ranked_submissions
-        11, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        13, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        35, 6, USE TEMP B-TREE FOR ORDER BY
-        47, 3, SCAN ranked_submissions
-        58, 0, SCAN underlying_submissions
-        60, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        8, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        10, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        32, 3, USE TEMP B-TREE FOR ORDER BY
+        44, 0, SCAN underlying_submissions
+        46, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -605,20 +586,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
-            ORDER BY
-              counts_0.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -634,19 +609,17 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        6, 3, MATERIALIZE ranked_submissions
-        8, 6, CO-ROUTINE inner
-        9, 8, COMPOUND QUERY
-        10, 9, LEFT-MOST SUBQUERY
-        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
-        22, 9, UNION ALL
-        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        39, 6, SCAN inner
-        42, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        65, 6, USE TEMP B-TREE FOR ORDER BY
-        77, 3, SCAN ranked_submissions
-        88, 0, SCAN underlying_submissions
-        90, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        5, 3, CO-ROUTINE inner
+        6, 5, COMPOUND QUERY
+        7, 6, LEFT-MOST SUBQUERY
+        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        19, 6, UNION ALL
+        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        36, 3, SCAN inner
+        39, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        62, 3, USE TEMP B-TREE FOR ORDER BY
+        74, 0, SCAN underlying_submissions
+        76, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -701,22 +674,16 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
-              LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
-            ORDER BY
-              counts_0.count ASC NULLS FIRST,
-              counts_1.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+            LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST,
+            counts_1.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -732,27 +699,23 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        6, 3, MATERIALIZE ranked_submissions
-        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        14, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        23, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        53, 6, USE TEMP B-TREE FOR ORDER BY
-        65, 3, SCAN ranked_submissions
-        76, 0, SCAN underlying_submissions
-        78, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        9, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        11, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        20, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        50, 3, USE TEMP B-TREE FOR ORDER BY
+        62, 0, SCAN underlying_submissions
+        64, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
 
         let explained = explain(qb, &mut conn).await;
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submissions
-        6, 3, MATERIALIZE ranked_submissions
-        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        14, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        23, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        53, 6, USE TEMP B-TREE FOR ORDER BY
-        65, 3, SCAN ranked_submissions
-        76, 0, SCAN underlying_submissions
-        78, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        9, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        11, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        20, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        50, 3, USE TEMP B-TREE FOR ORDER BY
+        62, 0, SCAN underlying_submissions
+        64, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
