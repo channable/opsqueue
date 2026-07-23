@@ -212,12 +212,33 @@ pub struct SubmissionCancelled {
     pub cancelled_at: DateTime<Utc>,
 }
 
+/// A submission that has been paused.
+///
+/// Once a submission is paused, it gets moved to the `submissions_paused`
+/// table, and its old `submissions` record gets deleted. All remaining
+/// (non-completed, non-failed) chunks are similarly moved to `chunks_paused`.
+///
+/// A paused submission can be unpaused (resumed) or cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionPaused {
+    pub id: SubmissionId,
+    pub prefix: Option<String>,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
+    pub chunk_size: ChunkSize,
+    pub metadata: Option<Metadata>,
+    #[serde(default)]
+    pub strategic_metadata: StrategicMetadataMap,
+    pub otel_trace_carrier: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
     Cancelled(SubmissionCancelled),
+    Paused(SubmissionPaused),
 }
 
 impl Default for Submission {
@@ -283,6 +304,7 @@ pub mod db {
                 DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound,
                 TooManyMatchingSubmissions,
             },
+            submission::SubmissionPaused,
         },
         db::{Connection, True, WriterConnection, WriterPool},
     };
@@ -428,9 +450,123 @@ pub mod db {
         res
     }
 
+    #[tracing::instrument(skip(chunks, conn))]
+    pub(crate) async fn insert_paused_submission(
+        submission: Submission,
+        chunks: Vec<Chunk>,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), DatabaseError> {
+        use axum_prometheus::metrics::counter;
+        use futures::FutureExt as _;
+
+        let chunks_total = submission.chunks_total.into();
+        tracing::debug!("Inserting paused submission {}", submission.id);
+
+        let res = conn
+            .transaction(move |mut tx| {
+                async move {
+                    insert_paused_submission_raw(&submission, &mut tx).await?;
+                    insert_submission_metadata_raw(
+                        &submission,
+                        &submission.strategic_metadata,
+                        &mut tx,
+                    )
+                    .await?;
+                    super::chunk::db::insert_many_paused_chunks(&chunks, &mut tx).await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        counter!(crate::prometheus::SUBMISSIONS_PAUSED_COUNTER).increment(1);
+        counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
+        counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
+        res
+    }
+
+    #[tracing::instrument(skip(conn))]
+    async fn insert_paused_submission_raw(
+        submission: &Submission,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query!(
+            "
+        INSERT INTO submissions_paused (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ",
+            submission.id,
+            submission.prefix,
+            submission.chunks_total,
+            submission.chunks_done,
+            submission.metadata,
+            submission.otel_trace_carrier,
+            submission.chunk_size.0,
+        )
+        .execute(conn.get_inner())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Unpause a paused submission. Atomically moves it back from `submissions_paused`
+    /// to `submissions` and its chunks from `chunks_paused` to `chunks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseError`] if the transaction or any SQL query fails.
+    ///
+    /// Returns [`SubmissionNotFound`] if the submission is not currently paused.
+    #[tracing::instrument(skip(conn))]
+    pub async fn unpause_submission(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                unpause_submission_raw(id, &mut tx).await?;
+                super::chunk::db::restore_paused_chunks(id, &mut tx).await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn unpause_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let row = query!(
+            "
+    INSERT INTO submissions
+    (id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size)
+    SELECT id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size
+    FROM submissions_paused WHERE id = $1;
+
+    DELETE FROM submissions_paused WHERE id = $2 RETURNING *;
+    ",
+            id,
+            id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if row.is_none() {
+            Err(E::R(SubmissionNotFound(id)))
+        } else {
+            counter!(crate::prometheus::SUBMISSIONS_UNPAUSED_COUNTER).increment(1);
+            Ok(())
+        }
+    }
+
     /// Creates a new submission with the given chunks and inserts it into the database.
     ///
-    /// If the number of chunks is 0, the submission is marked as completed immediately afterwards.
+    /// If `paused` is false and the number of chunks is 0, the submission is marked
+    /// as completed immediately afterwards.
+    ///
+    /// If `paused` is true, the submission is inserted directly into `submissions_paused`
+    /// (and its chunks into `chunks_paused`), so it won't be picked up by consumers
+    /// until explicitly unpaused. Zero-chunk paused submissions stay paused.
     ///
     /// # Panics
     ///
@@ -446,6 +582,7 @@ pub mod db {
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
         chunk_size: ChunkSize,
+        paused: bool,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = SubmissionId::new();
@@ -461,7 +598,7 @@ pub mod db {
             strategic_metadata,
             otel_trace_carrier,
         };
-        let iter = chunks_contents
+        let chunks: Vec<Chunk> = chunks_contents
             .into_iter()
             .enumerate()
             .map(move |(chunk_index, uri)| {
@@ -469,25 +606,30 @@ pub mod db {
                 Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
             })
             .collect();
-        insert_submission(submission, iter, &mut conn).await?;
-        // Empty submissions get special handling: we mark them as completed right away.
-        // See https://github.com/channable/opsqueue/issues/86 for rationale.
-        if len == 0 {
-            match maybe_complete_submission(submission_id, conn).await {
-                // Forward our database errors to the caller.
-                Err(E::L(e)) => return Err(e),
-                // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
-                Err(E::R(_)) => {
-                    tracing::warn!(%submission_id, "Presumed zero-length submission not found");
-                }
-                // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
-                // Our future selves might thank us.
-                Ok(true) => {
-                    tracing::debug!(%submission_id, "Zero-length submission marked as completed");
-                }
-                // This should never happen. If it does, better log it.
-                Ok(false) => {
-                    tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
+
+        if paused {
+            insert_paused_submission(submission, chunks, &mut conn).await?;
+        } else {
+            insert_submission(submission, chunks, &mut conn).await?;
+            // Empty submissions get special handling: we mark them as completed right away.
+            // See https://github.com/channable/opsqueue/issues/86 for rationale.
+            if len == 0 {
+                match maybe_complete_submission(submission_id, conn).await {
+                    // Forward our database errors to the caller.
+                    Err(E::L(e)) => return Err(e),
+                    // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
+                    Err(E::R(_)) => {
+                        tracing::warn!(%submission_id, "Presumed zero-length submission not found");
+                    }
+                    // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
+                    // Our future selves might thank us.
+                    Ok(true) => {
+                        tracing::debug!(%submission_id, "Zero-length submission marked as completed");
+                    }
+                    // This should never happen. If it does, better log it.
+                    Ok(false) => {
+                        tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
+                    }
                 }
             }
         }
@@ -578,10 +720,13 @@ pub mod db {
             r#"
             SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $2
+            SELECT id AS "id: SubmissionId" FROM submissions_paused WHERE prefix = $2
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $3
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $3
+            UNION ALL
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $4
             "#,
+            prefix,
             prefix,
             prefix,
             prefix
@@ -807,6 +952,40 @@ pub mod db {
             return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
         }
 
+        let paused_row_opt = query!(
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size!: ChunkSize"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_paused.id
+              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
+            , otel_trace_carrier
+        FROM submissions_paused WHERE id = $1
+        "#,
+            id
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if let Some(row) = paused_row_opt {
+            let paused_submission = SubmissionPaused {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                chunk_size: row.chunk_size,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.0,
+                otel_trace_carrier: row.otel_trace_carrier,
+            };
+            return Ok(Some(SubmissionStatus::Paused(paused_submission)));
+        }
+
         Ok(None)
     }
 
@@ -876,6 +1055,15 @@ pub mod db {
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
                             }
+                            Ok(Some(SubmissionStatus::Paused(_))) => {
+                                // Paused submissions are cancellable.
+                                cancel_paused_submission_notx(id, &mut tx).await.map_err(
+                                    |e| match e {
+                                        E::L(db_err) => E::L(db_err),
+                                        E::R(not_found) => E::R(E::L(not_found)),
+                                    },
+                                )
+                            }
                             Err(db_err) => Err(E::L(db_err)),
                         }
                     }
@@ -899,6 +1087,22 @@ pub mod db {
         Ok(())
     }
 
+    /// Do not call directly! Must be called inside a transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseError`] if any SQL query fails.
+    ///
+    /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
+    pub async fn cancel_paused_submission_notx(
+        id: SubmissionId,
+        mut conn: impl WriterConnection<Transaction = True>,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        cancel_paused_submission_raw(id, &mut conn).await?;
+        super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
+        Ok(())
+    }
+
     #[tracing::instrument(skip(conn))]
     pub(super) async fn cancel_submission_raw(
         id: SubmissionId,
@@ -913,6 +1117,38 @@ pub mod db {
     SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
 
     DELETE FROM submissions WHERE id = $3 RETURNING *;
+    ",
+            now,
+            id,
+            id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await?;
+        if submission_opt.is_none() {
+            Err(E::R(SubmissionNotFound(id)))
+        } else {
+            counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+            histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+                crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+            );
+            Ok(())
+        }
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn cancel_paused_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let now = chrono::prelude::Utc::now();
+
+        let submission_opt = query!(
+            "
+    INSERT INTO submissions_cancelled
+    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions_paused WHERE id = $2;
+
+    DELETE FROM submissions_paused WHERE id = $3 RETURNING *;
     ",
             now,
             id,
@@ -1092,6 +1328,40 @@ pub mod db {
         Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
+    /// Count paused submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_submissions_paused(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_paused;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
+    /// Count cancelled submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_submissions_cancelled(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_cancelled;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
     /// Transactionally removes all completed/failed submissions,
     /// including all their chunks and associated strategic metadata.
     ///
@@ -1200,6 +1470,8 @@ pub mod db {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
+    use assert_matches::assert_matches;
+
     use chrono::Utc;
     use chunk::ChunkSize;
     use itertools::Itertools;
@@ -1207,6 +1479,7 @@ pub mod test {
     use sqlx::{Row, SqliteConnection};
 
     use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
     use crate::db::{Connection as _, WriterPool};
 
     use super::db::*;
@@ -1445,6 +1718,7 @@ pub mod test {
             None,
             strategic_metadata.clone(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1520,6 +1794,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1530,6 +1805,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1540,6 +1816,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1550,6 +1827,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1582,6 +1860,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1592,6 +1871,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1602,6 +1882,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1655,6 +1936,7 @@ pub mod test {
             StrategicMetadataMap::default(),
             // chunk size
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1759,5 +2041,126 @@ pub mod test {
         );
         let deserialized: SubmissionCancelled = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, cancelled);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_submission_status_paused(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        let query = r"
+        SELECT
+              id
+            , prefix
+            , chunks_total
+            , chunks_done
+            , chunk_size
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_paused.id
+              ) AS strategic_metadata
+            , otel_trace_carrier
+        FROM submissions_paused WHERE id = 1
+        ";
+
+        let explained = explain_query_plan(query, &mut conn).await;
+        assert_non_regressing_query_plan(query, &explained);
+        insta::assert_snapshot!(explained, @r"
+        3, 0, SEARCH submissions_paused USING INDEX sqlite_autoindex_submissions_paused_1 (id=?)
+        15, 0, CORRELATED SCALAR SUBQUERY 1
+        20, 15, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_unpause_submission(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
+
+        unpause_submission(submission.id, &mut conn).await.unwrap();
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 3);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_cancel_paused_submission(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
+
+        cancel_submission(submission.id, &mut conn).await.unwrap();
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_cancelled(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 3);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_submission_status_paused(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let status = submission_status(submission.id, &mut conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_matches!(status, SubmissionStatus::Paused(_));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    /// Test that an empty submission inserted in the paused state stays paused
+    /// (unlike empty non-paused submissions which are auto-completed).
+    pub async fn insert_empty_paused_submission_stays_paused(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) =
+            Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
     }
 }
