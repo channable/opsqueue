@@ -92,15 +92,6 @@ class TryFromIntError(IncorrectUsageError):
     pass
 
 
-class ChunkNotFoundError(IncorrectUsageError):
-    """
-    Raised when a method is used to look up information about a chunk
-    but the chunk doesn't exist within the Opsqueue.
-    """
-
-    pass
-
-
 class SubmissionNotFoundError(IncorrectUsageError):
     """
     Raised when a method is used to look up information about a submission

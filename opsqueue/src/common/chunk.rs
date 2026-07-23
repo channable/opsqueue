@@ -225,13 +225,13 @@ impl Chunk {
 #[cfg(feature = "server-logic")]
 pub mod db {
     use super::{
-        Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, ChunkSize, DateTime, SubmissionId,
+        Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, DateTime, SubmissionId, Utc,
     };
-    use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
+    use crate::common::errors::{DatabaseError, E, SubmissionNotFound};
     use crate::db::{Connection, True, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};
     use sqlx::{QueryBuilder, Sqlite};
-    use sqlx::{query, query_as};
+    use sqlx::{query, query_as, query_scalar};
 
     impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
         fn encode_by_ref(
@@ -300,25 +300,18 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
-    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-        let _chunk_size: Result<ChunkSize, E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> =
-            conn.transaction(move |mut tx| {
-                Box::pin(async move {
-                    let completed_work =
-                        complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
-                    crate::common::submission::db::maybe_complete_submission(
-                        chunk_id.submission_id,
-                        &mut tx,
-                    )
-                    .await
-                    .map_err(|e| match e {
-                        E::L(e) => E::L(e),
-                        E::R(e) => E::R(E::L(e)),
-                    })?;
-                    Ok(completed_work.unwrap_or_default())
-                })
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
+                crate::common::submission::db::maybe_complete_submission(
+                    chunk_id.submission_id,
+                    &mut tx,
+                )
+                .await
             })
-            .await;
+        })
+        .await?;
 
         counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         Ok(())
@@ -334,9 +327,9 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut tx: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<Option<ChunkSize>> {
+    ) -> sqlx::Result<()> {
         let now = chrono::prelude::Utc::now();
-        query!(
+        let chunk_moved = query!(
             "
         INSERT INTO chunks_completed
         (submission_id, chunk_index, output_content, completed_at)
@@ -353,26 +346,42 @@ pub mod db {
             chunk_id.submission_id,
             chunk_id.chunk_index,
         )
-        .fetch_one(tx.get_inner())
-        .await?;
-        // Defense in depth: Above query should never be called twice on the same chunk.
-        // If it _does_ happen, it means that either a consumer is attempting a chunk they didn't reserve,
-        // or we gave out the same reservation twice.
+        .fetch_optional(tx.get_inner())
+        .await?
+        .is_some();
+        // Defense in depth: Above query could be called twice on the same chunk. For instance,
+        // when the server was restarted and the reservations are forgotten, and the same chunk
+        // was reserved again.
         //
-        // By returning early if the chunk was not found,
-        // we ensure that even in these situations
-        // we never mess up the submission's `chunks_done` counter.
+        // In addition, cancelling a submission while a chunk is reserved also results in the chunk
+        // not being in the `chunks` table. Which is fine, because cancelled submissions count as
+        // failed.
+        //
+        // By only updating `chunks_done` when we actually moved a chunk, we ensure that we never
+        // mess up the submission's `chunks_done` counter.
+        //
+        // This does mean we potentially run the same chunk twice, but that is fine because we
+        // assume chunks to be processed idempotently.
         //
         // (Not doing that resulted in a hard-to-track-down bug in the past.
         // https://github.com/channable/opsqueue/issues/76
         // )
-        sqlx::query_scalar!(
-            "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
-            chunk_id.submission_id,
-        )
-        .fetch_one(tx.get_inner())
-        .await
-        .map(|opt| opt.map(ChunkSize))
+        if chunk_moved {
+            sqlx::query_scalar!(
+                "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
+                chunk_id.submission_id,
+            )
+                .fetch_one(tx.get_inner())
+                .await?;
+        } else {
+            tracing::warn!(
+                "Could not complete chunk {:?} because it was either: \
+                completed, failed, or cancelled before. Ignoring.",
+                chunk_id
+            );
+        }
+
+        Ok(())
     }
 
     /// Increment retries for a chunk, or move it to failed state.
@@ -394,7 +403,7 @@ pub mod db {
                         submission_id,
                         chunk_index,
                     } = chunk_id;
-                    let fields = query!(
+                    let retries = query_scalar!(
                         "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = $1 AND chunk_index = $2
@@ -403,23 +412,33 @@ pub mod db {
                         submission_id,
                         chunk_index
                     )
-                    .fetch_one(tx.get_inner())
+                    .fetch_optional(tx.get_inner())
                     .await?;
-                    tracing::trace!("Retries: {}", fields.retries);
-                    if fields.retries >= max_retries.into() {
-                        crate::common::submission::db::fail_submission_notx(
-                            submission_id,
-                            chunk_index,
-                            failure,
-                            &mut tx,
-                        )
-                        .await?;
+                    if let Some(retries) = retries {
+                        tracing::trace!("Retries: {}", retries);
+                        if retries >= max_retries.into() {
+                            crate::common::submission::db::fail_submission_notx(
+                                submission_id,
+                                chunk_index,
+                                failure,
+                                &mut tx,
+                            )
+                            .await?;
 
-                        Ok::<_, sqlx::Error>(true)
+                            Ok::<_, sqlx::Error>(true)
+                        } else {
+                            counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
+                            // When retrying, the chunk re-enters ('stays') in the backlog,
+                            // so we *don't* decrement the backlog gauge here.
+                            Ok::<_, sqlx::Error>(false)
+                        }
                     } else {
-                        counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
-                        // When retrying, the chunk re-enters ('stays') in the backlog,
-                        // so we *don't* decrement the backlog gauge here.
+                        tracing::warn!(
+                            "Could not fail chunk {:?} because it was either: \
+                            completed, failed, or cancelled before. Ignoring.",
+                            chunk_id
+                        );
+
                         Ok::<_, sqlx::Error>(false)
                     }
                 })
