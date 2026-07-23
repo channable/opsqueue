@@ -116,5 +116,10 @@ nix-build-bin: (_nix-build "opsqueue")
 [group('nix')]
 nix-build-python: (_nix-build "python.pkgs.opsqueue_python")
 
+# Build Nix-derivation of binary with a release tag stamped in without recompiling (release profile)
+[group('nix')]
+nix-build-bin-tagged TAG:
+  nix build --expr "(import ./nix/nixpkgs-pinned.nix {}).opsqueue.withTag \"{{TAG}}\"" --print-out-paths --print-build-logs --no-link --option sandbox true
+
 _nix-build +TARGETS:
   nix build --file nix/nixpkgs-pinned.nix --print-out-paths --print-build-logs --no-link --option sandbox true {{TARGETS}}

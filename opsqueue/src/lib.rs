@@ -43,10 +43,25 @@ pub mod config;
 /// as written in the Rust packages's `Cargo.toml`
 pub const VERSION_CARGO_SEMVER: &str = env!("CARGO_PKG_VERSION");
 
-#[allow(clippy::const_is_empty)]
+/// Fixed-size buffer holding the release tag stamped into the binary during the Nix build.
+///
+/// Layout: `OPSQUEUE_TAG:` (13 bytes, marker) + tag value (up to 51 bytes, null-padded).
+/// The Nix build patches the 51-byte tag field in the pre-compiled binary via [`stamp-tag.py`]
+/// without recompiling Rust, keeping the compilation cached across tag-only changes.
+///
+/// [`stamp-tag.py`]: ../../stamp-tag.py
+#[used]
+#[unsafe(no_mangle)]
+pub static OPSQUEUE_RELEASE_TAG: [u8; 64] =
+    *b"OPSQUEUE_TAG:dev\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
 #[must_use]
 pub fn version_info() -> String {
-    format!("v{VERSION_CARGO_SEMVER}")
+    const MARKER_LEN: usize = b"OPSQUEUE_TAG:".len();
+    let tag = std::str::from_utf8(&OPSQUEUE_RELEASE_TAG[MARKER_LEN..])
+        .unwrap_or("invalid-utf8")
+        .trim_end_matches('\0');
+    format!("v{VERSION_CARGO_SEMVER} ({tag})")
 }
 
 /// Shared constant with the migrations that all the tests can reference, to avoid the generated
