@@ -85,12 +85,17 @@ lint-heavy: clippy mypy
 
 # Rust static analysis
 [group('lint')]
+clippy-fix:
+  # `cargo clippy --fix` caps lints to warnings internally; keep its artifacts separate.
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --fix --allow-dirty --allow-staged -- -Dwarnings
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --no-default-features --fix --allow-dirty --allow-staged -- -Dwarnings
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --all-features --fix --allow-dirty --allow-staged -- -Dwarnings
+
+# Rust static analysis
+[group('lint')]
 clippy:
-  cargo clippy --no-deps --all-targets --fix --allow-dirty --allow-staged -- -Dwarnings
   cargo clippy --no-deps --all-targets -- -Dwarnings
-  cargo clippy --no-deps --all-targets --no-default-features --fix --allow-dirty --allow-staged -- -Dwarnings
   cargo clippy --no-deps --all-targets --no-default-features -- -Dwarnings
-  cargo clippy --no-deps --all-targets --all-features --fix --allow-dirty --allow-staged -- -Dwarnings
   cargo clippy --no-deps --all-targets --all-features -- -Dwarnings
 
 # Python static analysis type-checker
