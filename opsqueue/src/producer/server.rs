@@ -67,6 +67,10 @@ impl ServerState {
                 post(cancel_submission),
             )
             .route(
+                "/submissions/unpause/{submission_id}",
+                post(unpause_submission),
+            )
+            .route(
                 "/submissions/count_completed",
                 get(submissions_count_completed),
             )
@@ -134,6 +138,29 @@ async fn cancel_submission(
     }
 }
 
+/// 200 if the submission was successfully unpaused.
+/// 404 if the submission could not be found in the paused state.
+/// 500 if a `DatabaseError` occurred.
+async fn unpause_submission(
+    State(state): State<ServerState>,
+    Path(submission_id): Path<SubmissionId>,
+) -> Result<(), Response> {
+    let mut conn = state
+        .pool
+        .writer_conn()
+        .await
+        .map_err(|e| ServerError(e.into()).into_response())?;
+    match submission::db::unpause_submission(submission_id, &mut conn).await {
+        Ok(()) => {
+            // Wake up any waiting consumers now that new chunks are available.
+            state.notify_on_insert.notify_waiters();
+            Ok(())
+        }
+        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
+        Err(R(not_found_err)) => Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response()),
+    }
+}
+
 async fn submission_status(
     State(state): State<ServerState>,
     Path(submission_id): Path<SubmissionId>,
@@ -195,6 +222,7 @@ async fn insert_submission(
         request.metadata,
         request.strategic_metadata,
         request.chunk_size.unwrap_or_default(),
+        request.paused,
         &mut conn,
     )
     .await?;
@@ -204,8 +232,10 @@ async fn insert_submission(
     // this is the moment to perform an extra WAL checkpoint
     let _ = db::perform_explicit_wal_checkpoint(conn).await;
 
-    // We've done a new insert! Let's tell any waiting consumers!
-    state.notify_on_insert.notify_waiters();
+    // Notify waiting consumers, but only for non-paused submissions.
+    if !request.paused {
+        state.notify_on_insert.notify_waiters();
+    }
 
     Ok(Json(submission_id))
 }
@@ -218,7 +248,7 @@ pub struct InsertSubmissionResponse {
 async fn submissions_count(State(state): State<ServerState>) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions(&mut conn).await?;
-    Ok(Json(u64::from(count)))
+    Ok(Json(count))
 }
 
 async fn submissions_count_completed(
@@ -226,5 +256,5 @@ async fn submissions_count_completed(
 ) -> Result<Json<u64>, ServerError> {
     let mut conn = state.pool.reader_conn().await?;
     let count = submission::db::count_submissions_completed(&mut conn).await?;
-    Ok(Json(u64::from(count)))
+    Ok(Json(count))
 }

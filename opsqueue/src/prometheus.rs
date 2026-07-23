@@ -18,6 +18,8 @@ pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total_count";
 pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed_count";
 pub const SUBMISSIONS_FAILED_COUNTER: &str = "submissions_failed_count";
 pub const SUBMISSIONS_CANCELLED_COUNTER: &str = "submissions_cancelled_count";
+pub const SUBMISSIONS_PAUSED_COUNTER: &str = "submissions_paused_count";
+pub const SUBMISSIONS_UNPAUSED_COUNTER: &str = "submissions_unpaused_count";
 pub const SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM: &str = "submissions_complete_duration_seconds";
 pub const SUBMISSIONS_DURATION_FAIL_HISTOGRAM: &str = "submissions_fail_duration_seconds";
 pub const SUBMISSIONS_DURATION_CANCEL_HISTOGRAM: &str = "submissions_cancel_duration_seconds";
@@ -65,6 +67,16 @@ pub fn describe_metrics() {
         SUBMISSIONS_CANCELLED_COUNTER,
         Unit::Count,
         "Number of submissions cancelled (client-requested cancellation, not failure) permanently"
+    );
+    describe_counter!(
+        SUBMISSIONS_PAUSED_COUNTER,
+        Unit::Count,
+        "Number of submissions paused"
+    );
+    describe_counter!(
+        SUBMISSIONS_UNPAUSED_COUNTER,
+        Unit::Count,
+        "Number of submissions unpaused (resumed)"
     );
     describe_histogram!(
         SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM,
@@ -210,9 +222,7 @@ pub fn time_delta_as_f64(td: chrono::TimeDelta) -> f64 {
 #[allow(clippy::cast_precision_loss)]
 pub async fn calculate_scaling_metrics(db_pool: &DBPools) -> anyhow::Result<()> {
     let mut conn = db_pool.reader_conn().await?;
-    let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn)
-        .await?
-        .into();
+    let chunks_backlog_count: u64 = crate::common::chunk::db::count_chunks(&mut conn).await?;
     gauge!(CHUNKS_BACKLOG_GAUGE).set(chunks_backlog_count as f64);
     let ops_backlog_count: f64 =
         crate::common::chunk::db::count_ops_in_backlog_estimate(&mut conn).await?;

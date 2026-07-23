@@ -194,6 +194,49 @@ impl Client {
         .await
     }
 
+    /// Unpause a paused submission, making it available to consumers again.
+    ///
+    /// Returns an error if the submission is not currently paused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the server returns an unexpected status.
+    pub async fn unpause_submission(
+        &self,
+        submission_id: SubmissionId,
+    ) -> Result<(), E![SubmissionNotFound, InternalProducerClientError]> {
+        (|| async {
+            let base_url = &self.base_url;
+            let response = self
+                .http_client
+                .post(format!("{base_url}/submissions/unpause/{submission_id}"))
+                .send()
+                .await
+                .map_err(|e| R(e.into()))?;
+            let status = response.status();
+            match status {
+                StatusCode::OK => Ok(()),
+                StatusCode::NOT_FOUND => {
+                    let not_found_err = response
+                        .json::<SubmissionNotFound>()
+                        .await
+                        .map_err(|e| R(e.into()))?;
+                    Err(L(not_found_err))
+                }
+                _ => Err(R(InternalProducerClientError::UnexpectedStatus(status))),
+            }
+        })
+        .retry(retry_policy())
+        .when(|e| match e {
+            L(_) => false,
+            R(client_err) => client_err.is_ephemeral(),
+        })
+        .notify(|err, dur| {
+            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+        })
+        .await
+    }
+
     /// Get the status of an existing submission identified by its `submission_id`.
     ///
     /// This uses the GET `/producer/submissions` endpoint.
@@ -380,7 +423,6 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use ux::u63;
 
     use crate::{
         common::{
@@ -421,6 +463,7 @@ mod tests {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -441,7 +484,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(0));
+        assert_eq!(count, 0);
 
         let submission = InsertSubmission {
             chunk_contents: ChunkContents::Direct {
@@ -450,6 +493,7 @@ mod tests {
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
+            paused: false,
         };
         client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -459,7 +503,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(1));
+        assert_eq!(count, 1);
 
         client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -477,7 +521,7 @@ mod tests {
         let count = submission::db::count_submissions(&mut conn)
             .await
             .expect("Should be OK");
-        assert_eq!(count, u63::new(4));
+        assert_eq!(count, 4);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -493,6 +537,7 @@ mod tests {
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
+            paused: false,
         };
         let submission_id = client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -507,8 +552,85 @@ mod tests {
         match status {
             SubmissionStatus::Completed(_)
             | SubmissionStatus::Failed(_, _)
-            | SubmissionStatus::Cancelled(_) => {
+            | SubmissionStatus::Cancelled(_)
+            | SubmissionStatus::Paused(_) => {
                 panic!("Expected a SubmissionStatus that is still Inprogress, got: {status:?}");
+            }
+            SubmissionStatus::InProgress(submission) => {
+                assert_eq!(submission.chunks_done, 0);
+                assert_eq!(submission.chunks_total, 3);
+                assert_eq!(submission.id, submission_id);
+            }
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn test_insert_paused_submission_and_unpause(pool: sqlx::SqlitePool) {
+        let url = "0.0.0.0:4003";
+        start_server_in_background(&pool, url).await;
+        let client = Client::new(url);
+
+        let pool = WriterPool::new(pool);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let count = submission::db::count_submissions(&mut conn)
+            .await
+            .expect("Should be OK");
+        assert_eq!(count, 0);
+
+        let submission = InsertSubmission {
+            chunk_contents: ChunkContents::Direct {
+                contents: vec![None, None, None],
+            },
+            metadata: None,
+            strategic_metadata: StrategicMetadataMap::default(),
+            chunk_size: None,
+            paused: true,
+        };
+        let submission_id = client
+            .insert_submission(&submission, &std::collections::HashMap::default())
+            .await
+            .expect("Should be OK");
+
+        let count = submission::db::count_submissions_paused(&mut conn)
+            .await
+            .expect("Should be OK");
+        assert_eq!(count, 1);
+
+        let status: SubmissionStatus = client
+            .get_submission(submission_id)
+            .await
+            .expect("Should be OK")
+            .expect("Should be Some");
+        match status {
+            SubmissionStatus::Completed(_)
+            | SubmissionStatus::Failed(_, _)
+            | SubmissionStatus::Cancelled(_)
+            | SubmissionStatus::InProgress(_) => {
+                panic!("Expected a SubmissionStatus that is Paused, got: {status:?}");
+            }
+            SubmissionStatus::Paused(submission) => {
+                assert_eq!(submission.chunks_done, 0);
+                assert_eq!(submission.chunks_total, 3);
+                assert_eq!(submission.id, submission_id);
+            }
+        }
+
+        client
+            .unpause_submission(submission_id)
+            .await
+            .expect("Should be OK");
+
+        let status: SubmissionStatus = client
+            .get_submission(submission_id)
+            .await
+            .expect("Should be OK")
+            .expect("Should be Some");
+        match status {
+            SubmissionStatus::Completed(_)
+            | SubmissionStatus::Failed(_, _)
+            | SubmissionStatus::Cancelled(_)
+            | SubmissionStatus::Paused(_) => {
+                panic!("Expected a SubmissionStatus that is InProgress, got: {status:?}");
             }
             SubmissionStatus::InProgress(submission) => {
                 assert_eq!(submission.chunks_done, 0);

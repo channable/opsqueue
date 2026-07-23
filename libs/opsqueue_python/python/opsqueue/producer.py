@@ -27,6 +27,7 @@ from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionFailed,
     ChunkFailed,
     SubmissionNotCancellable,
+    SubmissionPaused,
 )
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "SubmissionNotCancellable",
     "SubmissionNotCancellableError",
     "SubmissionNotFoundError",
+    "SubmissionPaused",
     "TooManyMatchingSubmissionsError",
     "ChunkFailed",
 ]
@@ -96,6 +98,7 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
+        timeout: float | None = None,
     ) -> Iterator[Any]:
         """
         Inserts a submission into the queue, and blocks until it is completed.
@@ -116,6 +119,7 @@ class ProducerClient:
                 metadata=metadata,
                 strategic_metadata=strategic_metadata,
                 chunk_size=chunk_size,
+                timeout=timeout,
             )
             return _unchunk_iterator(results_iter, serialization_format)
 
@@ -146,6 +150,7 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
+        paused: bool = False,
     ) -> SubmissionId:
         """
         Inserts a submission into the queue,
@@ -162,6 +167,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
+            paused=paused,
         )
 
     def blocking_stream_completed_submission(
@@ -169,6 +175,7 @@ class ProducerClient:
         submission_id: SubmissionId,
         *,
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        timeout: float | None = None,
     ) -> Iterator[Any]:
         """
         Blocks until the submission is completed.
@@ -181,7 +188,7 @@ class ProducerClient:
           (after retrying a consumer kept failing on one of the chunks)
         """
         return _unchunk_iterator(
-            self.blocking_stream_completed_submission_chunks(submission_id),
+            self.blocking_stream_completed_submission_chunks(submission_id, timeout),
             serialization_format,
         )
 
@@ -211,6 +218,7 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
+        timeout: float | None = None,
     ) -> Iterator[bytes]:
         """
         Inserts an already-chunked submission into the queue, and blocks until it is completed.
@@ -229,7 +237,7 @@ class ProducerClient:
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
         )
-        return self.blocking_stream_completed_submission_chunks(submission_id)
+        return self.blocking_stream_completed_submission_chunks(submission_id, timeout)
 
     async def async_run_submission_chunks(
         self,
@@ -259,6 +267,7 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
+        paused: bool = False,
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
@@ -275,10 +284,13 @@ class ProducerClient:
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
             otel_trace_carrier=otel_trace_carrier,
+            paused=paused,
         )
 
     def blocking_stream_completed_submission_chunks(
-        self, submission_id: SubmissionId
+        self,
+        submission_id: SubmissionId,
+        timeout: float | None = None,
     ) -> Iterator[bytes]:
         """
         Blocks until the submission is completed, and returns an iterator that lazily
@@ -289,7 +301,9 @@ class ProducerClient:
         - `SubmissionFailedError` if the submission failed permanently
           (after retrying a consumer kept failing on one of the chunks)
         """
-        return self.inner.blocking_stream_completed_submission_chunks(submission_id)  # type: ignore[no-any-return]
+        return self.inner.blocking_stream_completed_submission_chunks(  # type: ignore[no-any-return]
+            submission_id, timeout
+        )
 
     async def async_stream_completed_submission_chunks(
         self, submission_id: SubmissionId
@@ -326,7 +340,7 @@ class ProducerClient:
 
     def cancel_submission(self, submission_id: SubmissionId) -> None:
         """
-        Cancel a specific submission that is in progress.
+        Cancel a specific submission that is in progress or paused.
 
         Returns None if the submission was successfully cancelled.
 
@@ -336,6 +350,19 @@ class ProducerClient:
         - `SubmissionNotFoundError` if the submission could not be found.
         """
         self.inner.cancel_submission(submission_id)
+
+    def unpause_submission(self, submission_id: SubmissionId) -> None:
+        """
+        Unpause a specific submission that is currently paused,
+        making it available to consumers.
+
+        Returns None if the submission was successfully unpaused.
+
+        Raises:
+        - `SubmissionNotFoundError` if the submission is not currently paused.
+        - `InternalProducerClientError` if there is a low-level internal error.
+        """
+        self.inner.unpause_submission(submission_id)
 
     def get_submission_status(
         self, submission_id: SubmissionId

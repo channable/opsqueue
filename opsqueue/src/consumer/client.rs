@@ -573,6 +573,7 @@ mod tests {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await

@@ -10,6 +10,10 @@ pub struct InsertSubmission {
     #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub chunk_size: Option<chunk::ChunkSize>,
+    /// When `true`, the submission is inserted in a paused state and will not
+    /// be dispatched to consumers until explicitly unpaused.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 /// Either embedded chunk contents or a reference to object storage.
