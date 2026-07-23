@@ -53,7 +53,7 @@ test-integration *TEST_ARGS: build-bin build-python
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
+  pytest --timeout {{pytest_timeout_seconds}} --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
@@ -68,7 +68,19 @@ nix-test-integration *TEST_ARGS: nix-build
   export OPSQUEUE_BIN="${nix_build_bin_dir}/bin/opsqueue"
   export RUST_LOG="opsqueue=debug"
 
-  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
+  pytest --timeout {{pytest_timeout_seconds}} --color=yes {{TEST_ARGS}}
+
+# Benchmark query cost and render a graph.
+[group('bench')]
+bench-chunks-select:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cargo bench --bench chunks_select
+
+  cd libs/opsqueue_python
+  source "./.setup_local_venv.sh"
+  cd -
+  python opsqueue/benches/plot_chunks_select.py
 
 # Run all linters, fast and slow
 [group('lint')]
