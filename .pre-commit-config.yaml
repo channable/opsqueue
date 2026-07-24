@@ -44,6 +44,12 @@ repos:
         language: system
         types: [nix]
         exclude: extra
+      - id: sqlx
+        name: SQLX Database up-to-date
+        entry: sqlx migrate run --database-url "sqlite://./opsqueue/opsqueue_example_database_schema.db" --source ./migrations
+        language: system
+        files: ^(migrations|opsqueue/migrations)/.*\.sql$
+        pass_filenames: false
       - id: sqlx-test-needs-migrator
         name: Require `#[sqlx::test(migrator = "crate::MIGRATOR")]` for test-build speed
         entry: '#\[sqlx::test\]'
