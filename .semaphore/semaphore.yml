@@ -3,8 +3,8 @@ name: "Opsqueue CI"
 
 agent:
   machine:
-    type: "f1-standard-2"
-    os_image: "ubuntu2204"
+    type: "f1-standard-4"
+    os_image: "ubuntu2404"
 
 # If we push a new build to some branch that isn't master, and another build is
 # already running, we cancel it.
@@ -60,17 +60,14 @@ blocks:
       when: "branch = 'master'"
     task:
       jobs:
-        - name: "Build Opsqueue binary (in release mode) & run unit tests"
+        - name: "Build Opsqueue binary & Python library (in release mode) & run unit tests"
           commands:
-            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build-bin)) | grep -v '\\.drv$' | cachix push channable"
+            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build)) | grep -v '\\.drv$' | cachix push channable"
             # Once a day, we update the devenv cache.
             # Except when fresh, this takes < 1 second
             # but it cannot live in the prologue
             # as that might corrupt it
             - cache store nix-store-$(date -u -Idate) /nix
-        - name: "Build Python library (in release mode)"
-          commands:
-            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build-python)) | grep -v '\\.drv$' | cachix push channable"
   - name: "Integration"
     dependencies:
       - "Build"
