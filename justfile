@@ -5,6 +5,8 @@ _default:
 # Timeout (seconds) for Python integration test recipes.
 # Override with OPSQUEUE_PYTEST_TIMEOUT, e.g. OPSQUEUE_PYTEST_TIMEOUT=600 just nix-test-integration
 pytest_timeout_seconds := env_var_or_default("OPSQUEUE_PYTEST_TIMEOUT", "60")
+# The kill window is chosen to be above the `1s` join window on `multiprocess.Process`.
+pytest_timeout_kill_seconds := "2s"
 
 # Build-and-run the opsqueue binary (development profile)
 [group('run')]
@@ -53,7 +55,7 @@ test-integration *TEST_ARGS: build-bin build-python
   cd libs/opsqueue_python
   source "./.setup_local_venv.sh"
 
-  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
+  timeout --signal term --kill-after {{pytest_timeout_kill_seconds}} {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
@@ -68,7 +70,7 @@ nix-test-integration *TEST_ARGS: nix-build
   export OPSQUEUE_BIN="${nix_build_bin_dir}/bin/opsqueue"
   export RUST_LOG="opsqueue=debug"
 
-  timeout {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
+  timeout --signal term --kill-after {{pytest_timeout_kill_seconds}} {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
 # Run all linters, fast and slow
 [group('lint')]
