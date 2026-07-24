@@ -54,7 +54,7 @@ craneLib.buildPackage (
     # Needed for the SQLx macros:
     env = {
       DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
-      LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+      LIBSQLITE3_SYS_USE_PKG_CONFIG = "${pkgs.sqlite.dev}";
     };
 
   }

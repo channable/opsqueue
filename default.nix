@@ -67,7 +67,9 @@ let
         pythonEnv
       ];
       shellHook = ''
-        export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
+        # We need Cargo to re-run if the sqlite3 dev package changes, so we set this env var to point to it.
+        export LIBSQLITE3_SYS_USE_PKG_CONFIG="${pkgs.sqlite.dev}"
+        # This is needed for the libsqlite3-sys crate to find the correct sqlite3.
         export PKG_CONFIG_PATH="${pkgs.sqlite.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:''${PKG_CONFIG_PATH}}"
       '';
     };

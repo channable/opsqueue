@@ -81,7 +81,7 @@ let
       // {
         inherit cargoArtifacts;
         src = wheelSrc;
-        env.LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+        env.LIBSQLITE3_SYS_USE_PKG_CONFIG = "${pkgs.sqlite.dev}";
       }
     )).overrideAttrs
       (old: {
