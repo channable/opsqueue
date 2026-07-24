@@ -309,13 +309,13 @@ pub mod test {
         8, 2, CORRELATED SCALAR SUBQUERY 4
         12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
         22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+        25, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
+        33, 22, CREATE BLOOM FILTER
+        62, 1, UNION ALL
+        65, 62, SCAN chunks
+        68, 62, CORRELATED SCALAR SUBQUERY 6
+        72, 68, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        80, 68, REUSE LIST SUBQUERY 2
         ");
     }
 
@@ -399,13 +399,13 @@ pub mod test {
         8, 2, CORRELATED SCALAR SUBQUERY 4
         12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
         22, 8, LIST SUBQUERY 2
-        24, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 1, UNION ALL
-        61, 58, SCAN chunks
-        64, 58, CORRELATED SCALAR SUBQUERY 6
-        68, 64, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        78, 64, LIST SUBQUERY 2
-        80, 78, SCAN json_each VIRTUAL TABLE INDEX 0:
+        25, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
+        33, 22, CREATE BLOOM FILTER
+        62, 1, UNION ALL
+        65, 62, SCAN chunks
+        68, 62, CORRELATED SCALAR SUBQUERY 6
+        72, 68, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        80, 68, REUSE LIST SUBQUERY 2
         ");
     }
 
@@ -498,27 +498,25 @@ pub mod test {
         16, 4, CORRELATED SCALAR SUBQUERY 5
         20, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
         30, 16, LIST SUBQUERY 3
-        32, 30, SCAN json_each VIRTUAL TABLE INDEX 0:
-        58, 3, UNION ALL
-        61, 58, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        71, 58, CORRELATED SCALAR SUBQUERY 5
-        75, 71, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        85, 71, LIST SUBQUERY 3
-        87, 85, SCAN json_each VIRTUAL TABLE INDEX 0:
-        113, 3, UNION ALL
-        114, 113, COMPOUND QUERY
-        115, 114, LEFT-MOST SUBQUERY
-        118, 115, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        127, 115, CORRELATED SCALAR SUBQUERY 7
-        131, 127, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        141, 127, LIST SUBQUERY 3
-        143, 141, SCAN json_each VIRTUAL TABLE INDEX 0:
-        169, 114, UNION ALL
-        172, 169, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        182, 169, CORRELATED SCALAR SUBQUERY 7
-        186, 182, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        196, 182, LIST SUBQUERY 3
-        198, 196, SCAN json_each VIRTUAL TABLE INDEX 0:
+        33, 30, SCAN json_each VIRTUAL TABLE INDEX 0:
+        41, 30, CREATE BLOOM FILTER
+        62, 3, UNION ALL
+        65, 62, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        75, 62, CORRELATED SCALAR SUBQUERY 5
+        79, 75, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        87, 75, REUSE LIST SUBQUERY 3
+        107, 3, UNION ALL
+        108, 107, COMPOUND QUERY
+        109, 108, LEFT-MOST SUBQUERY
+        112, 109, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        121, 109, CORRELATED SCALAR SUBQUERY 7
+        125, 121, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        133, 121, REUSE LIST SUBQUERY 3
+        153, 108, UNION ALL
+        156, 153, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        166, 153, CORRELATED SCALAR SUBQUERY 7
+        170, 166, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        178, 166, REUSE LIST SUBQUERY 3
         ");
     }
 
@@ -661,89 +659,105 @@ pub mod test {
         18, 6, CORRELATED SCALAR SUBQUERY 5
         22, 18, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
         32, 18, LIST SUBQUERY 3
-        34, 32, SCAN json_each VIRTUAL TABLE INDEX 0:
-        52, 6, CORRELATED SCALAR SUBQUERY 11
-        56, 52, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        66, 52, LIST SUBQUERY 9
-        68, 66, SCAN json_each VIRTUAL TABLE INDEX 0:
-        94, 5, UNION ALL
-        97, 94, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        107, 94, CORRELATED SCALAR SUBQUERY 5
-        111, 107, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        121, 107, LIST SUBQUERY 3
-        123, 121, SCAN json_each VIRTUAL TABLE INDEX 0:
-        141, 94, CORRELATED SCALAR SUBQUERY 11
-        145, 141, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        155, 141, LIST SUBQUERY 9
-        157, 155, SCAN json_each VIRTUAL TABLE INDEX 0:
-        183, 5, UNION ALL
-        184, 183, COMPOUND QUERY
-        185, 184, LEFT-MOST SUBQUERY
-        188, 185, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        197, 185, CORRELATED SCALAR SUBQUERY 7
-        201, 197, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        211, 197, LIST SUBQUERY 3
-        213, 211, SCAN json_each VIRTUAL TABLE INDEX 0:
-        231, 185, CORRELATED SCALAR SUBQUERY 11
-        235, 231, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        245, 231, LIST SUBQUERY 9
-        247, 245, SCAN json_each VIRTUAL TABLE INDEX 0:
-        273, 184, UNION ALL
-        276, 273, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        286, 273, CORRELATED SCALAR SUBQUERY 7
-        290, 286, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        300, 286, LIST SUBQUERY 3
-        302, 300, SCAN json_each VIRTUAL TABLE INDEX 0:
-        320, 273, CORRELATED SCALAR SUBQUERY 11
-        324, 320, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        334, 320, LIST SUBQUERY 9
-        336, 334, SCAN json_each VIRTUAL TABLE INDEX 0:
-        362, 184, UNION ALL
-        363, 362, COMPOUND QUERY
-        364, 363, LEFT-MOST SUBQUERY
-        365, 364, COMPOUND QUERY
-        366, 365, LEFT-MOST SUBQUERY
-        369, 366, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        378, 366, CORRELATED SCALAR SUBQUERY 5
-        382, 378, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        392, 378, LIST SUBQUERY 3
-        394, 392, SCAN json_each VIRTUAL TABLE INDEX 0:
-        412, 366, CORRELATED SCALAR SUBQUERY 13
-        416, 412, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        426, 412, LIST SUBQUERY 9
-        428, 426, SCAN json_each VIRTUAL TABLE INDEX 0:
-        454, 365, UNION ALL
-        457, 454, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        467, 454, CORRELATED SCALAR SUBQUERY 5
-        471, 467, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        481, 467, LIST SUBQUERY 3
-        483, 481, SCAN json_each VIRTUAL TABLE INDEX 0:
-        501, 454, CORRELATED SCALAR SUBQUERY 13
-        505, 501, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        515, 501, LIST SUBQUERY 9
-        517, 515, SCAN json_each VIRTUAL TABLE INDEX 0:
-        543, 365, UNION ALL
-        544, 543, COMPOUND QUERY
-        545, 544, LEFT-MOST SUBQUERY
-        548, 545, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        557, 545, CORRELATED SCALAR SUBQUERY 7
-        561, 557, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        571, 557, LIST SUBQUERY 3
-        573, 571, SCAN json_each VIRTUAL TABLE INDEX 0:
-        591, 545, CORRELATED SCALAR SUBQUERY 13
-        595, 591, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        605, 591, LIST SUBQUERY 9
-        607, 605, SCAN json_each VIRTUAL TABLE INDEX 0:
-        633, 544, UNION ALL
-        636, 633, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        646, 633, CORRELATED SCALAR SUBQUERY 7
-        650, 646, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        660, 646, LIST SUBQUERY 3
-        662, 660, SCAN json_each VIRTUAL TABLE INDEX 0:
-        680, 633, CORRELATED SCALAR SUBQUERY 13
-        684, 680, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        694, 680, LIST SUBQUERY 9
-        696, 694, SCAN json_each VIRTUAL TABLE INDEX 0:
+        35, 32, SCAN json_each VIRTUAL TABLE INDEX 0:
+        43, 32, CREATE BLOOM FILTER
+        56, 6, CORRELATED SCALAR SUBQUERY 11
+        60, 56, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        70, 56, LIST SUBQUERY 9
+        73, 70, SCAN json_each VIRTUAL TABLE INDEX 0:
+        81, 70, CREATE BLOOM FILTER
+        102, 5, UNION ALL
+        105, 102, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        115, 102, CORRELATED SCALAR SUBQUERY 5
+        119, 115, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        129, 115, LIST SUBQUERY 3
+        132, 129, SCAN json_each VIRTUAL TABLE INDEX 0:
+        140, 129, CREATE BLOOM FILTER
+        153, 102, CORRELATED SCALAR SUBQUERY 11
+        157, 153, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        167, 153, LIST SUBQUERY 9
+        170, 167, SCAN json_each VIRTUAL TABLE INDEX 0:
+        178, 167, CREATE BLOOM FILTER
+        199, 5, UNION ALL
+        200, 199, COMPOUND QUERY
+        201, 200, LEFT-MOST SUBQUERY
+        204, 201, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        213, 201, CORRELATED SCALAR SUBQUERY 7
+        217, 213, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        227, 213, LIST SUBQUERY 3
+        230, 227, SCAN json_each VIRTUAL TABLE INDEX 0:
+        238, 227, CREATE BLOOM FILTER
+        251, 201, CORRELATED SCALAR SUBQUERY 11
+        255, 251, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        265, 251, LIST SUBQUERY 9
+        268, 265, SCAN json_each VIRTUAL TABLE INDEX 0:
+        276, 265, CREATE BLOOM FILTER
+        297, 200, UNION ALL
+        300, 297, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        310, 297, CORRELATED SCALAR SUBQUERY 7
+        314, 310, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        324, 310, LIST SUBQUERY 3
+        327, 324, SCAN json_each VIRTUAL TABLE INDEX 0:
+        335, 324, CREATE BLOOM FILTER
+        348, 297, CORRELATED SCALAR SUBQUERY 11
+        352, 348, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        362, 348, LIST SUBQUERY 9
+        365, 362, SCAN json_each VIRTUAL TABLE INDEX 0:
+        373, 362, CREATE BLOOM FILTER
+        394, 200, UNION ALL
+        395, 394, COMPOUND QUERY
+        396, 395, LEFT-MOST SUBQUERY
+        397, 396, COMPOUND QUERY
+        398, 397, LEFT-MOST SUBQUERY
+        401, 398, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        410, 398, CORRELATED SCALAR SUBQUERY 5
+        414, 410, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        424, 410, LIST SUBQUERY 3
+        427, 424, SCAN json_each VIRTUAL TABLE INDEX 0:
+        435, 424, CREATE BLOOM FILTER
+        448, 398, CORRELATED SCALAR SUBQUERY 13
+        452, 448, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        462, 448, LIST SUBQUERY 9
+        465, 462, SCAN json_each VIRTUAL TABLE INDEX 0:
+        473, 462, CREATE BLOOM FILTER
+        494, 397, UNION ALL
+        497, 494, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        507, 494, CORRELATED SCALAR SUBQUERY 5
+        511, 507, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        521, 507, LIST SUBQUERY 3
+        524, 521, SCAN json_each VIRTUAL TABLE INDEX 0:
+        532, 521, CREATE BLOOM FILTER
+        545, 494, CORRELATED SCALAR SUBQUERY 13
+        549, 545, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        559, 545, LIST SUBQUERY 9
+        562, 559, SCAN json_each VIRTUAL TABLE INDEX 0:
+        570, 559, CREATE BLOOM FILTER
+        591, 397, UNION ALL
+        592, 591, COMPOUND QUERY
+        593, 592, LEFT-MOST SUBQUERY
+        596, 593, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        605, 593, CORRELATED SCALAR SUBQUERY 7
+        609, 605, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        619, 605, LIST SUBQUERY 3
+        622, 619, SCAN json_each VIRTUAL TABLE INDEX 0:
+        630, 619, CREATE BLOOM FILTER
+        643, 593, CORRELATED SCALAR SUBQUERY 13
+        647, 643, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        657, 643, LIST SUBQUERY 9
+        660, 657, SCAN json_each VIRTUAL TABLE INDEX 0:
+        668, 657, CREATE BLOOM FILTER
+        689, 592, UNION ALL
+        692, 689, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        702, 689, CORRELATED SCALAR SUBQUERY 7
+        706, 702, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        716, 702, LIST SUBQUERY 3
+        719, 716, SCAN json_each VIRTUAL TABLE INDEX 0:
+        727, 716, CREATE BLOOM FILTER
+        740, 689, CORRELATED SCALAR SUBQUERY 13
+        744, 740, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
+        754, 740, LIST SUBQUERY 9
+        757, 754, SCAN json_each VIRTUAL TABLE INDEX 0:
+        765, 754, CREATE BLOOM FILTER
         ");
     }
 
