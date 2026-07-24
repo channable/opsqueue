@@ -59,7 +59,10 @@ let
     inherit version pname;
     src = depsSrc;
     strictDeps = true;
-    nativeBuildInputs = [ python pkgs.pkg-config ];
+    nativeBuildInputs = [
+      python
+      pkgs.pkg-config
+    ];
     buildInputs = [ pkgs.sqlite ];
     cargoExtraArgs = "--package opsqueue_python";
     doCheck = false;
