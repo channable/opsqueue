@@ -91,3 +91,15 @@ blocks:
           commands:
             - "just lint-light --show-diff-on-failure --all"
             - "just lint-heavy"
+  - name: "Tag"
+    dependencies: []
+    run:
+      when: "tag =~ '^v[[:digit:]]+$'"
+    task:
+      jobs:
+        - name: "Build & stamp tagged Opsqueue binary"
+          commands:
+            # Build the binary with the release tag stamped in. The Rust compilation is
+            # pulled from cachix (built by the regular Build block); only the fast
+            # binary-patching step runs here.
+            - "nix-store -qR --include-outputs $(nix-store -qd $(just nix-build-bin-tagged \"$SEMAPHORE_GIT_TAG_NAME\")) | grep -v '\\.drv$' | cachix push channable"

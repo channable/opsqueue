@@ -44,16 +44,35 @@ let
   # serially, this is the slowest part on CI. We have other CI linting steps, i.e. `cargo clippy`,
   # that report these errors earlier.
   cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { cargoCheckCommand = "true"; });
+
+  opsqueuePkg = craneLib.buildPackage (
+    commonArgs
+    // {
+      inherit cargoArtifacts;
+
+      # Needed for the SQLx macros:
+      env = {
+        DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
+      };
+    }
+  );
 in
-craneLib.buildPackage (
-  commonArgs
-  // {
-    inherit cargoArtifacts;
-
-    # Needed for the SQLx macros:
-    env = {
-      DATABASE_URL = "sqlite:///build/opsqueue/opsqueue/opsqueue_example_database_schema.db";
-    };
-
-  }
-)
+opsqueuePkg.overrideAttrs (old: {
+  passthru = (old.passthru or { }) // {
+    # Stamp a release tag into the pre-compiled binary without recompiling Rust.
+    #
+    # Usage (in a downstream Nix derivation):
+    #   pkgs.opsqueue.withTag "v1.2.3"
+    #
+    # The `pkgs.opsqueue` derivation is built once and cached; only the fast
+    # binary-patching step reruns when the tag changes.
+    withTag =
+      tag:
+      pkgs.runCommand "${opsqueuePkg.name}-tagged" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+        mkdir -p $out/bin
+        cp ${opsqueuePkg}/bin/opsqueue $out/bin/opsqueue
+        chmod +w $out/bin/opsqueue
+        python3 ${./stamp-tag.py} "$out/bin/opsqueue" ${lib.escapeShellArg tag}
+      '';
+  };
+})
