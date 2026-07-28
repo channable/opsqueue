@@ -69,6 +69,9 @@ tracing = { version = "0.1.41", features = ["log"] }
 tracing-opentelemetry = { version = "0.33.0" }
 tracing-subscriber = { version = "0.3", features = ["std", "env-filter", "fmt"] }
 url = { version = "2.5.2" }
+# Intentional lower bound this is to avoid building ICU4X and instead rely on `unicode.rs`.
+# See: https://docs.rs/crate/idna_adapter/latest
+idna_adapter = { version = "1.1.0" }
 uuid = { version = "1.23.1", features = ["v7", "fast-rng", "serde"] }
 ux = { version = "0.1.6" }
 workspace-hack = { version = "0.1", path = "workspace-hack" }
