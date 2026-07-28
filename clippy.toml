@@ -5,6 +5,7 @@ allowed-duplicate-crates = [
     "digest",
     "getrandom",
     "hashbrown",
+    "itertools",
     "r-efi",
     "rand",
     "rand_core",

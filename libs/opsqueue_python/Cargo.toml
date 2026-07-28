@@ -1,7 +1,7 @@
 [package]
 name = "opsqueue_python"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -11,32 +11,31 @@ crate-type = ["cdylib"]
 [dependencies]
 # Opsqueue itself:
 # NOTE: We compile without the default `sqlx` feature, reducing the amount of dependencies
-opsqueue = {path = "../../opsqueue/", default-features = false, features = ["client-logic"] }
+opsqueue = { workspace = true, features = ["client-logic"] }
 
 # General-purpose datatypes:
-uuid = {version = "1.23.1", features = [
-        "v7",                # Temporally orderable UUIDs with random component
-        "fast-rng",          # Use a faster (but still sufficiently random) RNG
-    ]}
-chrono = { version = "0.4.44"}
-ux = "0.1.6"
+uuid.workspace = true
+chrono.workspace = true
+ux.workspace = true
 
 # Concurrency:
-tokio = {version = "1.52", features = ["macros", "rt-multi-thread"]}
-futures = "0.3.32"
+tokio.workspace = true
+futures.workspace = true
 
 # Error handling:
-anyhow = "1.0.102"
-thiserror = "2.0.18"
+anyhow.workspace = true
+thiserror.workspace = true
 
 # Python FFI:
-pyo3 = { version = "0.28.3", features = ["chrono"] }
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime", "unstable-streams"] }
-once_cell = "1.21.4" # Only currently used for `unsync::OnceCell` as part of PyO3 async helpers.
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+once_cell.workspace = true # Only currently used for `unsync::OnceCell` as part of PyO3 async helpers.
 
 # Logging/tracing:
-pyo3-log = "0.13.3"
-tracing = { version = "0.1.41", features = ["log"] }
+pyo3-log.workspace = true
+tracing.workspace = true
+
+workspace-hack.workspace = true
 
 [lints]
 workspace = true
