@@ -22,7 +22,7 @@ def main() -> None:
         f"Starting {n_producers} producers... When `multiprocessing_consumer_preferdistinct.py` is used, expecting all submissions to finish roughly at the same time"
     )
     processes = [
-        multiprocessing.Process(target=run_a_producer, args=(id,))
+        multiprocessing.Process(target=run_a_producer, args=(id,), daemon=True)
         for id in range(n_producers)
     ]
     for p in processes:
