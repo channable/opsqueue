@@ -428,10 +428,12 @@ impl ProducerClient {
     }
 
     /// Stream output chunks as soon as each consumer has completed them.
+    #[must_use]
     pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
         self.streaming_submission_chunks(submission_id)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
@@ -527,9 +529,9 @@ impl ProducerClient {
                             let failure =
                                 crate::common::ChunkFailed::from_internal(chunk, &submission);
                             return Some((
-                                Err(StreamingChunkError::Failed(
+                                Err(StreamingChunkError::Failed(Box::new(
                                     crate::errors::SubmissionFailed(submission.into(), failure),
-                                )),
+                                ))),
                                 (
                                     client,
                                     object_store_client,
@@ -733,7 +735,7 @@ impl ProducerClient {
 enum StreamingChunkError {
     Retrieval(ChunkRetrievalError),
     Internal(InternalProducerClientError),
-    Failed(crate::errors::SubmissionFailed),
+    Failed(Box<crate::errors::SubmissionFailed>),
     SubmissionNotFound,
     Cancelled,
 }
@@ -757,7 +759,7 @@ impl From<CError<StreamingChunkError>> for PyErr {
         match value.0 {
             StreamingChunkError::Retrieval(error) => CError(error).into(),
             StreamingChunkError::Internal(error) => CError(error).into(),
-            StreamingChunkError::Failed(error) => CError(error).into(),
+            StreamingChunkError::Failed(error) => CError(*error).into(),
             error => PyException::new_err(error.to_string()),
         }
     }
