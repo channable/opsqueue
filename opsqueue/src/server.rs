@@ -1,4 +1,5 @@
 //! Defines the HTTP endpoints that are used by both the `producer` and `consumer` APIs
+use crate::tracing::as_dyn_error;
 use std::{
     any::Any,
     mem,
@@ -54,16 +55,18 @@ pub async fn serve_producer_and_consumer(
             Ok(addr) => {
                 tracing::info!("Server listening on {addr}");
                 if let Some(pipe) = config.report_bound_port_pipe.take()
-                    && let Err(err) = pipe.write_port(addr.port()) {
-                        tracing::warn!(
-                            "Failed to write bound port {} to pipe: {}",
-                            addr.port(),
-                            err
-                        );
-                    }
+                    && let Err(err) = pipe.write_port(addr.port())
+                {
+                    tracing::warn!(
+                        error = as_dyn_error(&err),
+                        "Failed to write bound port {} to pipe",
+                        addr.port(),
+                    );
+                }
             }
             Err(err) => tracing::warn!(
-                "Could not get locally bound address of the server, tried binding on {server_addr}: {err}"
+                error = as_dyn_error(&err),
+                "Could not get locally bound address of the server, tried binding on {server_addr}"
             ),
         }
         axum::serve(listener, router)
@@ -72,8 +75,14 @@ pub async fn serve_producer_and_consumer(
         Ok(())
     })
     .retry(retry_policy())
-    .notify(|e, d| tracing::error!("Error when binding server address: {e:?}, retrying in {d:?}"))
-    .await.inspect_err(|_|{
+    .notify(|e, d| {
+        tracing::error!(
+            error = as_dyn_error(e),
+            "Error when binding server address, retrying in {d:?}"
+        );
+    })
+    .await
+    .inspect_err(|_| {
         // Drop the pipe after the server start retries have been exhausted. This ensures that the
         // parent process can safely block on reading from the pipe.
         mem::drop(config.report_bound_port_pipe.take());

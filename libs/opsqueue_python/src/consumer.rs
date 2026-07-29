@@ -1,3 +1,4 @@
+use opsqueue::tracing::as_dyn_error;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::Duration;
@@ -199,13 +200,16 @@ impl ConsumerClient {
                     }
                     // In essence we 'catch `Exception` (but _not_ `BaseException` here)
                     Err(CError(L(e))) => {
-                        tracing::info!("Opsqueue consumer closing because of exception: {e:?}");
+                        tracing::info!(
+                            error = as_dyn_error(&e),
+                            "Opsqueue consumer closing because of exception"
+                        );
                         return CError(L(e));
                     }
                     Err(CError(R(err))) => {
                         tracing::warn!(
-                            "Opsqueue consumer encountered a Rust error, but will continue: {}",
-                            err
+                            error = as_dyn_error(&err),
+                            "Opsqueue consumer encountered a Rust error, but will continue",
                         );
                     }
                 }

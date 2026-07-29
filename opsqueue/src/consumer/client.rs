@@ -1,6 +1,6 @@
+use crate::tracing::{anyhow_as_dyn_error, as_dyn_error};
 use std::{
     collections::HashMap,
-    error::Error,
     str::FromStr,
     sync::{
         Arc,
@@ -160,10 +160,15 @@ impl OuterClient {
     async fn initialize(&self) -> Client {
         tracing::info!("Initializing (or re-initializing) consumer client connection...");
         (|| Client::new(&self.1))
-        .retry(retry_policy())
-        .notify(|err, duration| { tracing::debug!("Error establishing consumer client WS connection. (Will retry in {duration:?}). Details: {err:?}") })
-        .await
-        .expect("Infinite retries should never return Err")
+            .retry(retry_policy())
+            .notify(|err, duration| {
+                tracing::debug!(
+                    error = anyhow_as_dyn_error(err),
+                    "Error establishing consumer client WS connection. (Will retry in {duration:?})"
+                );
+            })
+            .await
+            .expect("Infinite retries should never return Err")
     }
 
     /// When `false` is returned, the next call to the client will attempt to restore the connection.
@@ -356,7 +361,7 @@ impl Client {
                             break;
                         }
                         Some(Err(e)) => {
-                            tracing::error!("Opsqueue consumer client background task closing, reason: {e}");
+                            tracing::error!(error = as_dyn_error(&e), "Opsqueue consumer client background task closing, reason");
                             break;
                         },
                         Some(Ok(msg)) => {
@@ -389,7 +394,7 @@ impl Client {
                                                             failure: "Requester disappeared".into(),
                                                         },
                                                     ).await else { continue; };
-                                                    tracing::error!(error = &internal_error as &dyn Error, chunk_id = ?chunk_id, "Failed to return unhandled reservation to server");
+                                                    tracing::error!(error = as_dyn_error(&internal_error), chunk_id = ?chunk_id, "Failed to return unhandled reservation to server");
                                                 }
                                             },
                                         }
@@ -416,7 +421,7 @@ impl Client {
                                                         failure: "Reservation expired".into(),
                                                     },
                                                 ).await else { continue; };
-                                                tracing::error!(error = &internal_error as &dyn Error, chunk_id = ?chunk_id, "Failed to return expired reservation to server");
+                                                tracing::error!(error = as_dyn_error(&internal_error), chunk_id = ?chunk_id, "Failed to return expired reservation to server");
                                             },
                                         }
                                     }

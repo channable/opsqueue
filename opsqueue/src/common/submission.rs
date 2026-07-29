@@ -276,6 +276,7 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
+    use crate::tracing::as_dyn_error;
     use crate::{
         common::{
             MaxSubmissions, StrategicMetadataMap,
@@ -1179,7 +1180,7 @@ pub mod db {
             }
             .await;
             if let Err(e) = res {
-                tracing::error!("Error during periodic cleanup: {}", e);
+                tracing::error!(error = as_dyn_error(&e), "Error during periodic cleanup");
             }
             tokio::time::sleep(PERIODIC_CLEANUP_INTERVAL).await;
         }

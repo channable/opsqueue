@@ -4,6 +4,7 @@ use opentelemetry::{Context, propagation::TextMapCompositePropagator};
 use opentelemetry_http::{HeaderExtractor, HeaderInjector};
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 use rustc_hash::FxHashMap;
+use std::error::Error;
 
 #[must_use]
 pub fn context_from_headers(headers: &http::HeaderMap) -> Context {
@@ -56,4 +57,32 @@ pub fn propagator() -> TextMapCompositePropagator {
         Box::new(BaggagePropagator::new()),
         Box::new(TraceContextPropagator::new()),
     ])
+}
+
+/// Convenient function for converting an error into `dyn Error` for tracing.
+///
+/// When logging an error, convert the error to `dyn Error` using this function
+/// and assign it to the `error` field, rather than displaying the error, so
+/// that the source chain of the error is preserved.
+///
+/// ```ignore
+/// // Good:
+/// tracing::error!(error = as_dyn_error(e), "operation failed");
+///
+/// // Bad:
+/// tracing::error!("operation failed: {e}");
+/// tracing::error!(error = %e, "operation failed");
+/// ```
+pub fn as_dyn_error<T>(err: &T) -> &(dyn 'static + Error)
+where
+    T: 'static + Error,
+{
+    err
+}
+
+/// [`anyhow::Error`] does not implement [`Error`], so this function is
+/// separate from [`as_dyn_error`].
+#[must_use]
+pub fn anyhow_as_dyn_error(err: &anyhow::Error) -> &(dyn 'static + Error) {
+    err.as_ref()
 }
