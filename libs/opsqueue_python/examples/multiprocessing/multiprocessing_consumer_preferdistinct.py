@@ -25,7 +25,7 @@ def run_a_consumer(id: int) -> None:
 def main() -> None:
     n_consumers = 4
     processes = [
-        multiprocessing.Process(target=run_a_consumer, args=(id,))
+        multiprocessing.Process(target=run_a_consumer, args=(id,), daemon=True)
         for id in range(n_consumers)
     ]
     for p in processes:
