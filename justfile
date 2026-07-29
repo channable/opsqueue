@@ -1,3 +1,6 @@
+# Default to strict shell settings
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 # When just tryping `just`, show list of known commands
 _default:
   just --list --unsorted
@@ -43,11 +46,11 @@ test: test-unit test-integration
 # Rust unit test suite
 [group('test')]
 test-unit *TEST_ARGS:
-  cargo nextest run {{TEST_ARGS}}
+  cargo nextest run --workspace {{TEST_ARGS}}
 
 # Python integration test suite. Args are forwarded to pytest
 [group('test')]
-test-integration *TEST_ARGS: build-bin build-python
+test-integration *TEST_ARGS: build
   #!/usr/bin/env bash
   set -euo pipefail
   export OPSQUEUE_BIN="$PWD/target/debug/opsqueue"
@@ -74,7 +77,7 @@ nix-test-integration *TEST_ARGS: nix-build
 
 # Run all linters, fast and slow
 [group('lint')]
-lint: lint-light lint-heavy
+lint: (lint-light "--all-files") lint-heavy
 
 # Run only the fast per-file linters; these might opt to only look at the changed files. Args are passed to pre-commit
 [group('lint')]
@@ -83,7 +86,12 @@ lint-light *ARGS:
 
 # Run the slow linters/static analysers that need to look at everything
 [group('lint')]
-lint-heavy: clippy hakari mypy
+[parallel]
+lint-heavy: clippy-fix lint-cargo mypy
+
+# Serial execution on the main `CARGO_TARGET_DIR`
+[group('lint')]
+lint-cargo: clippy hakari
 
 # Verify the workspace-hack crate is up to date
 [group('lint')]
