@@ -355,9 +355,9 @@ impl Client {
 
 #[derive(thiserror::Error, Debug)]
 pub enum InternalProducerClientError {
-    #[error("HTTP request failed: {0}")]
+    #[error("HTTP request failed")]
     HTTPClientError(#[from] reqwest::Error),
-    #[error("Error decoding JSON response: {0}")]
+    #[error("Error decoding JSON response")]
     ResponseDecodingError(#[from] serde_json::Error),
     #[error("Internal client received unexpected status: {0}")]
     UnexpectedStatus(StatusCode),

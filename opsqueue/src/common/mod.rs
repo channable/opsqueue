@@ -51,18 +51,30 @@ impl std::fmt::Display for MaxSubmissions {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ParseMaxSubmissionsError {
-    #[error(transparent)]
-    NotANumber(#[from] std::num::ParseIntError),
-    #[error(transparent)]
-    TooLarge(#[from] MaxSubmissionsTooLarge),
-}
-
 impl std::str::FromStr for MaxSubmissions {
     type Err = ParseMaxSubmissionsError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let value: NonZero<u64> = s.parse()?;
         Ok(MaxSubmissions::new(value)?)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseMaxSubmissionsError {
+    #[error(transparent)]
+    NotANumber(std::num::ParseIntError),
+    #[error(transparent)]
+    TooLarge(MaxSubmissionsTooLarge),
+}
+
+impl From<std::num::ParseIntError> for ParseMaxSubmissionsError {
+    fn from(value: std::num::ParseIntError) -> Self {
+        Self::NotANumber(value)
+    }
+}
+
+impl From<MaxSubmissionsTooLarge> for ParseMaxSubmissionsError {
+    fn from(value: MaxSubmissionsTooLarge) -> Self {
+        Self::TooLarge(value)
     }
 }

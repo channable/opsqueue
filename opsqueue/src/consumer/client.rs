@@ -524,10 +524,10 @@ impl Client {
 
 #[derive(thiserror::Error, Debug)]
 pub enum InternalConsumerClientError {
-    #[error("Low-level error in the websocket connection: {0}")]
+    #[error("Low-level error in the websocket connection")]
     LowLevelWebsocketError(#[from] tokio_tungstenite::tungstenite::Error),
     #[error(
-        "The oneshot channel to receive a sync response to an earlier request was dropped before a response was received: {0}"
+        "The oneshot channel to receive a sync response to an earlier request was dropped before a response was received"
     )]
     OneshotSenderDropped(#[from] RecvError),
     #[error("Expected the sync response of kind {expected} but received {actual:?}")]

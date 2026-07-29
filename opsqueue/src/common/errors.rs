@@ -16,11 +16,8 @@ use super::{
     submission::{SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId},
 };
 
-// #[derive(Error, Debug, Clone, Serialize, Deserialize)]
-// #[error("Low-level database error: {0:?}")]
-// pub struct DatabaseError(#[from] pub serde_error::Error);
 #[cfg_attr(feature = "server-logic", derive(Error, Debug))]
-#[cfg_attr(feature = "server-logic", error("Low-level database error: {0:?}"))]
+#[cfg_attr(feature = "server-logic", error("Low-level database error"))]
 #[cfg(feature = "server-logic")]
 pub struct DatabaseError(#[from] pub sqlx::Error);
 
@@ -136,7 +133,7 @@ impl<L, R1, R2> From<E<R1, R2>> for E<L, E<R1, R2>> {
 }
 
 #[derive(Error, Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[error("You are using Opsqueue incorrectly. Details: {0}")]
+#[error("You are using Opsqueue incorrectly")]
 pub struct IncorrectUsage<E>(#[from] pub E);
 
 #[derive(Error, Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
