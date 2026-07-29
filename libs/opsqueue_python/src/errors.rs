@@ -151,6 +151,7 @@ impl From<CError<TooManyMatchingSubmissions>> for PyErr {
     }
 }
 
+#[derive(Debug)]
 pub struct SubmissionFailed(
     pub crate::common::SubmissionFailed,
     pub crate::common::ChunkFailed,
