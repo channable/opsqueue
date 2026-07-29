@@ -231,6 +231,14 @@ class ProducerClient:
         )
         return self.blocking_stream_completed_submission_chunks(submission_id)
 
+    def stream_submission_chunks(self, submission_id: SubmissionId) -> Iterator[bytes]:
+        return self.inner.stream_submission_chunks(submission_id)  # type: ignore[no-any-return]
+
+    async def async_stream_submission_chunks(
+        self, submission_id: SubmissionId
+    ) -> AsyncIterator[bytes]:
+        return await self.inner.async_stream_submission_chunks(submission_id)  # type: ignore[no-any-return]
+
     async def async_run_submission_chunks(
         self,
         chunk_contents: Iterable[bytes],

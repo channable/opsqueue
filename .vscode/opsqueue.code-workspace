@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "..",
+			"name": "opsqueue",
+		},
+		{
+			"path": "../libs/opsqueue_python",
+			"name": "opsqueue_python",
+		}
+	],
+	"settings": {}
+}
