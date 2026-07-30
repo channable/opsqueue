@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot the chunks_select benchmark: one subplot per backlog shape, a line per strategy.
 
-Reads target/chunks_select_bench.csv (written by the bench) and writes a PNG next to
+Reads chunks_select_bench.csv (written by the bench) and writes a SVG next to
 this script so it can be committed alongside the code it measures.
 
 """
@@ -21,7 +21,7 @@ def main() -> None:
     max_x = 0
 
     print(f"Reading CSV: {CSV_PATH}")
-    with open(CSV_PATH, newline="") as f:
+    with open(CSV_PATH) as f:
         for row in csv.DictReader(f):
             shape = row["shape"]
             size = int(row["backlog_size"])
@@ -34,9 +34,7 @@ def main() -> None:
             if shape not in shapes:
                 shapes.append(shape)
 
-    fig, axes = plt.subplots(
-        1, len(shapes), figsize=(7.5 * len(shapes), 5.5), squeeze=False
-    )
+    fig, axes = plt.subplots(1, len(shapes), figsize=(7.5 * len(shapes), 5.5))
     fig.suptitle("Reservation duration (no network in path)")
 
     for ax, shape in zip(axes.flatten(), shapes):

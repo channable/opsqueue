@@ -1,22 +1,11 @@
-/// FOR EACH shape:
-///   FOR EACH amount of chunks:
+/// For each shape:
+///   For each amount of chunks:
+///     Seed (all chunks) or extend (additional chunks) the database
 ///     FOR EACH strategy:
-///
-///         // Setup
-///         Create fresh temporary SQLite database
-///         Insert chunks
-///
-///         // MEASURE
-///         FOR _ in (SAMPLES + WARMUP):
-///             Start Timer
-///             Execute SQL Query -> Fetch EXACTLY ONE chunk
-///             Stop Timer
-///             IF (not warmup): save duration
-///
-///         // REPORT & CLEANUP
+///         Create new dispatcher.
+///         Run benchmark
 ///         Calculate stats
-///         Write result to terminal and CSV
-///         Delete temporary database files
+///         Write result
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{ChunkId, ChunkSize};
 use opsqueue::common::submission::db::insert_submission_from_chunks;
@@ -43,9 +32,9 @@ const CHUNKS_PER_METADATA_VALUE: u64 = CHUNKS_PER_SUBMISSION * SUBMISSIONS_PER_M
 const CHUNKS_PER_SUBMISSION: u64 = 1024;
 // Increase in the total amount of chunks for the `Shape::Realistic` strategy.
 const CHUNKS_STEP: usize = 500_000;
+const MAX_CHUNKS: u64 = 4_500_001;
 const METADATA_VALUES: u64 = 100_000;
 const SUBMISSIONS: u64 = 300_000;
-const MAX_CHUNKS: u64 = 5_000_000;
 // The amount of samples to collect per iteration of the
 // shape/amount_of_chunks/strategy main loop. Note that each "sample" itself
 // requires a number of reservations to be performed (see `bench_strategy`).
@@ -60,35 +49,27 @@ const RESERVATIONS_IN_WARMUP: usize = 5;
 
 #[derive(Debug)]
 pub struct BenchStats {
-    pub median: f64, // Median of medians
-    pub p10: f64,    // Lower bound of medians
-    pub p90: f64,    // Upper bound of medians
+    pub median: f64, // sorted_samples[len(samples) / 2]
+    pub p10: f64,    // sorted_samples[len(samples) * 0.1]
+    pub p90: f64,    // sorted_samples[len(samples) * 0.9]
 }
 
 #[allow(clippy::missing_panics_doc)]
 impl BenchStats {
     #[must_use]
+    /// Benchmark stats from reservation durations. For code simplicity, and
+    /// given it's only a benchmark, not library code, we intentionally avoid
+    /// the unnecessary error handling.
     pub fn new(runs: Vec<Vec<f64>>) -> Self {
-        // Calculate the median for each individual run
+        // Calculate the median for each individual run.
         let mut run_medians: Vec<f64> = runs
             .into_iter()
-            .filter_map(|mut run_samples| {
-                if run_samples.is_empty() {
-                    None
-                } else {
-                    run_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    Some(run_samples[run_samples.len() / 2])
-                }
+            .map(|mut run_samples| {
+                run_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                run_samples[run_samples.len() / 2]
             })
             .collect();
-        if run_medians.is_empty() {
-            return BenchStats {
-                p10: 0.,
-                median: 0.,
-                p90: 0.,
-            };
-        }
-        // Sort the N medians to find our distribution.
+        // Sort the N medians to find p10 etc. of the medians.
         run_medians.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let len = run_medians.len();
         BenchStats {
@@ -107,7 +88,7 @@ impl BenchStats {
 fn max_chunks_by_shape(shape: &Shape) -> Vec<u64> {
     let mut vector: Vec<u64> = vec![
         100, 500, 1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 15_000, 20_000, 30_000, 50_000,
-        75_000, 100_000,
+        75_000, 100_000, 200_000, 500_000, 1_000_000,
     ];
     if shape == &Shape::Realistic {
         let max = MAX_CHUNKS.min(METADATA_VALUES * CHUNKS_PER_METADATA_VALUE);
@@ -130,7 +111,10 @@ fn strategies() -> [(StrategyName, Strategy); 2] {
     ]
 }
 
-/// (total metadata values, `submissions_per_metadata_value`, chunks per submission) for a shape and total chunks.
+/// (total metadata values, `submissions_per_metadata_value`, chunks per
+/// submission) for a shape and total chunks. Note we don't always quite reach
+/// `total_chunks` due to integer division, we return the closest layout of
+/// chunks respecting the given shape <= `total_chunks`.
 fn layout(shape: &Shape, total_chunks: u64) -> (u64, u64, u64) {
     match shape {
         Shape::ManySubmissionsFewChunks => (total_chunks, 1, 1),
@@ -149,20 +133,53 @@ fn layout(shape: &Shape, total_chunks: u64) -> (u64, u64, u64) {
     }
 }
 
-/// Seeds a fresh DB with chunks according to a given `Shape`.
-async fn seed(shape: &Shape, total_chunks: u64) -> (db::DBPools, Dispatcher, PathBuf) {
-    let (total_metadata_values, submissions_per_metadata_value, chunks_per_submission) =
+/// Either seeds a fresh DB with all chunks or extend the existing DB with additional chunks.
+async fn seed_or_extend(
+    shape: &Shape,
+    total_chunks: u64,
+    current_db_pools: Option<db::DBPools>, // What was returned by `layout` on the previous call to `seed_or_extend`.
+    current_layout: Option<(u64, u64, u64)>,
+    db_path: &PathBuf,
+) -> (db::DBPools, Option<(u64, u64, u64)>) {
+    // Determine the layout of the data we want to insert.
+    let next_layout
+    @ (total_metadata_values, submissions_per_metadata_value, chunks_per_submission) =
         layout(shape, total_chunks);
+    // Check if we are seeding the database from scratch, or extending.
+    let mut we_are_extending = false;
+    let mut current_metadata_values = 0;
+    if let Some((
+        current_metadata_values_,
+        current_submissions_per_metadata_value,
+        current_chunks_per_submission,
+    )) = current_layout
+    {
+        // We can only extend if the shape of the data is compatible with the current inserted data.
+        if current_submissions_per_metadata_value == submissions_per_metadata_value
+            && current_chunks_per_submission == chunks_per_submission
+        {
+            we_are_extending = true;
+            current_metadata_values = current_metadata_values_;
+        }
+    }
+    // Time to acquire the DB connection. Either an existing connection, or set up from scratch.
+    println!(); // Visually separate each run.
+    let db_pools = if we_are_extending {
+        println!("Extending database with shape={shape:?} to total_chunks={total_chunks}:");
+        current_db_pools.unwrap()
+    } else {
+        println!("Seeding database with shape={shape:?} and total_chunks={total_chunks}:");
+        drop(current_db_pools);
+        std::fs::remove_file(db_path).ok();
+        std::fs::remove_file(db_path.with_extension("sqlite-wal")).ok();
+        std::fs::remove_file(db_path.with_extension("sqlite-shm")).ok();
+        db::open_and_setup(db_path.to_str().unwrap(), NonZero::new(16).unwrap()).await
+    };
     println!(
         "    Metadata values: {total_metadata_values:<30}\n    Submissions per metadata value: {submissions_per_metadata_value}\n    Chunks per submission: {chunks_per_submission}"
     );
-    let db_path = std::env::temp_dir().join("opsqueue_bench.sqlite");
-    // Remove the DB before the run.
-    let _ = std::fs::remove_file(&db_path);
-    let db_pools = db::open_and_setup(db_path.to_str().unwrap(), NonZero::new(16).unwrap()).await;
     let mut conn = db_pools.writer_conn().await.unwrap();
-    let dispatcher = Dispatcher::new(Duration::from_mins(1_000_000));
-    for metadata_value in 0..total_metadata_values {
+    for metadata_value in current_metadata_values..total_metadata_values {
         for _ in 0..submissions_per_metadata_value {
             let mut metadata = StrategicMetadataMap::default();
             metadata.insert(
@@ -182,7 +199,7 @@ async fn seed(shape: &Shape, total_chunks: u64) -> (db::DBPools, Dispatcher, Pat
             .unwrap();
         }
     }
-    (db_pools, dispatcher, db_path)
+    (db_pools, Some(next_layout))
 }
 
 /// Runs the selection query and fetches just the first chunk.
@@ -248,24 +265,43 @@ fn main() {
     let mut csv = std::fs::File::create(&csv_path)
         .unwrap_or_else(|e| panic!("Failed to create CSV at {}: {}", csv_path.display(), e));
     writeln!(csv, "shape,strategy,backlog_size,p10_us,median_us,p90_us").unwrap();
+    // Pretty header.
     println!(
         "{:<30} {:<35} {:<12} {:<10} {:<15}",
         "SHAPE", "STRATEGY", "SIZE", "MEDIAN", "P10 / P90"
     );
     println!("{}", "-".repeat(105));
+    let db_path = std::env::temp_dir().join("opsqueue_bench.sqlite");
     for shape in &[
         Shape::FewSubmissionsManyChunks,
         Shape::ManySubmissionsFewChunks,
         Shape::Realistic,
     ] {
+        // Track the current database state.
+        let mut db_pools: Option<db::DBPools> = None;
+        let mut current_layout: Option<(u64, u64, u64)> = None;
         for size in max_chunks_by_shape(shape) {
-            // Seed the database for each (shape, size), then bench each strategy.
-            let (db_pools, dispatcher, path) = runtime.block_on(seed(shape, size));
+            // Either seed a new database or extend an existing one.
+            let returned_pools;
+            (returned_pools, current_layout) = runtime.block_on(seed_or_extend(
+                shape,
+                size,
+                db_pools,
+                current_layout,
+                &db_path,
+            ));
+            db_pools = Some(returned_pools);
+            // Then for each strategy: hit the bench!
             for (strategy_label, strategy) in strategies() {
-                let stats = runtime.block_on(bench_strategy(&db_pools, &strategy, &dispatcher));
+                let dispatcher = Dispatcher::new(Duration::from_mins(1_000_000));
+                let stats = runtime.block_on(bench_strategy(
+                    db_pools.as_ref().unwrap(),
+                    &strategy,
+                    &dispatcher,
+                ));
                 let bounds = format!("{:.1} / {:.1}", stats.p10, stats.p90);
                 println!(
-                    "{:<30} {:<35} {:<12} {:<10.1} {:<15}",
+                    "{:<30} {:<38} {:<12} {:<10.1} {:<15}",
                     format!("{shape:?}"),
                     strategy_label,
                     size,
@@ -279,10 +315,6 @@ fn main() {
                 )
                 .unwrap();
             }
-            drop(db_pools);
-            std::fs::remove_file(&path).expect("db removal");
-            std::fs::remove_file(path.with_extension("sqlite-wal")).expect("wal removal");
-            std::fs::remove_file(path.with_extension("sqlite-shm")).expect("shm-removal failed");
         }
     }
 }
