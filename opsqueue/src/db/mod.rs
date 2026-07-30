@@ -53,6 +53,7 @@
 //! # Ok (()) }
 //! ```
 
+use crate::tracing::as_dyn_error;
 use std::{marker::PhantomData, num::NonZero, time::Duration};
 
 use futures::future::BoxFuture;
@@ -215,8 +216,11 @@ impl DBPools {
                 })
                 .await
                 .is_ok(),
-            Err(error) => {
-                tracing::error!("DB unhealthy; could not acquire DB connection: {error:?}");
+            Err(err) => {
+                tracing::error!(
+                    error = as_dyn_error(&err),
+                    "DB unhealthy; could not acquire DB connection"
+                );
                 false
             }
         }

@@ -4,9 +4,9 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_resource_detectors::HostResourceDetector;
 use opentelemetry_resource_detectors::{OsResourceDetector, ProcessResourceDetector};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
+use opsqueue::tracing::as_dyn_error;
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
-    error::Error,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -104,7 +104,7 @@ pub async fn async_main() {
             res = tokio::signal::ctrl_c() => {
                 match res {
                     Ok(()) => tracing::warn!("Received Ctrl-C signal"),
-                    Err(ref err) => tracing::error!(error = err as &dyn Error, "Error while waiting for Ctrl-C signal"),
+                    Err(ref err) => tracing::error!(error = as_dyn_error(err), "Error while waiting for Ctrl-C signal"),
                 }
             },
         };
@@ -138,6 +138,7 @@ fn init_sentry() -> sentry::ClientInitGuard {
         traces_sample_rate: 0.0,
         send_default_pii: true,
         release: sentry::release_name!(),
+        in_app_include: vec!["opsqueue::"],
         ..Default::default()
     };
     sentry::init(options)

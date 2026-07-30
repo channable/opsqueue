@@ -1,3 +1,4 @@
+use crate::tracing::as_dyn_error;
 use std::{
     sync::{
         Arc,
@@ -216,7 +217,7 @@ impl ConsumerConn {
                     .await;
                 match chunks_or_err {
                     Err(e) => {
-                        tracing::error!("Failed to reserve chunks: {}", e);
+                        tracing::error!(error = as_dyn_error(&e), "Failed to reserve chunks");
                         match e {
                             // In the unlikely event of a DatabaseError,
                             // this is not the client's fault but _our_ fault.

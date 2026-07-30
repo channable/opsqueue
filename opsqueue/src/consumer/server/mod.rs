@@ -1,3 +1,4 @@
+use crate::tracing::{anyhow_as_dyn_error, as_dyn_error};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
@@ -124,12 +125,14 @@ async fn ws_accept_handler(
             Ok(()) => {}
             Err(e) if e.is_internal_error() => {
                 tracing::error!(
-                    "Closed websocket connection because of internal error, details: {e:?}"
+                    error = as_dyn_error(&e),
+                    "Closed websocket connection because of internal error"
                 );
             }
             Err(e) => {
                 tracing::warn!(
-                    "Closed websocket connection because of client error, details: {e:?}"
+                    error = as_dyn_error(&e),
+                    "Closed websocket connection because of client error"
                 );
             }
         }
@@ -298,7 +301,10 @@ impl Completer {
         .await;
         match res {
             Ok(()) => {}
-            Err(err) => tracing::error!("Error in chunk completer: {err}"),
+            Err(err) => tracing::error!(
+                error = anyhow_as_dyn_error(&err),
+                "Error in chunk completer"
+            ),
         }
     }
 }

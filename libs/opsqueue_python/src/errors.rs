@@ -70,7 +70,7 @@ pub type CPyResult<T, E> = Result<T, CError<E>>;
 /// allowing things like `KeyboardInterrupt`, `SystemExit` or `MemoryError`,
 /// to trigger cleanup-and-exit.
 #[derive(thiserror::Error, Debug)]
-#[error("Fatal Python exception: {0}")]
+#[error("Fatal Python exception")]
 pub struct FatalPythonException(#[from] pub PyErr);
 
 impl From<CError<FatalPythonException>> for PyErr {

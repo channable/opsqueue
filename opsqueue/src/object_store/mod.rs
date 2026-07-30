@@ -50,9 +50,10 @@ impl std::fmt::Display for ChunkType {
 #[derive(thiserror::Error, Debug)]
 pub enum ChunkRetrievalError {
     #[error(
-        "Failed to retrieve chunk ({submission_prefix}, {chunk_index}, {chunk_type}) from object store: {source}"
+        "Failed to retrieve chunk ({submission_prefix}, {chunk_index}, {chunk_type}) from object store"
     )]
     ObjectStoreError {
+        #[source]
         source: object_store::Error,
         submission_prefix: Box<str>,
         chunk_index: chunk::ChunkIndex,
@@ -63,19 +64,21 @@ pub enum ChunkRetrievalError {
 #[derive(thiserror::Error, Debug)]
 pub enum ChunkStorageError {
     #[error(
-        "Failed to store chunk ({submission_prefix}, {chunk_index}, {chunk_type}) to object store: {source}"
+        "Failed to store chunk ({submission_prefix}, {chunk_index}, {chunk_type}) to object store"
     )]
     ObjectStoreError {
+        #[source]
         source: object_store::Error,
         submission_prefix: Box<str>,
         chunk_index: chunk::ChunkIndex,
         chunk_type: ChunkType,
     },
-    #[error("Failed to read chunk element from stream/iterator at index {chunk_index}: ")]
+    #[error("Failed to read chunk element from stream/iterator at index {chunk_index}")]
     ChunkContentsEvalError {
         submission_prefix: Box<str>,
         chunk_index: chunk::ChunkIndex,
         chunk_type: ChunkType,
+        #[source]
         source: anyhow::Error,
     },
 }
@@ -84,19 +87,20 @@ pub enum ChunkStorageError {
 pub enum ChunksStorageError {
     #[error(transparent)]
     ChunkStorageError(#[from] ChunkStorageError),
-    #[error("Failed to read chunk element from stream/iterator: {source}")]
+    #[error("Failed to read chunk element from stream/iterator")]
     ChunkContentsEvalError {
         submission_prefix: Box<str>,
         chunk_type: ChunkType,
+        #[source]
         source: anyhow::Error,
     },
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum NewObjectStoreClientError {
-    #[error("Failed to parse URL: {0}")]
+    #[error("Failed to parse URL")]
     UrlParseFailure(#[from] url::ParseError),
-    #[error("URL is not valid object store URL {0}")]
+    #[error("URL is not valid object store URL")]
     ObjectStoreUrlFailure(#[from] object_store::Error),
 }
 

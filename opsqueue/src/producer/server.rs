@@ -4,6 +4,7 @@ use crate::common::errors::E::{L, R};
 use crate::common::submission::{self, SubmissionId};
 use crate::common::{MaxSubmissions, StrategicMetadataMap};
 use crate::db::{self, DBPools};
+use crate::tracing::anyhow_as_dyn_error;
 use axum::extract;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -90,7 +91,10 @@ struct ServerError(anyhow::Error);
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
-        tracing::error!("Producer Server Error {:?}", self.0);
+        tracing::error!(
+            error = anyhow_as_dyn_error(&self.0),
+            "Producer Server Error"
+        );
 
         (
             StatusCode::INTERNAL_SERVER_ERROR,

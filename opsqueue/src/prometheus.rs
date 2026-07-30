@@ -13,6 +13,7 @@ use axum_prometheus::{
 use tokio_util::sync::CancellationToken;
 
 use crate::db::DBPools;
+use crate::tracing::anyhow_as_dyn_error;
 
 pub const SUBMISSIONS_TOTAL_COUNTER: &str = "submissions_total_count";
 pub const SUBMISSIONS_COMPLETED_COUNTER: &str = "submissions_completed_count";
@@ -233,7 +234,7 @@ pub async fn periodically_calculate_scaling_metrics(
             () = cancellation_token.cancelled() => break,
             () = tokio::time::sleep(METRICS_INTERVAL) => {
                 if let Err(e) = calculate_scaling_metrics(db_pool).await {
-                    tracing::error!("Error calculating scaling metrics: {}", e);
+                    tracing::error!(error = anyhow_as_dyn_error(&e), "Error calculating scaling metrics");
                 }
             }
         }

@@ -14,7 +14,7 @@ hakari-package = "workspace-hack"
 
 [workspace.package]
 edition = "2024"
-version = "0.36.0"
+version = "0.37.0"
 
 [workspace.dependencies]
 anyhow = { version = "1.0.102" }

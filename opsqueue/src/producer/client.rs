@@ -13,7 +13,7 @@ use crate::{
         errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
         submission::{SubmissionId, SubmissionStatus},
     },
-    tracing::CarrierMap,
+    tracing::{CarrierMap, as_dyn_error},
 };
 
 use super::common::InsertSubmission;
@@ -92,7 +92,10 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -127,7 +130,10 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -189,7 +195,10 @@ impl Client {
             R(R(client_err)) => client_err.is_ephemeral(),
         })
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -221,7 +230,10 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -253,7 +265,10 @@ impl Client {
         .retry(retry_policy())
         .when(InternalProducerClientError::is_ephemeral)
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -307,7 +322,10 @@ impl Client {
             R(client_err) => client_err.is_ephemeral(),
         })
         .notify(|err, dur| {
-            tracing::debug!("retrying error {err:?} with sleeping {dur:?}");
+            tracing::debug!(
+                error = as_dyn_error(err),
+                "retrying error with sleeping {dur:?}"
+            );
         })
         .await
     }
@@ -337,9 +355,9 @@ impl Client {
 
 #[derive(thiserror::Error, Debug)]
 pub enum InternalProducerClientError {
-    #[error("HTTP request failed: {0}")]
+    #[error("HTTP request failed")]
     HTTPClientError(#[from] reqwest::Error),
-    #[error("Error decoding JSON response: {0}")]
+    #[error("Error decoding JSON response")]
     ResponseDecodingError(#[from] serde_json::Error),
     #[error("Internal client received unexpected status: {0}")]
     UnexpectedStatus(StatusCode),
