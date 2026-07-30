@@ -8,6 +8,13 @@ use object_store::path::Path;
 use reqwest::Url;
 use ux::u63;
 
+// Re-export the `object_store` types that appear in this module's public API
+// (`new_with_retry`'s parameters and `ChunkRetrievalError`/`ChunkStorageError`'s
+// `source` field). Downstream crates should name these through opsqueue instead
+// of taking their own direct dependency on the `object_store` crate, which would
+// have to be kept version-locked with the one opsqueue links against.
+pub use object_store::{BackoffConfig, Error, RetryConfig};
+
 /// A client for interacting with an object store.
 ///
 /// This exists as a separate type, so we can build it _once_
@@ -110,6 +117,9 @@ impl ObjectStoreClient {
     /// The given `object_store_url` recognizes the formats detailed [here](https://docs.rs/object_store/0.11.1/object_store/enum.ObjectStoreScheme.html#method.parse).
     /// Most importantly, we support GCS (for production usage) and local file systems (for testing).
     ///
+    /// Uses the object store's default transport-level retry configuration; use
+    /// [`ObjectStoreClient::new_with_retry`] to override it.
+    ///
     /// # Errors
     ///
     /// Returns an error if the URL cannot be parsed or if object store initialization fails.
@@ -117,8 +127,77 @@ impl ObjectStoreClient {
         object_store_url: &str,
         options: Vec<(String, String)>,
     ) -> Result<Self, NewObjectStoreClientError> {
+        Self::new_with_retry(object_store_url, options, RetryConfig::default())
+    }
+
+    /// Like [`ObjectStoreClient::new`] but overrides the transport-level
+    /// retry configuration used by the underlying object store client.
+    ///
+    /// The retry configuration is applied for backends whose builder exposes
+    /// [`with_retry`](object_store::gcp::GoogleCloudStorageBuilder::with_retry)
+    /// (currently GCS and HTTP). For local and in-memory backends the retry
+    /// config has no effect and is silently ignored, matching the behaviour
+    /// of [`ObjectStoreClient::new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be parsed or if object store
+    /// initialization fails.
+    pub fn new_with_retry(
+        object_store_url: &str,
+        options: Vec<(String, String)>,
+        retry_config: RetryConfig,
+    ) -> Result<Self, NewObjectStoreClientError> {
+        use object_store::ClientConfigKey;
+        use object_store::ObjectStoreScheme;
+        use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+        use object_store::http::HttpBuilder;
+        use std::str::FromStr;
+
         let url = Url::parse(object_store_url)?;
-        let (object_store, base_path) = object_store::parse_url_opts(&url, options)?;
+        let (scheme, raw_path) =
+            ObjectStoreScheme::parse(&url).map_err(object_store::Error::from)?;
+        let base_path = Path::parse(raw_path).map_err(object_store::Error::from)?;
+
+        let object_store: Box<DynObjectStore> = match scheme {
+            ObjectStoreScheme::GoogleCloudStorage => {
+                let builder = options.into_iter().fold(
+                    GoogleCloudStorageBuilder::new()
+                        .with_url(object_store_url.to_string())
+                        .with_retry(retry_config),
+                    |builder, (key, value)| match GoogleConfigKey::from_str(
+                        &key.to_ascii_lowercase(),
+                    ) {
+                        Ok(config_key) => builder.with_config(config_key, value),
+                        Err(_) => builder,
+                    },
+                );
+                Box::new(builder.build()?)
+            }
+            ObjectStoreScheme::Http => {
+                let url_without_path = &url[..url::Position::BeforePath];
+                let builder = options.into_iter().fold(
+                    HttpBuilder::new()
+                        .with_url(url_without_path)
+                        .with_retry(retry_config),
+                    |builder, (key, value)| match ClientConfigKey::from_str(
+                        &key.to_ascii_lowercase(),
+                    ) {
+                        Ok(config_key) => builder.with_config(config_key, value),
+                        Err(_) => builder,
+                    },
+                );
+                Box::new(builder.build()?)
+            }
+            _ => {
+                // Retry configuration is not meaningful for local/in-memory
+                // backends; fall back to the default construction path so
+                // that the `options` list is still honoured for those cases.
+                let (store, _) = object_store::parse_url_opts(&url, options)?;
+                store
+            }
+        };
+
         Ok(ObjectStoreClient(Arc::new(ObjectStoreClientInner {
             url: object_store_url.into(),
             object_store,
@@ -266,5 +345,129 @@ impl ObjectStoreClient {
     #[must_use]
     pub fn url(&self) -> &str {
         &self.0.url
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::chunk::ChunkIndex;
+    use object_store::{BackoffConfig, RetryConfig};
+    use std::time::Duration;
+    use ux::u63;
+
+    fn tight_retry_config() -> RetryConfig {
+        RetryConfig {
+            backoff: BackoffConfig {
+                init_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(2),
+                base: 2.0,
+            },
+            max_retries: 3,
+            retry_timeout: Duration::from_secs(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_with_retry_supports_in_memory_backend() {
+        // Non-cloud backends must keep working: `new_with_retry` should build
+        // successfully and behave identically to `new` for `memory://` URLs.
+        let client =
+            ObjectStoreClient::new_with_retry("memory:///", Vec::new(), tight_retry_config())
+                .expect("memory:/// URL should build with new_with_retry");
+
+        let chunk_index: ChunkIndex = u63::new(0).into();
+        client
+            .store_chunk("test-prefix", chunk_index, ChunkType::Input, b"hi".to_vec())
+            .await
+            .expect("store on in-memory backend should succeed");
+
+        let retrieved = client
+            .retrieve_chunk("test-prefix", chunk_index, ChunkType::Input)
+            .await
+            .expect("retrieve on in-memory backend should succeed");
+        assert_eq!(retrieved, b"hi");
+    }
+
+    #[test]
+    fn new_with_retry_rejects_malformed_url() {
+        // Regression guard: bad URLs must still surface as
+        // `UrlParseFailure` and not, e.g., panic while classifying the
+        // scheme.
+        let err = ObjectStoreClient::new_with_retry("not a url", Vec::new(), tight_retry_config())
+            .expect_err("malformed URL should not build");
+        assert!(
+            matches!(err, NewObjectStoreClientError::UrlParseFailure(_)),
+            "unexpected error variant: {err:?}"
+        );
+    }
+
+    #[test]
+    fn new_with_retry_builds_http_backend_without_network_io() {
+        // The HTTP arm of `new_with_retry` goes through `HttpBuilder`, which
+        // is a different code path from the `parse_url_opts` fallback covered
+        // by the memory:// and file:// tests. Building the client does not
+        // touch the network, so we can point it at an unreachable localhost
+        // port and still assert that construction succeeds.
+        let client = ObjectStoreClient::new_with_retry(
+            "http://127.0.0.1:1/some/prefix",
+            Vec::new(),
+            tight_retry_config(),
+        )
+        .expect("http:// URL should build with new_with_retry");
+        // Sanity-check the base path was captured (the URL segment after the
+        // authority).
+        assert!(format!("{client:?}").contains("some/prefix"));
+    }
+
+    /// A minimal service account JSON that carries `disable_oauth: true`, so
+    /// `GoogleCloudStorageBuilder::build()` succeeds without talking to any
+    /// external auth service. Mirrors the fake key used inside `object_store`'s
+    /// own test suite.
+    const FAKE_GCS_SERVICE_ACCOUNT_KEY: &str = r#"{
+        "private_key": "private_key",
+        "private_key_id": "private_key_id",
+        "client_email": "client_email",
+        "disable_oauth": true
+    }"#;
+
+    #[test]
+    fn new_with_retry_builds_gcs_backend_with_disabled_oauth() {
+        // The GCS arm of `new_with_retry` goes through `GoogleCloudStorageBuilder`,
+        // which is the branch that motivated this whole change (issue #3883).
+        // We feed it a service-account JSON with `disable_oauth: true` so the
+        // builder skips real authentication and `build()` completes without
+        // network I/O.
+        let options = vec![(
+            "service_account_key".to_string(),
+            FAKE_GCS_SERVICE_ACCOUNT_KEY.to_string(),
+        )];
+        let client = ObjectStoreClient::new_with_retry(
+            "gs://some-bucket/some/prefix",
+            options,
+            tight_retry_config(),
+        )
+        .expect("gs:// URL should build with new_with_retry");
+        assert!(format!("{client:?}").contains("some/prefix"));
+    }
+
+    #[test]
+    fn new_with_retry_forwards_options_to_gcs_builder_and_ignores_unknown_keys() {
+        // Regression guard for the `options.into_iter().fold(...)` in the GCS
+        // arm: if a future refactor stops forwarding options to the builder,
+        // `service_account_key` below would no longer disable OAuth and
+        // `build()` would fall back to ADC lookup — which we can't rely on in
+        // CI. If instead the fold turned unknown keys into hard errors,
+        // `totally_unknown_key` would fail the build. Both directions of
+        // regression are caught by asserting `Ok(_)` here.
+        let options = vec![
+            (
+                "service_account_key".to_string(),
+                FAKE_GCS_SERVICE_ACCOUNT_KEY.to_string(),
+            ),
+            ("totally_unknown_key".to_string(), "some-value".to_string()),
+        ];
+        ObjectStoreClient::new_with_retry("gs://some-bucket/", options, tight_retry_config())
+            .expect("gs:// URL with mixed known+unknown options should build");
     }
 }
