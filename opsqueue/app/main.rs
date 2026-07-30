@@ -138,6 +138,7 @@ fn init_sentry() -> sentry::ClientInitGuard {
         traces_sample_rate: 0.0,
         send_default_pii: true,
         release: sentry::release_name!(),
+        in_app_include: vec!["opsqueue::"],
         ..Default::default()
     };
     sentry::init(options)
