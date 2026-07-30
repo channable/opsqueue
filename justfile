@@ -87,7 +87,23 @@ lint-light *ARGS:
 # Run the slow linters/static analysers that need to look at everything
 [group('lint')]
 [parallel]
-lint-heavy: clippy-fix lint-cargo mypy
+lint-heavy: semver clippy-fix lint-cargo mypy
+
+# Verify the semver bounds are respected since the last tagged build
+[group('lint')]
+semver:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export DATABASE_URL="sqlite://{{justfile_directory()}}/opsqueue/opsqueue_example_database_schema.db"
+  cargo semver-checks --workspace --target x86_64-unknown-linux-gnu --baseline-rev "$(git tag -l --sort=-version:refname | head -1)"
+
+# Rust static analysis
+[group('lint')]
+clippy-fix:
+  # `cargo clippy --fix` caps lints to warnings internally; keep its artifacts separate.
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --fix --allow-dirty --allow-staged -- -Dwarnings
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --no-default-features --fix --allow-dirty --allow-staged -- -Dwarnings
+  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --all-features --fix --allow-dirty --allow-staged -- -Dwarnings
 
 # Serial execution on the main `CARGO_TARGET_DIR`
 [group('lint')]
@@ -97,14 +113,6 @@ lint-cargo: clippy hakari
 [group('lint')]
 hakari:
   cargo hakari verify
-
-# Rust static analysis
-[group('lint')]
-clippy-fix:
-  # `cargo clippy --fix` caps lints to warnings internally; keep its artifacts separate.
-  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --fix --allow-dirty --allow-staged -- -Dwarnings
-  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --no-default-features --fix --allow-dirty --allow-staged -- -Dwarnings
-  CARGO_TARGET_DIR=target/clippy-fix cargo clippy --no-deps --all-targets --all-features --fix --allow-dirty --allow-staged -- -Dwarnings
 
 # Rust static analysis
 [group('lint')]
