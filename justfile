@@ -77,7 +77,7 @@ nix-test-integration *TEST_ARGS: nix-build
 
 # Run all linters, fast and slow
 [group('lint')]
-lint: (lint-light "--all-files") lint-heavy
+lint: (lint-light "--show-diff-on-failure" "--all-files") lint-heavy
 
 # Run only the fast per-file linters; these might opt to only look at the changed files. Args are passed to pre-commit
 [group('lint')]
