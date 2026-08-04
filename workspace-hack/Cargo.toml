@@ -16,7 +16,7 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
-base64 = { version = "0.22" }
+base64 = { version = "0.23" }
 chrono = { version = "0.4", features = ["serde"] }
 crossbeam-epoch = { version = "0.9" }
 crossbeam-utils = { version = "0.8" }
@@ -28,13 +28,13 @@ futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
-libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
+libsqlite3-sys = { version = "0.37", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 opentelemetry = { version = "0.32" }
 opentelemetry-http = { version = "0.32", features = ["reqwest-blocking"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["internal-logs", "logs", "metrics", "rt-tokio", "trace"] }
-rand = { version = "0.9" }
+rand = { version = "0.10" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std", "unicode-perl", "unicode-word-boundary"] }
 regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode-perl"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "rustls", "stream"] }
@@ -42,7 +42,7 @@ rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
-sha2 = { version = "0.10" }
+sha2 = { version = "0.11" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sqlx-core = { version = "0.9", features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "any", "chrono", "json", "migrate", "offline"] }
@@ -59,7 +59,7 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [build-dependencies]
 aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
-base64 = { version = "0.22" }
+base64 = { version = "0.23" }
 chrono = { version = "0.4", features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
 either = { version = "1", features = ["serde", "use_std"] }
@@ -68,14 +68,14 @@ futures-channel = { version = "0.3", features = ["sink"] }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
+libsqlite3-sys = { version = "0.37", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
-sha2 = { version = "0.10" }
+sha2 = { version = "0.11" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sqlx-core = { version = "0.9", features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "any", "chrono", "json", "migrate", "offline"] }
@@ -93,7 +93,7 @@ bitflags = { version = "2", default-features = false, features = ["std"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "http2", "server", "service"] }
 libc = { version = "0.2", features = ["extra_traits"] }
 tower = { version = "0.5", default-features = false, features = ["balance", "buffer", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["follow-redirect"] }
+tower-http = { version = "0.7", features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 cc = { version = "1", default-features = false, features = ["parallel"] }
