@@ -1,12 +1,13 @@
 /// NOTE: We define the potentially raisable errors/exceptions in Python
 /// so we have nice IDE support for docs-on-hover and for 'go to definition'.
 use std::error::Error;
+use std::time::TryFromFloatSecsError;
 
 use opsqueue::common::errors::{
     E, IncorrectUsage, SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions,
     UnexpectedOpsqueueConsumerServerResponse,
 };
-use pyo3::exceptions::{PyBaseException, PyTimeoutError};
+use pyo3::exceptions::{PyBaseException, PyTimeoutError, PyValueError};
 use pyo3::{Bound, PyErr, Python, import_exception};
 
 use crate::common;
@@ -185,6 +186,12 @@ impl From<CError<UnexpectedOpsqueueConsumerServerResponse>> for PyErr {
 impl From<CError<tokio::time::error::Elapsed>> for PyErr {
     fn from(_value: CError<tokio::time::error::Elapsed>) -> Self {
         PyTimeoutError::new_err("timeout was reached")
+    }
+}
+
+impl From<CError<TryFromFloatSecsError>> for PyErr {
+    fn from(value: CError<TryFromFloatSecsError>) -> Self {
+        PyValueError::new_err(value.0.to_string())
     }
 }
 
