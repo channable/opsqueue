@@ -781,6 +781,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
