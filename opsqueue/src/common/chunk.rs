@@ -301,19 +301,33 @@ pub mod db {
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        conn.transaction(move |mut tx| {
-            Box::pin(async move {
-                complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
-                crate::common::submission::db::maybe_complete_submission(
-                    chunk_id.submission_id,
-                    &mut tx,
-                )
-                .await
-            })
-        })
-        .await?;
+        let chunks_moved = conn
+            .transaction(move |mut tx| {
+                Box::pin(async move {
+                    let chunks_moved =
+                        complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
+                    if chunks_moved {
+                        crate::common::submission::db::maybe_complete_submission(
+                            chunk_id.submission_id,
+                            &mut tx,
+                        )
+                        .await?;
+                    } else {
+                        tracing::warn!(
+                            "Could not complete chunk {:?} because it was either: \
+                completed, failed, or cancelled before. Ignoring.",
+                            chunk_id
+                        );
+                    }
 
-        counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+                    Result::<bool, E<DatabaseError, SubmissionNotFound>>::Ok(chunks_moved)
+                })
+            })
+            .await?;
+
+        if chunks_moved {
+            counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+        }
         Ok(())
     }
 
@@ -327,7 +341,7 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut tx: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<()> {
+    ) -> sqlx::Result<bool> {
         let now = chrono::prelude::Utc::now();
         let chunk_moved = query!(
             "
@@ -336,8 +350,7 @@ pub mod db {
         SELECT submission_id, chunk_index, $1, julianday($2) FROM chunks
         WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;
 
-        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6
-        RETURNING submission_id, chunk_index;
+        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6;
         ",
             output_content,
             now,
@@ -346,9 +359,10 @@ pub mod db {
             chunk_id.submission_id,
             chunk_id.chunk_index,
         )
-        .fetch_optional(tx.get_inner())
+        .execute(tx.get_inner())
         .await?
-        .is_some();
+        .rows_affected()
+            > 0;
         // Defense in depth: Above query could be called twice on the same chunk. For instance,
         // when the server was restarted and the reservations are forgotten, and the same chunk
         // was reserved again.
@@ -373,15 +387,8 @@ pub mod db {
             )
                 .fetch_one(tx.get_inner())
                 .await?;
-        } else {
-            tracing::warn!(
-                "Could not complete chunk {:?} because it was either: \
-                completed, failed, or cancelled before. Ignoring.",
-                chunk_id
-            );
         }
-
-        Ok(())
+        Ok(chunk_moved)
     }
 
     /// Increment retries for a chunk, or move it to failed state.
@@ -438,7 +445,6 @@ pub mod db {
                             completed, failed, or cancelled before. Ignoring.",
                             chunk_id
                         );
-
                         Ok::<_, sqlx::Error>(false)
                     }
                 })
@@ -806,9 +812,10 @@ pub mod db {
 #[cfg(feature = "server-logic")]
 pub mod test {
     use crate::common::StrategicMetadataMap;
-    use crate::common::submission::db::insert_submission_raw;
+    use crate::common::submission::db::{insert_submission, insert_submission_raw};
     use crate::common::submission::{Submission, SubmissionStatus};
     use crate::db::{Connection as _, WriterPool};
+    use std::assert_matches;
 
     use super::db::*;
     use super::*;
@@ -933,6 +940,35 @@ pub mod test {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_calling_complete_chunk_twice_for_same_chunk_does_not_error(
+        db: sqlx::SqlitePool,
+    ) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+
+        let chunk_id = ChunkId {
+            submission_id: chunks[0].submission_id,
+            chunk_index: chunks[0].chunk_index,
+        };
+
+        insert_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let res = complete_chunk(chunk_id, None, &mut conn).await;
+        assert_matches!(res, Ok(()));
+
+        let res = complete_chunk(chunk_id, None, &mut conn).await;
+        assert_matches!(res, Ok(()));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -956,5 +992,37 @@ pub mod test {
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_completed(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 1);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_calling_fail_chunk_after_exceeding_retries_does_not_error(
+        db: sqlx::SqlitePool,
+    ) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+
+        let chunk_id = ChunkId {
+            submission_id: chunks[0].submission_id,
+            chunk_index: chunks[0].chunk_index,
+        };
+
+        insert_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(false));
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(true));
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(false));
     }
 }

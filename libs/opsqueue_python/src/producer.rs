@@ -1,11 +1,11 @@
-use std::{future::IntoFuture, sync::Arc, time::Duration};
-
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyStopAsyncIteration},
     prelude::*,
     types::PyIterator,
 };
+use std::time::TryFromFloatSecsError;
+use std::{future::IntoFuture, sync::Arc, time::Duration};
 
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use opsqueue::{
@@ -431,6 +431,7 @@ impl ProducerClient {
         PyChunksIter,
         E![
             FatalPythonException,
+            TryFromFloatSecsError,
             Elapsed,
             errors::SubmissionFailed,
             InternalProducerClientError
@@ -440,18 +441,22 @@ impl ProducerClient {
             self.block_unless_interrupted(async move {
                 let fut = self.stream_completed_submission_chunks(submission_id);
                 match timeout {
-                    Some(duration) => tokio::time::timeout(Duration::from_secs_f64(duration), fut)
-                        .await
-                        .map_err(|err| CError(R(L(err))))
-                        .and_then(|err| {
-                            err.map_err(|err| match err.0 {
-                                L(err) => CError(L(err)),
-                                R(err) => CError(R(R(err))),
+                    Some(duration) => {
+                        let duration = Duration::try_from_secs_f64(duration)
+                            .map_err(|err| CError(R(L(err))))?;
+                        tokio::time::timeout(duration, fut)
+                            .await
+                            .map_err(|err| CError(R(R(L(err)))))
+                            .and_then(|err| {
+                                err.map_err(|err| match err.0 {
+                                    L(err) => CError(L(err)),
+                                    R(err) => CError(R(R(R(err)))),
+                                })
                             })
-                        }),
+                    }
                     None => fut.await.map_err(|err| match err.0 {
                         L(err) => CError(L(err)),
-                        R(err) => CError(R(R(err))),
+                        R(err) => CError(R(R(R(err)))),
                     }),
                 }
             })

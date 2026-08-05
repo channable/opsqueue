@@ -728,7 +728,7 @@ def test_run_submission_timeout(opsqueue: OpsqueueProcess) -> None:
 
 
 def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
-    """Unpausing a paused submission makes it available to consumers again,
+    """Unpausing a paused submission makes it available to consumers,
     and it can be completed normally afterwards."""
     url = "file:///tmp/opsqueue/test_unpause_and_complete"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
@@ -751,7 +751,10 @@ def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
         consumer_client.run_each_op(lambda x: x)
 
     with background_process(run_consumer):
-        producer_client.blocking_stream_completed_submission(submission_id)
+        producer_client.blocking_stream_completed_submission(
+            submission_id,
+            timeout=SUBMISSION_COMPLETED_TIMEOUT,
+        )
         assert isinstance(
             producer_client.get_submission_status(submission_id),
             SubmissionStatus.Completed,

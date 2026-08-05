@@ -526,6 +526,9 @@ pub mod db {
             Box::pin(async move {
                 unpause_submission_raw(id, &mut tx).await?;
                 super::chunk::db::restore_paused_chunks(id, &mut tx).await?;
+                // NOTE: We need to check whether the submission is completed, because it might
+                // be the case that we are unpausing a 0-chunk submission.
+                maybe_complete_submission(id, &mut tx).await?;
                 Ok(())
             })
         })
@@ -805,6 +808,24 @@ pub mod db {
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
         // from InProgress to Completed/Failed in-between the queries.
+        // TODO: Rewrite the queries here into a single query using `UNION ALL`.
+
+        let paused_row_opt = submission_status_paused_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
+        if let Some(row) = paused_row_opt {
+            let paused_submission = SubmissionPaused {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                chunk_size: row.chunk_size,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.0,
+                otel_trace_carrier: row.otel_trace_carrier,
+            };
+            return Ok(Some(SubmissionStatus::Paused(paused_submission)));
+        }
 
         let submission_row = submission_status_in_progress_query(id)
             .fetch_optional(conn.get_inner())
@@ -878,23 +899,6 @@ pub mod db {
                 cancelled_at: row.cancelled_at,
             };
             return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
-        }
-
-        let paused_row_opt = submission_status_paused_query(id)
-            .fetch_optional(conn.get_inner())
-            .await?;
-        if let Some(row) = paused_row_opt {
-            let paused_submission = SubmissionPaused {
-                id: row.id,
-                prefix: row.prefix,
-                chunks_total: row.chunks_total,
-                chunks_done: row.chunks_done,
-                chunk_size: row.chunk_size,
-                metadata: row.metadata,
-                strategic_metadata: row.strategic_metadata.0,
-                otel_trace_carrier: row.otel_trace_carrier,
-            };
-            return Ok(Some(SubmissionStatus::Paused(paused_submission)));
         }
 
         Ok(None)
@@ -2121,6 +2125,31 @@ pub mod test {
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
         assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 3);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_unpausing_a_zero_chunk_submission_completes_it(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) =
+            Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+
+        unpause_submission(submission.id, &mut conn).await.unwrap();
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
     }
 
