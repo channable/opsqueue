@@ -159,7 +159,7 @@ impl ProducerClient {
         })
     }
 
-    /// Unpause a paused submission, making it available to consumers again.
+    /// Unpause a paused submission, making it available to consumers.
     ///
     /// Will return an error if the submission is not currently paused.
     ///

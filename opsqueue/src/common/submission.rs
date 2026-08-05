@@ -537,21 +537,21 @@ pub mod db {
         id: SubmissionId,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        let row = query!(
+        let res = query!(
             "
     INSERT INTO submissions
     (id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size)
     SELECT id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size
     FROM submissions_paused WHERE id = $1;
 
-    DELETE FROM submissions_paused WHERE id = $2 RETURNING *;
+    DELETE FROM submissions_paused WHERE id = $2;
     ",
             id,
             id,
         )
-        .fetch_optional(conn.get_inner())
+        .execute(conn.get_inner())
         .await?;
-        if row.is_none() {
+        if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
             counter!(crate::prometheus::SUBMISSIONS_UNPAUSED_COUNTER).increment(1);
@@ -617,7 +617,7 @@ pub mod db {
                 match maybe_complete_submission(submission_id, conn).await {
                     // Forward our database errors to the caller.
                     Err(E::L(e)) => return Err(e),
-                    // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
+                    // If the submission ID can't be found, that's too bad, but it's not our problem anymore I guess.
                     Err(E::R(_)) => {
                         tracing::warn!(%submission_id, "Presumed zero-length submission not found");
                     }
@@ -720,16 +720,13 @@ pub mod db {
             r#"
             SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_paused WHERE prefix = $2
+            SELECT id AS "id: SubmissionId" FROM submissions_paused WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $3
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $4
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $1
             "#,
             prefix,
-            prefix,
-            prefix,
-            prefix
         )
         .fetch_optional(conn.get_inner())
         .await?;
@@ -1078,7 +1075,7 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if cancellation or chunk skipping fails.
-    pub async fn cancel_submission_notx(
+    async fn cancel_submission_notx(
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
@@ -1094,7 +1091,7 @@ pub mod db {
     /// Returns [`DatabaseError`] if any SQL query fails.
     ///
     /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
-    pub async fn cancel_paused_submission_notx(
+    async fn cancel_paused_submission_notx(
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
@@ -1110,21 +1107,21 @@ pub mod db {
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
-        let submission_opt = query!(
+        let res = query!(
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
     SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
 
-    DELETE FROM submissions WHERE id = $3 RETURNING *;
+    DELETE FROM submissions WHERE id = $3;
     ",
             now,
             id,
             id,
         )
-        .fetch_optional(conn.get_inner())
+        .execute(conn.get_inner())
         .await?;
-        if submission_opt.is_none() {
+        if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
             counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
@@ -1142,21 +1139,21 @@ pub mod db {
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
-        let submission_opt = query!(
+        let res = query!(
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
     SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions_paused WHERE id = $2;
 
-    DELETE FROM submissions_paused WHERE id = $3 RETURNING *;
+    DELETE FROM submissions_paused WHERE id = $3;
     ",
             now,
             id,
             id,
         )
-        .fetch_optional(conn.get_inner())
+        .execute(conn.get_inner())
         .await?;
-        if submission_opt.is_none() {
+        if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
             counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
@@ -1260,7 +1257,7 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if submission/chunk failure transitions cannot be persisted.
-    pub async fn fail_submission_notx(
+    pub(crate) async fn fail_submission_notx(
         id: SubmissionId,
         failed_chunk_index: ChunkIndex,
         failure: String,

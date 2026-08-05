@@ -673,7 +673,7 @@ pub mod db {
             "
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, skipped, failed_at)
-    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks_paused WHERE submission_id = $2;
+    SELECT submission_id, chunk_index, input_content, '', TRUE, julianday($1) FROM chunks_paused WHERE submission_id = $2;
 
     DELETE FROM chunks_paused WHERE submission_id = $3;
     ",
@@ -705,7 +705,7 @@ pub mod db {
 
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, skipped, failed_at)
-    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks WHERE chunks.submission_id = $2;
+    SELECT submission_id, chunk_index, input_content, '', TRUE, julianday($1) FROM chunks WHERE chunks.submission_id = $2;
 
     DELETE FROM chunks WHERE chunks.submission_id = $3;
 

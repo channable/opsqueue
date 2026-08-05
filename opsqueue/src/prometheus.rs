@@ -77,7 +77,7 @@ pub fn describe_metrics() {
     describe_counter!(
         SUBMISSIONS_UNPAUSED_COUNTER,
         Unit::Count,
-        "Number of submissions unpaused (resumed)"
+        "Number of submissions unpaused"
     );
     describe_histogram!(
         SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM,

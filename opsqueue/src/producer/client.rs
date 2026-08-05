@@ -203,7 +203,7 @@ impl Client {
         .await
     }
 
-    /// Unpause a paused submission, making it available to consumers again.
+    /// Unpause a paused submission, making it available to consumers.
     ///
     /// Returns an error if the submission is not currently paused.
     ///
