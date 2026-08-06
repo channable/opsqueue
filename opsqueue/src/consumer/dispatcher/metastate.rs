@@ -104,6 +104,22 @@ impl MetaStateField {
     pub fn get(&self, val: &MetaStateVal) -> Option<usize> {
         self.vals_to_counts.get(val).map(|count| *count)
     }
+
+    /// The whole value -> count map as a JSON object, for handing to `SQLite`
+    /// in a single FFI call.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::from("{");
+        for entry in &self.vals_to_counts {
+            if out.len() > 1 {
+                out.push(',');
+            }
+            let _ = write!(out, "\"{}\":{}", entry.key(), entry.value());
+        }
+        out.push('}');
+        out
+    }
 }
 
 #[cfg(test)]

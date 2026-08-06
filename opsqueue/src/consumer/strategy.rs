@@ -129,25 +129,22 @@ impl Strategy {
                 let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
                 let qb = underlying.build_query_snippet_returning_submission_ids(qb);
                 qb.push(")");
-                // In-flight chunk count per submission, per meta key, read via FFI.
+                // In-flight chunk count per submission, per meta key.
+                //
+                // The FFI call returns all counts as JSON in a single call.
+                // The CROSS JOIN ON ensures the json_each is the outer loop,
+                // and only performed once.
                 for (i, meta_key) in meta_keys.iter().enumerate() {
                     qb.push(format!(
                         ", counts_{i} AS (
-                            SELECT sm.submission_id, ffi_counts.count
-                            FROM submissions_metadata sm
-                            JOIN (
-                                SELECT metadata_value, opsqueue_metadata_count("
+                            SELECT sm.submission_id, je.value AS count
+                            FROM json_each(opsqueue_metadata_counts("
                     ));
                     qb.push_bind(*meta_key);
                     qb.push(
-                        ", metadata_value) AS count
-                                FROM submissions_metadata
-                                WHERE metadata_key = ",
-                    );
-                    qb.push_bind(*meta_key);
-                    qb.push(
-                        " GROUP BY metadata_value
-                            ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+                        ")) je
+                            CROSS JOIN submissions_metadata sm
+                                ON sm.metadata_value = CAST(je.key AS INTEGER)
                             WHERE sm.metadata_key = ",
                     );
                     qb.push_bind(*meta_key);
@@ -218,6 +215,16 @@ pub mod test {
         unsafe { ffi::sqlite3_result_int(context, 0) };
     }
 
+    unsafe extern "C" fn sqlite_metadata_counts_lookup_noop(
+        context: *mut ffi::sqlite3_context,
+        _n_args: i32,
+        _args: *mut *mut ffi::sqlite3_value,
+    ) {
+        unsafe {
+            ffi::sqlite3_result_text(context, c"{}".as_ptr(), 2, ffi::SQLITE_TRANSIENT());
+        };
+    }
+
     unsafe extern "C" fn sqlite_metadata_count_lookup_noop(
         context: *mut ffi::sqlite3_context,
         _n_args: i32,
@@ -263,6 +270,26 @@ pub mod test {
             rc,
             ffi::SQLITE_OK,
             "register opsqueue_metadata_count failed"
+        );
+
+        let function_name = b"opsqueue_metadata_counts\0";
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                function_name.as_ptr().cast(),
+                1,
+                ffi::SQLITE_UTF8,
+                std::ptr::null_mut(),
+                Some(sqlite_metadata_counts_lookup_noop),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(
+            rc,
+            ffi::SQLITE_OK,
+            "register opsqueue_metadata_counts failed"
         );
     }
 
@@ -447,20 +474,10 @@ pub mod test {
           counts_0 AS (
             SELECT
               sm.submission_id,
-              ffi_counts.count
+              je.value AS count
             FROM
-              submissions_metadata sm
-              JOIN (
-                SELECT
-                  metadata_value,
-                  opsqueue_metadata_count(?, metadata_value) AS count
-                FROM
-                  submissions_metadata
-                WHERE
-                  metadata_key = ?
-                GROUP BY
-                  metadata_value
-              ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+              json_each(opsqueue_metadata_counts(?)) je
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -485,17 +502,14 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
         6, 3, MATERIALIZE counts_0
-        8, 6, CO-ROUTINE ffi_counts
-        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        56, 6, BLOOM FILTER ON ffi_counts (metadata_value=?)
-        68, 6, SEARCH ffi_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
-        85, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        91, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        101, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        119, 3, USE TEMP B-TREE FOR ORDER BY
-        131, 0, SCAN underlying_submission_ids
-        133, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        10, 6, SCAN je VIRTUAL TABLE INDEX 1:
+        15, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        35, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        41, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        51, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        69, 3, USE TEMP B-TREE FOR ORDER BY
+        81, 0, SCAN underlying_submission_ids
+        83, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -532,20 +546,10 @@ pub mod test {
           counts_0 AS (
             SELECT
               sm.submission_id,
-              ffi_counts.count
+              je.value AS count
             FROM
-              submissions_metadata sm
-              JOIN (
-                SELECT
-                  metadata_value,
-                  opsqueue_metadata_count(?, metadata_value) AS count
-                FROM
-                  submissions_metadata
-                WHERE
-                  metadata_key = ?
-                GROUP BY
-                  metadata_value
-              ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+              json_each(opsqueue_metadata_counts(?)) je
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -570,17 +574,14 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
         6, 3, MATERIALIZE counts_0
-        8, 6, CO-ROUTINE ffi_counts
-        14, 8, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        48, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        56, 6, BLOOM FILTER ON ffi_counts (metadata_value=?)
-        68, 6, SEARCH ffi_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
-        85, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        91, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        101, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        119, 3, USE TEMP B-TREE FOR ORDER BY
-        131, 0, SCAN underlying_submission_ids
-        133, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        10, 6, SCAN je VIRTUAL TABLE INDEX 1:
+        15, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        35, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        41, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        51, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        69, 3, USE TEMP B-TREE FOR ORDER BY
+        81, 0, SCAN underlying_submission_ids
+        83, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -624,20 +625,10 @@ pub mod test {
           counts_0 AS (
             SELECT
               sm.submission_id,
-              ffi_counts.count
+              je.value AS count
             FROM
-              submissions_metadata sm
-              JOIN (
-                SELECT
-                  metadata_value,
-                  opsqueue_metadata_count(?, metadata_value) AS count
-                FROM
-                  submissions_metadata
-                WHERE
-                  metadata_key = ?
-                GROUP BY
-                  metadata_value
-              ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+              json_each(opsqueue_metadata_counts(?)) je
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -668,17 +659,14 @@ pub mod test {
         19, 6, UNION ALL
         22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
         35, 3, MATERIALIZE counts_0
-        37, 35, CO-ROUTINE ffi_counts
-        43, 37, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        77, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        85, 35, BLOOM FILTER ON ffi_counts (metadata_value=?)
-        97, 35, SEARCH ffi_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
-        113, 3, SCAN inner
-        120, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        130, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        149, 3, USE TEMP B-TREE FOR ORDER BY
-        161, 0, SCAN underlying_submission_ids
-        163, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        39, 35, SCAN je VIRTUAL TABLE INDEX 1:
+        44, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        63, 3, SCAN inner
+        70, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        80, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        99, 3, USE TEMP B-TREE FOR ORDER BY
+        111, 0, SCAN underlying_submission_ids
+        113, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -726,40 +714,20 @@ pub mod test {
           counts_0 AS (
             SELECT
               sm.submission_id,
-              ffi_counts.count
+              je.value AS count
             FROM
-              submissions_metadata sm
-              JOIN (
-                SELECT
-                  metadata_value,
-                  opsqueue_metadata_count(?, metadata_value) AS count
-                FROM
-                  submissions_metadata
-                WHERE
-                  metadata_key = ?
-                GROUP BY
-                  metadata_value
-              ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+              json_each(opsqueue_metadata_counts(?)) je
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           ),
           counts_1 AS (
             SELECT
               sm.submission_id,
-              ffi_counts.count
+              je.value AS count
             FROM
-              submissions_metadata sm
-              JOIN (
-                SELECT
-                  metadata_value,
-                  opsqueue_metadata_count(?, metadata_value) AS count
-                FROM
-                  submissions_metadata
-                WHERE
-                  metadata_key = ?
-                GROUP BY
-                  metadata_value
-              ) ffi_counts ON sm.metadata_value = ffi_counts.metadata_value
+              json_each(opsqueue_metadata_counts(?)) je
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -792,25 +760,19 @@ pub mod test {
         19, 6, UNION ALL
         22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
         35, 3, MATERIALIZE counts_0
-        37, 35, CO-ROUTINE ffi_counts
-        43, 37, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        77, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        85, 35, BLOOM FILTER ON ffi_counts (metadata_value=?)
-        97, 35, SEARCH ffi_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
-        113, 3, MATERIALIZE counts_1
-        115, 113, CO-ROUTINE ffi_counts
-        121, 115, SEARCH submissions_metadata USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        155, 113, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=?)
-        163, 113, BLOOM FILTER ON ffi_counts (metadata_value=?)
-        175, 113, SEARCH ffi_counts USING AUTOMATIC COVERING INDEX (metadata_value=?)
-        191, 3, SCAN inner
-        198, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        208, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        221, 3, BLOOM FILTER ON counts_1 (submission_id=?)
-        231, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        255, 3, USE TEMP B-TREE FOR ORDER BY
-        267, 0, SCAN underlying_submission_ids
-        269, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        39, 35, SCAN je VIRTUAL TABLE INDEX 1:
+        44, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        63, 3, MATERIALIZE counts_1
+        67, 63, SCAN je VIRTUAL TABLE INDEX 1:
+        72, 63, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        91, 3, SCAN inner
+        98, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        108, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        121, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        131, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        155, 3, USE TEMP B-TREE FOR ORDER BY
+        167, 0, SCAN underlying_submission_ids
+        169, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 

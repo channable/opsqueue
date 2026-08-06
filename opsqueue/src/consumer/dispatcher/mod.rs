@@ -130,6 +130,53 @@ unsafe extern "C" fn sqlite_metadata_count_lookup(
     }
 }
 
+/// Returns the whole value -> count map for one metadata key as a JSON object,
+/// so the caller can obtain every count in a single FFI call.
+unsafe extern "C" fn sqlite_metadata_counts_lookup(
+    context: *mut ffi::sqlite3_context,
+    n_args: i32,
+    args: *mut *mut ffi::sqlite3_value,
+) {
+    if n_args != 1 {
+        tracing::error!(
+            n_args,
+            "opsqueue_metadata_counts called with unexpected argument count"
+        );
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let user_data = unsafe { ffi::sqlite3_user_data(context) }
+        .cast_const()
+        .cast::<Arc<MetaState>>();
+    if user_data.is_null() {
+        tracing::error!("opsqueue_metadata_counts called without registered metastate user_data");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let metadata_key_ptr = unsafe { ffi::sqlite3_value_text(*args.add(0)) };
+    if metadata_key_ptr.is_null() {
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+    let Ok(metadata_key) = unsafe { CStr::from_ptr(metadata_key_ptr.cast()) }.to_str() else {
+        tracing::error!("opsqueue_metadata_counts got non-utf8 metadata_key");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    };
+
+    let json = match unsafe { &*user_data }.get(metadata_key) {
+        Some(field) => field.to_json(),
+        None => "{}".to_string(),
+    };
+    let len = i32::try_from(json.len()).unwrap_or(i32::MAX);
+    unsafe {
+        // SQLITE_TRANSIENT tells SQLite to copy the bytes before we drop them.
+        ffi::sqlite3_result_text(context, json.as_ptr().cast(), len, ffi::SQLITE_TRANSIENT());
+    };
+}
+
 unsafe extern "C" fn sqlite_metadata_count_lookup_destructor(ptr: *mut std::ffi::c_void) {
     if ptr.is_null() {
         return;
@@ -261,6 +308,31 @@ impl Dispatcher {
         if rc != ffi::SQLITE_OK {
             // We don't need to explicitly call the destructor.
             // c.f. https://sqlite.org/c3ref/create_function.html
+            return Err(sqlx::Error::Protocol(format!(
+                "sqlite3_create_function_v2 failed with rc={rc}"
+            )));
+        }
+
+        // Register the bulk metadata counts lookup backed by current metastate.
+        let counts_function_name = b"opsqueue_metadata_counts\0";
+        let user_data = Box::new(self.metastate.clone());
+        let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
+
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                counts_function_name.as_ptr().cast(),
+                1,
+                ffi::SQLITE_UTF8,
+                user_data,
+                Some(sqlite_metadata_counts_lookup),
+                None,
+                None,
+                Some(sqlite_metadata_count_lookup_destructor),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
             return Err(sqlx::Error::Protocol(format!(
                 "sqlite3_create_function_v2 failed with rc={rc}"
             )));
