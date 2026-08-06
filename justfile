@@ -82,9 +82,7 @@ bench-chunks-select:
   set -euo pipefail
   cargo bench --bench chunks_select
 
-  cd libs/opsqueue_python
-  source "./.setup_local_venv.sh"
-  cd -
+  source "./libs/opsqueue_python/.setup_local_venv.sh"
   python opsqueue/benches/plot_chunks_select.py
 
 # Run all linters, fast and slow
