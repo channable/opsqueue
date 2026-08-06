@@ -258,7 +258,7 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let csv_path = PathBuf::from("benches/chunks_select_bench.csv");
     if let Some(parent) = csv_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).unwrap();
     }
     let mut csv = std::fs::File::create(&csv_path)
         .unwrap_or_else(|e| panic!("Failed to create CSV at {}: {}", csv_path.display(), e));
