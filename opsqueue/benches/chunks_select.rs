@@ -229,10 +229,10 @@ async fn bench_strategy(
     dispatcher: &Dispatcher,
 ) -> BenchStats {
     let mut all_reservation_durations: Vec<Vec<f64>> = Vec::with_capacity(SAMPLES_PER_STAT);
+    let mut chunks_reserved = Vec::with_capacity(RESERVATIONS_IN_WARMUP + RESERVATIONS_IN_SAMPLE);
     // For each of the samples we want to collect.
     for _ in 0..SAMPLES_PER_STAT {
         let mut sample_reservation_durations = Vec::with_capacity(RESERVATIONS_IN_SAMPLE);
-        let mut chunks_reserved = Vec::new();
         // For each sample, reserve N chunks (some are warmups).
         for i in 0..(RESERVATIONS_IN_WARMUP + RESERVATIONS_IN_SAMPLE) {
             let start = Instant::now();
@@ -245,7 +245,7 @@ async fn bench_strategy(
         all_reservation_durations.push(sample_reservation_durations);
         // Reset the queue state for the next run
         let mut conn = db_pools.writer_conn().await.unwrap();
-        for chunk_id in chunks_reserved {
+        for chunk_id in chunks_reserved.drain(..) {
             dispatcher
                 .finish_reservation(&mut conn, chunk_id, false)
                 .await;
