@@ -145,23 +145,21 @@ async fn seed_or_extend(
     let next_layout
     @ (total_metadata_values, submissions_per_metadata_value, chunks_per_submission) =
         layout(shape, total_chunks);
-    // Check if we are seeding the database from scratch, or extending.
-    let mut we_are_extending = false;
-    let mut current_metadata_values = 0;
-    if let Some((
+    // Check if we are seeding the database from scratch, or extending. We can
+    // only extend if the shape of the data is compatible with the current
+    // inserted data.
+    let (we_are_extending, current_metadata_values) = if let Some((
         current_metadata_values_,
         current_submissions_per_metadata_value,
         current_chunks_per_submission,
     )) = current_layout
+        && current_submissions_per_metadata_value == submissions_per_metadata_value
+        && current_chunks_per_submission == chunks_per_submission
     {
-        // We can only extend if the shape of the data is compatible with the current inserted data.
-        if current_submissions_per_metadata_value == submissions_per_metadata_value
-            && current_chunks_per_submission == chunks_per_submission
-        {
-            we_are_extending = true;
-            current_metadata_values = current_metadata_values_;
-        }
-    }
+        (true, current_metadata_values_)
+    } else {
+        (false, 0)
+    };
     // Time to acquire the DB connection. Either an existing connection, or set up from scratch.
     println!(); // Visually separate each run.
     let db_pools = if we_are_extending {
