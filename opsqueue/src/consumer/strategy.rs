@@ -18,6 +18,48 @@ pub enum Strategy {
     },
 }
 
+/// Iterator over the `meta_key`s of a chain of nested
+/// [`Strategy::PreferDistinct`]. outermost first. Stops at the first
+/// non-`PreferDistinct` strategy, which can afterwards be retrieved with
+/// [`MetaKeysIter::take`].
+pub struct MetaKeysIter<'a> {
+    strategy: &'a Strategy,
+}
+
+impl<'a> MetaKeysIter<'a> {
+    /// The first non-[`Strategy::PreferDistinct`] strategy in the chain.
+    #[must_use]
+    pub fn take(self) -> &'a Strategy {
+        self.strategy
+    }
+}
+
+impl<'a> Iterator for MetaKeysIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.strategy {
+            Strategy::Oldest | Strategy::Newest | Strategy::Random => None,
+            Strategy::PreferDistinct {
+                meta_key,
+                underlying,
+            } => {
+                self.strategy = underlying.as_ref();
+                Some(meta_key.as_str())
+            }
+        }
+    }
+}
+
+impl Strategy {
+    /// Iterate over the `meta_key`s of this chain of nested
+    /// [`Strategy::PreferDistinct`], outermost first.
+    #[must_use]
+    pub fn meta_keys(&self) -> MetaKeysIter<'_> {
+        MetaKeysIter { strategy: self }
+    }
+}
+
 #[cfg(feature = "server-logic")]
 impl Strategy {
     pub fn build_query<'a>(
@@ -75,34 +117,43 @@ impl Strategy {
             Oldest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id ASC"),
             Newest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC"),
             Random => Self::push_random_order_query(qb, "id as submission_id", "submissions", None),
-            PreferDistinct {
-                meta_key,
-                underlying,
-            } => {
+            PreferDistinct { .. } => {
+                // Nested `PreferDistinct`s are flattened into a single query
+                // level: rather than one CTE per level, we emit one `counts_N`
+                // CTE per meta key and a single multi-key `ORDER BY`.
+                let mut meta_keys_iter = self.meta_keys();
+                let meta_keys: Vec<&str> = meta_keys_iter.by_ref().collect();
+                let underlying = meta_keys_iter.take();
+
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
                 let qb = underlying.build_query_snippet_returning_submission_ids(qb);
-                qb.push("),");
-                // In-flight chunk count per submission, read via FFI.
-                qb.push("counts AS (SELECT submission_id, opsqueue_metadata_count(");
-                qb.push_bind(meta_key);
-                qb.push(
-                    ", metadata_value) AS count FROM submissions_metadata WHERE metadata_key = ",
-                );
-                qb.push_bind(meta_key);
-                qb.push("),");
+                qb.push(")");
+                // In-flight chunk count per submission, per meta key, read via FFI.
+                for (i, meta_key) in meta_keys.iter().enumerate() {
+                    qb.push(format!(
+                        ", counts_{i} AS (SELECT submission_id, opsqueue_metadata_count("
+                    ));
+                    qb.push_bind(*meta_key);
+                    qb.push(
+                        ", metadata_value) AS count FROM submissions_metadata WHERE metadata_key = ",
+                    );
+                    qb.push_bind(*meta_key);
+                    qb.push(")");
+                }
                 // Submissions ranked by in-flight chunks. Submissions without a
-                // value for this key get a NULL count and so are ranked first.
-                qb.push(
-                    // MATERIALIZED is necessary to preserve the order.
-                    "ranked_submissions AS MATERIALIZED (
-                        SELECT inner.submission_id
-                        FROM inner
-                        LEFT JOIN counts c ON inner.submission_id = c.submission_id
-                        ORDER BY c.count ASC NULLS FIRST
-                    )",
-                );
-                qb.push(" SELECT submission_id FROM ranked_submissions")
+                // value for a key get a NULL count and so are ranked first.
+                qb.push(" SELECT inner.submission_id FROM inner");
+                for i in 0..meta_keys.len() {
+                    qb.push(format!(
+                        " LEFT JOIN counts_{i} ON inner.submission_id = counts_{i}.submission_id"
+                    ));
+                }
+                for i in 0..meta_keys.len() {
+                    qb.push(if i == 0 { " ORDER BY " } else { ", " });
+                    qb.push(format!("counts_{i}.count ASC NULLS FIRST"));
+                }
+                qb
             }
         }
     }
@@ -381,7 +432,7 @@ pub mod test {
             ORDER BY
               id ASC
           ),
-          counts AS (
+          counts_0 AS (
             SELECT
               submission_id,
               opsqueue_metadata_count(?, metadata_value) AS count
@@ -389,20 +440,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts c ON inner.submission_id = c.submission_id
-            ORDER BY
-              c.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -416,13 +461,11 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE ranked_submissions
-        11, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        13, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        35, 6, USE TEMP B-TREE FOR ORDER BY
-        47, 3, SCAN ranked_submissions
-        58, 0, SCAN underlying_submission_ids
-        60, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        8, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        10, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        32, 3, USE TEMP B-TREE FOR ORDER BY
+        44, 0, SCAN underlying_submission_ids
+        46, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -456,7 +499,7 @@ pub mod test {
             ORDER BY
               id DESC
           ),
-          counts AS (
+          counts_0 AS (
             SELECT
               submission_id,
               opsqueue_metadata_count(?, metadata_value) AS count
@@ -464,20 +507,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts c ON inner.submission_id = c.submission_id
-            ORDER BY
-              c.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -491,13 +528,11 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE ranked_submissions
-        11, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        13, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        35, 6, USE TEMP B-TREE FOR ORDER BY
-        47, 3, SCAN ranked_submissions
-        58, 0, SCAN underlying_submission_ids
-        60, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        8, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        10, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        32, 3, USE TEMP B-TREE FOR ORDER BY
+        44, 0, SCAN underlying_submission_ids
+        46, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -538,7 +573,7 @@ pub mod test {
             WHERE
               random_order < ?
           ),
-          counts AS (
+          counts_0 AS (
             SELECT
               submission_id,
               opsqueue_metadata_count(?, metadata_value) AS count
@@ -546,20 +581,14 @@ pub mod test {
               submissions_metadata
             WHERE
               metadata_key = ?
-          ),
-          ranked_submissions AS MATERIALIZED (
-            SELECT
-              inner.submission_id
-            FROM
-              inner
-              LEFT JOIN counts c ON inner.submission_id = c.submission_id
-            ORDER BY
-              c.count ASC NULLS FIRST
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -573,19 +602,17 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE ranked_submissions
-        8, 6, CO-ROUTINE inner
-        9, 8, COMPOUND QUERY
-        10, 9, LEFT-MOST SUBQUERY
-        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
-        22, 9, UNION ALL
-        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        39, 6, SCAN inner
-        42, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        65, 6, USE TEMP B-TREE FOR ORDER BY
-        77, 3, SCAN ranked_submissions
-        88, 0, SCAN underlying_submission_ids
-        90, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        5, 3, CO-ROUTINE inner
+        6, 5, COMPOUND QUERY
+        7, 6, LEFT-MOST SUBQUERY
+        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        19, 6, UNION ALL
+        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        36, 3, SCAN inner
+        39, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        62, 3, USE TEMP B-TREE FOR ORDER BY
+        74, 0, SCAN underlying_submission_ids
+        76, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -616,46 +643,21 @@ pub mod test {
         underlying_submission_ids AS MATERIALIZED (
           WITH
           inner AS NOT MATERIALIZED (
-            WITH
-            inner AS NOT MATERIALIZED (
-              SELECT
-                id as submission_id
-              FROM
-                submissions
-              WHERE
-                random_order >= ?
-              UNION ALL
-              SELECT
-                id as submission_id
-              FROM
-                submissions
-              WHERE
-                random_order < ?
-            ),
-            counts AS (
-              SELECT
-                submission_id,
-                opsqueue_metadata_count(?, metadata_value) AS count
-              FROM
-                submissions_metadata
-              WHERE
-                metadata_key = ?
-            ),
-            ranked_submissions AS MATERIALIZED (
-              SELECT
-                inner.submission_id
-              FROM
-                inner
-                LEFT JOIN counts c ON inner.submission_id = c.submission_id
-              ORDER BY
-                c.count ASC NULLS FIRST
-            )
             SELECT
-              submission_id
+              id as submission_id
             FROM
-              ranked_submissions
+              submissions
+            WHERE
+              random_order >= ?
+            UNION ALL
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order < ?
           ),
-          counts AS (
+          counts_0 AS (
             SELECT
               submission_id,
               opsqueue_metadata_count(?, metadata_value) AS count
@@ -664,19 +666,24 @@ pub mod test {
             WHERE
               metadata_key = ?
           ),
-          ranked_submissions AS MATERIALIZED (
+          counts_1 AS (
             SELECT
-              inner.submission_id
+              submission_id,
+              opsqueue_metadata_count(?, metadata_value) AS count
             FROM
-              inner
-              LEFT JOIN counts c ON inner.submission_id = c.submission_id
-            ORDER BY
-              c.count ASC NULLS FIRST
+              submissions_metadata
+            WHERE
+              metadata_key = ?
           )
           SELECT
-            submission_id
+            inner.submission_id
           FROM
-            ranked_submissions
+            inner
+            LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+            LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
+          ORDER BY
+            counts_0.count ASC NULLS FIRST,
+            counts_1.count ASC NULLS FIRST
         )
         SELECT
           chunks.*
@@ -690,23 +697,18 @@ pub mod test {
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE ranked_submissions
-        9, 6, MATERIALIZE ranked_submissions
-        11, 9, CO-ROUTINE inner
-        12, 11, COMPOUND QUERY
-        13, 12, LEFT-MOST SUBQUERY
-        16, 13, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
-        25, 12, UNION ALL
-        28, 25, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        42, 9, SCAN inner
-        45, 9, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        68, 9, USE TEMP B-TREE FOR ORDER BY
-        82, 6, SCAN ranked_submissions
-        84, 6, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
-        107, 6, USE TEMP B-TREE FOR ORDER BY
-        119, 3, SCAN ranked_submissions
-        130, 0, SCAN underlying_submission_ids
-        132, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        5, 3, CO-ROUTINE inner
+        6, 5, COMPOUND QUERY
+        7, 6, LEFT-MOST SUBQUERY
+        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        19, 6, UNION ALL
+        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        37, 3, SCAN inner
+        40, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        50, 3, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        81, 3, USE TEMP B-TREE FOR ORDER BY
+        93, 0, SCAN underlying_submission_ids
+        95, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
