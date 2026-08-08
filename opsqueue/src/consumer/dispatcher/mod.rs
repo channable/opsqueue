@@ -179,7 +179,8 @@ impl Dispatcher {
         };
 
         if rc != ffi::SQLITE_OK {
-            unsafe { sqlite_reserved_chunk_lookup_destructor(user_data) };
+            // We don't need to explicitly call the destructor.
+            // c.f. https://sqlite.org/c3ref/create_function.html
             return Err(sqlx::Error::Protocol(format!(
                 "sqlite3_create_function_v2 failed with rc={rc}"
             )));
