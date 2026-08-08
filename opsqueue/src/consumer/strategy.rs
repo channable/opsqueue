@@ -42,23 +42,17 @@ impl Strategy {
         match self {
             Oldest => qb.push("SELECT * FROM chunks ORDER BY submission_id ASC"),
             Newest => qb.push("SELECT * FROM chunks ORDER BY submission_id DESC"),
-            Random => {
-                let random_offset: u16 = rand::random();
-                qb.push("SELECT * FROM chunks WHERE random_order >= ")
-                    .push_bind(random_offset)
-                    .push(" UNION ALL SELECT * FROM chunks WHERE random_order < ")
-                    .push_bind(random_offset)
-            }
+            Random => Self::push_random_order_query(qb, "*", "chunks"),
             PreferDistinct { .. } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH underlying_submission_ids AS MATERIALIZED (");
                 let qb = self.build_query_snippet_returning_submission_ids(qb, metastate);
                 qb.push(") ");
-                // In SQLite, CROSS JOIN <table> ON/WHERE does NOT produce N x M
-                // rows, it acts as an INNER JOIN forcing the query planner to
-                // use '<table>' as the outer loop, preserving its sort order.
-                // c.f.
-                // https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
+                // In SQLite, <foo> CROSS JOIN <bar> ON/WHERE does NOT produce N
+                // x M rows, it acts as an INNER JOIN but forces the query
+                // planner to use '<foo>' as the outer loop, preserving the
+                // underlying sort order.
+                // c.f. https://sqlite.org/optoverview.html#manual_control_of_query_plans_using_cross_join
                 qb.push(
                     " SELECT chunks.*
                         FROM underlying_submission_ids
@@ -78,7 +72,7 @@ impl Strategy {
         match self {
             Oldest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id ASC"),
             Newest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC"),
-            Random => panic!("Random underlying strategy not supported"),
+            Random => Self::push_random_order_query(qb, "id as submission_id", "submissions"),
             PreferDistinct {
                 meta_key,
                 underlying,
@@ -128,6 +122,24 @@ impl Strategy {
                 qb.push(" SELECT submission_id FROM ranked_submissions")
             }
         }
+    }
+
+    /// Append a query snippet to select from the `random_order` column on the
+    /// given table using the "cutting the deck" technique.
+    fn push_random_order_query<'a>(
+        qb: &'a mut QueryBuilder<Sqlite>,
+        columns: &str,
+        table_name: &str,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        let random_offset: u16 = rand::random();
+        qb.push(format!(
+            "SELECT {columns} FROM {table_name} WHERE random_order >= "
+        ))
+        .push_bind(random_offset)
+        .push(format!(
+            " UNION ALL SELECT {columns} FROM {table_name} WHERE random_order < "
+        ))
+        .push_bind(random_offset)
     }
 }
 
@@ -446,62 +458,51 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submission_ids AS MATERIALIZED (
+          WITH
+          inner AS NOT MATERIALIZED (
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order >= ?
+            UNION ALL
+            SELECT
+              id as submission_id
+            FROM
+              submissions
+            WHERE
+              random_order < ?
+          ),
+          counts AS (
+            SELECT
+              key,
+              value
+            FROM
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts c ON sm.metadata_value = c.key
+            ORDER BY
+              c.value ASC NULLS FIRST
+          )
           SELECT
-            *
+            submission_id
           FROM
-            chunks
-          WHERE
-            random_order >= ?
-          UNION ALL
-          SELECT
-            *
-          FROM
-            chunks
-          WHERE
-            random_order < ?
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
-              SELECT
-                value
-              FROM
-                json_each()
-            )
+            ranked_submissions
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
-        WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          underlying_submission_ids
+          CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -561,106 +562,76 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         WITH
-        inner_company_id AS NOT MATERIALIZED (
+        underlying_submission_ids AS MATERIALIZED (
           WITH
-          inner_priority AS NOT MATERIALIZED (
-            SELECT
-              *
-            FROM
-              chunks
-            WHERE
-              random_order >= ?
-            UNION ALL
-            SELECT
-              *
-            FROM
-              chunks
-            WHERE
-              random_order < ?
-          ),
-          taken_priority AS (
-            SELECT
-              *
-            FROM
-              submissions_metadata
-            WHERE
-              submissions_metadata.metadata_key = ?
-              AND submissions_metadata.metadata_value IN (
-                SELECT
-                  value
-                FROM
-                  json_each()
-              )
-          )
-          SELECT
-            *
-          FROM
-            inner_priority
-          WHERE
-            NOT EXISTS (
+          inner AS NOT MATERIALIZED (
+            WITH
+            inner AS NOT MATERIALIZED (
               SELECT
-                1
+                id as submission_id
               FROM
-                taken_priority
+                submissions
               WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
-          UNION ALL
-          SELECT
-            *
-          FROM
-            inner_priority
-          WHERE
-            EXISTS (
+                random_order >= ?
+              UNION ALL
               SELECT
-                1
+                id as submission_id
               FROM
-                taken_priority
+                submissions
               WHERE
-                inner_priority.submission_id = taken_priority.submission_id
-            )
-        ),
-        taken_company_id AS (
-          SELECT
-            *
-          FROM
-            submissions_metadata
-          WHERE
-            submissions_metadata.metadata_key = ?
-            AND submissions_metadata.metadata_value IN (
+                random_order < ?
+            ),
+            counts AS (
               SELECT
+                key,
                 value
               FROM
-                json_each()
+                json_each(?)
+            ),
+            ranked_submissions AS MATERIALIZED (
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+                AND sm.metadata_key = ?
+                LEFT JOIN counts c ON sm.metadata_value = c.key
+              ORDER BY
+                c.value ASC NULLS FIRST
             )
+            SELECT
+              submission_id
+            FROM
+              ranked_submissions
+          ),
+          counts AS (
+            SELECT
+              key,
+              value
+            FROM
+              json_each(?)
+          ),
+          ranked_submissions AS MATERIALIZED (
+            SELECT
+              inner.submission_id
+            FROM
+              inner
+              LEFT JOIN submissions_metadata sm ON inner.submission_id = sm.submission_id
+              AND sm.metadata_key = ?
+              LEFT JOIN counts c ON sm.metadata_value = c.key
+            ORDER BY
+              c.value ASC NULLS FIRST
+          )
+          SELECT
+            submission_id
+          FROM
+            ranked_submissions
         )
         SELECT
-          *
+          chunks.*
         FROM
-          inner_company_id
-        WHERE
-          NOT EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
-        UNION ALL
-        SELECT
-          *
-        FROM
-          inner_company_id
-        WHERE
-          EXISTS (
-            SELECT
-              1
-            FROM
-              taken_company_id
-            WHERE
-              inner_company_id.submission_id = taken_company_id.submission_id
-          )
+          underlying_submission_ids
+          CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
         ");
 
         let explained = explain(qb, &mut conn).await;
