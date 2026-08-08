@@ -69,7 +69,7 @@ pub type MetaStateVal = i64;
 
 #[derive(Debug, Default)]
 pub struct MetaStateField {
-    vals_to_counts: DashMap<MetaStateVal, usize, FxBuildHasher>,
+    pub vals_to_counts: DashMap<MetaStateVal, usize, FxBuildHasher>,
     counts_to_vals: SkipSet<(usize, MetaStateVal)>,
 }
 
