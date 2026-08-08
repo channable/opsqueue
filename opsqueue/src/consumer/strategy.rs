@@ -194,6 +194,27 @@ pub mod test {
         );
     }
 
+    /// A weaker version of `assert_streaming_query`, for `PreferDistinct`.
+    ///
+    /// `PreferDistinct` cannot stream: to rank submissions by how many of their
+    /// chunks are already in flight, it has to sort the `submissions` table. We
+    /// accept that cost, because there are fewer submissions than chunks.
+    ///
+    /// What we do not accept is doing the same to `chunks`, so we only require
+    /// that `chunks` is reached by an index seek.
+    fn assert_streaming_chunks(qb: &sqlx::QueryBuilder<Sqlite>, explained: &str) {
+        let query_binding = qb.sql();
+        let query = query_binding.as_str();
+        assert!(
+            !explained.contains("SCAN chunks"),
+            "Query should never scan the whole `chunks` backlog, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+        assert!(
+            explained.contains("SEARCH chunks"),
+            "Query should reach `chunks` via an index seek, but it did not.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+        );
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_oldest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
@@ -341,21 +362,17 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        25, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        33, 22, CREATE BLOOM FILTER
-        62, 1, UNION ALL
-        65, 62, SCAN chunks
-        68, 62, CORRELATED SCALAR SUBQUERY 6
-        72, 68, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        80, 68, REUSE LIST SUBQUERY 2
+        3, 0, MATERIALIZE underlying_submission_ids
+        6, 3, MATERIALIZE ranked_submissions
+        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        14, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        23, 6, SCAN json_each VIRTUAL TABLE INDEX 1: LEFT-JOIN
+        46, 6, USE TEMP B-TREE FOR ORDER BY
+        58, 3, SCAN ranked_submissions
+        69, 0, SCAN underlying_submission_ids
+        71, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -420,21 +437,17 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SCAN chunks
-        8, 2, CORRELATED SCALAR SUBQUERY 4
-        12, 8, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        22, 8, LIST SUBQUERY 2
-        25, 22, SCAN json_each VIRTUAL TABLE INDEX 0:
-        33, 22, CREATE BLOOM FILTER
-        62, 1, UNION ALL
-        65, 62, SCAN chunks
-        68, 62, CORRELATED SCALAR SUBQUERY 6
-        72, 68, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        80, 68, REUSE LIST SUBQUERY 2
+        3, 0, MATERIALIZE underlying_submission_ids
+        6, 3, MATERIALIZE ranked_submissions
+        12, 6, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        14, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        23, 6, SCAN json_each VIRTUAL TABLE INDEX 1: LEFT-JOIN
+        46, 6, USE TEMP B-TREE FOR ORDER BY
+        58, 3, SCAN ranked_submissions
+        69, 0, SCAN underlying_submission_ids
+        71, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -506,35 +519,23 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        7, 4, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        16, 4, CORRELATED SCALAR SUBQUERY 5
-        20, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        30, 16, LIST SUBQUERY 3
-        33, 30, SCAN json_each VIRTUAL TABLE INDEX 0:
-        41, 30, CREATE BLOOM FILTER
-        62, 3, UNION ALL
-        65, 62, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        75, 62, CORRELATED SCALAR SUBQUERY 5
-        79, 75, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        87, 75, REUSE LIST SUBQUERY 3
-        107, 3, UNION ALL
-        108, 107, COMPOUND QUERY
-        109, 108, LEFT-MOST SUBQUERY
-        112, 109, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        121, 109, CORRELATED SCALAR SUBQUERY 7
-        125, 121, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        133, 121, REUSE LIST SUBQUERY 3
-        153, 108, UNION ALL
-        156, 153, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        166, 153, CORRELATED SCALAR SUBQUERY 7
-        170, 166, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        178, 166, REUSE LIST SUBQUERY 3
+        3, 0, MATERIALIZE underlying_submission_ids
+        6, 3, MATERIALIZE ranked_submissions
+        8, 6, CO-ROUTINE inner
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        40, 6, SCAN inner
+        43, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        53, 6, SCAN json_each VIRTUAL TABLE INDEX 1: LEFT-JOIN
+        76, 6, USE TEMP B-TREE FOR ORDER BY
+        88, 3, SCAN ranked_submissions
+        99, 0, SCAN underlying_submission_ids
+        101, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -635,117 +636,28 @@ pub mod test {
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
+        assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        3, 2, COMPOUND QUERY
-        4, 3, LEFT-MOST SUBQUERY
-        5, 4, COMPOUND QUERY
-        6, 5, LEFT-MOST SUBQUERY
-        9, 6, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        18, 6, CORRELATED SCALAR SUBQUERY 5
-        22, 18, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        32, 18, LIST SUBQUERY 3
-        35, 32, SCAN json_each VIRTUAL TABLE INDEX 0:
-        43, 32, CREATE BLOOM FILTER
-        56, 6, CORRELATED SCALAR SUBQUERY 11
-        60, 56, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        70, 56, LIST SUBQUERY 9
-        73, 70, SCAN json_each VIRTUAL TABLE INDEX 0:
-        81, 70, CREATE BLOOM FILTER
-        102, 5, UNION ALL
-        105, 102, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        115, 102, CORRELATED SCALAR SUBQUERY 5
-        119, 115, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        129, 115, LIST SUBQUERY 3
-        132, 129, SCAN json_each VIRTUAL TABLE INDEX 0:
-        140, 129, CREATE BLOOM FILTER
-        153, 102, CORRELATED SCALAR SUBQUERY 11
-        157, 153, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        167, 153, LIST SUBQUERY 9
-        170, 167, SCAN json_each VIRTUAL TABLE INDEX 0:
-        178, 167, CREATE BLOOM FILTER
-        199, 5, UNION ALL
-        200, 199, COMPOUND QUERY
-        201, 200, LEFT-MOST SUBQUERY
-        204, 201, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        213, 201, CORRELATED SCALAR SUBQUERY 7
-        217, 213, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        227, 213, LIST SUBQUERY 3
-        230, 227, SCAN json_each VIRTUAL TABLE INDEX 0:
-        238, 227, CREATE BLOOM FILTER
-        251, 201, CORRELATED SCALAR SUBQUERY 11
-        255, 251, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        265, 251, LIST SUBQUERY 9
-        268, 265, SCAN json_each VIRTUAL TABLE INDEX 0:
-        276, 265, CREATE BLOOM FILTER
-        297, 200, UNION ALL
-        300, 297, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        310, 297, CORRELATED SCALAR SUBQUERY 7
-        314, 310, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        324, 310, LIST SUBQUERY 3
-        327, 324, SCAN json_each VIRTUAL TABLE INDEX 0:
-        335, 324, CREATE BLOOM FILTER
-        348, 297, CORRELATED SCALAR SUBQUERY 11
-        352, 348, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        362, 348, LIST SUBQUERY 9
-        365, 362, SCAN json_each VIRTUAL TABLE INDEX 0:
-        373, 362, CREATE BLOOM FILTER
-        394, 200, UNION ALL
-        395, 394, COMPOUND QUERY
-        396, 395, LEFT-MOST SUBQUERY
-        397, 396, COMPOUND QUERY
-        398, 397, LEFT-MOST SUBQUERY
-        401, 398, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        410, 398, CORRELATED SCALAR SUBQUERY 5
-        414, 410, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        424, 410, LIST SUBQUERY 3
-        427, 424, SCAN json_each VIRTUAL TABLE INDEX 0:
-        435, 424, CREATE BLOOM FILTER
-        448, 398, CORRELATED SCALAR SUBQUERY 13
-        452, 448, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        462, 448, LIST SUBQUERY 9
-        465, 462, SCAN json_each VIRTUAL TABLE INDEX 0:
-        473, 462, CREATE BLOOM FILTER
-        494, 397, UNION ALL
-        497, 494, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        507, 494, CORRELATED SCALAR SUBQUERY 5
-        511, 507, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        521, 507, LIST SUBQUERY 3
-        524, 521, SCAN json_each VIRTUAL TABLE INDEX 0:
-        532, 521, CREATE BLOOM FILTER
-        545, 494, CORRELATED SCALAR SUBQUERY 13
-        549, 545, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        559, 545, LIST SUBQUERY 9
-        562, 559, SCAN json_each VIRTUAL TABLE INDEX 0:
-        570, 559, CREATE BLOOM FILTER
-        591, 397, UNION ALL
-        592, 591, COMPOUND QUERY
-        593, 592, LEFT-MOST SUBQUERY
-        596, 593, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        605, 593, CORRELATED SCALAR SUBQUERY 7
-        609, 605, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        619, 605, LIST SUBQUERY 3
-        622, 619, SCAN json_each VIRTUAL TABLE INDEX 0:
-        630, 619, CREATE BLOOM FILTER
-        643, 593, CORRELATED SCALAR SUBQUERY 13
-        647, 643, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        657, 643, LIST SUBQUERY 9
-        660, 657, SCAN json_each VIRTUAL TABLE INDEX 0:
-        668, 657, CREATE BLOOM FILTER
-        689, 592, UNION ALL
-        692, 689, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        702, 689, CORRELATED SCALAR SUBQUERY 7
-        706, 702, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        716, 702, LIST SUBQUERY 3
-        719, 716, SCAN json_each VIRTUAL TABLE INDEX 0:
-        727, 716, CREATE BLOOM FILTER
-        740, 689, CORRELATED SCALAR SUBQUERY 13
-        744, 740, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=? AND metadata_key=?)
-        754, 740, LIST SUBQUERY 9
-        757, 754, SCAN json_each VIRTUAL TABLE INDEX 0:
-        765, 754, CREATE BLOOM FILTER
+        3, 0, MATERIALIZE underlying_submission_ids
+        6, 3, MATERIALIZE ranked_submissions
+        9, 6, MATERIALIZE ranked_submissions
+        11, 9, CO-ROUTINE inner
+        12, 11, COMPOUND QUERY
+        13, 12, LEFT-MOST SUBQUERY
+        16, 13, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        25, 12, UNION ALL
+        28, 25, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        43, 9, SCAN inner
+        46, 9, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        56, 9, SCAN json_each VIRTUAL TABLE INDEX 1: LEFT-JOIN
+        79, 9, USE TEMP B-TREE FOR ORDER BY
+        94, 6, SCAN ranked_submissions
+        96, 6, SEARCH sm USING PRIMARY KEY (submission_id=? AND metadata_key=?) LEFT-JOIN
+        106, 6, SCAN json_each VIRTUAL TABLE INDEX 1: LEFT-JOIN
+        129, 6, USE TEMP B-TREE FOR ORDER BY
+        141, 3, SCAN ranked_submissions
+        152, 0, SCAN underlying_submission_ids
+        154, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
