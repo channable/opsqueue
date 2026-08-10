@@ -47,7 +47,7 @@ def main() -> None:
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlim(right=max_x)
-        ax.set_ylim(top=1_000_000)
+        ax.set_ylim(top=10_000_000)
         ax.set_title(shape)
         ax.set_xlabel("Backlog size (total chunks)")
         ax.set_ylabel("Latency to select first chunk (us) [Median ± P10/P90]")

@@ -88,7 +88,7 @@ impl BenchStats {
 fn max_chunks_by_shape(shape: &Shape) -> Vec<u64> {
     let mut vector: Vec<u64> = vec![
         100, 500, 1_000, 2_000, 4_000, 6_000, 8_000, 10_000, 15_000, 20_000, 30_000, 50_000,
-        75_000, 100_000, 200_000, 500_000, 1_000_000,
+        75_000, 100_000, 200_000,
     ];
     if shape == &Shape::Realistic {
         let max = MAX_CHUNKS.min(METADATA_VALUES * CHUNKS_PER_METADATA_VALUE);
