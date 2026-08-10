@@ -13,7 +13,7 @@ use libsqlite3_sys as ffi;
 use metastate::MetaState;
 use reserver::Reserver;
 use sqlx::QueryBuilder;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -82,51 +82,11 @@ unsafe extern "C" fn sqlite_reserved_chunk_lookup_destructor(ptr: *mut std::ffi:
     let _boxed: Box<Reserver<ChunkId, ChunkId>> = unsafe { Box::from_raw(ptr.cast()) };
 }
 
-unsafe extern "C" fn sqlite_metadata_count_lookup(
-    context: *mut ffi::sqlite3_context,
-    n_args: i32,
-    args: *mut *mut ffi::sqlite3_value,
-) {
-    if n_args != 2 {
-        tracing::error!(
-            n_args,
-            "opsqueue_metadata_count called with unexpected argument count"
-        );
-        unsafe { ffi::sqlite3_result_null(context) };
-        return;
-    }
-
-    let user_data = unsafe { ffi::sqlite3_user_data(context) }
-        .cast_const()
-        .cast::<Arc<MetaState>>();
-    if user_data.is_null() {
-        tracing::error!("opsqueue_metadata_count called without registered metastate user_data");
-        unsafe { ffi::sqlite3_result_null(context) };
-        return;
-    }
-
-    let metadata_key_ptr = unsafe { ffi::sqlite3_value_text(*args.add(0)) };
-    if metadata_key_ptr.is_null() {
-        unsafe { ffi::sqlite3_result_null(context) };
-        return;
-    }
-    let Ok(metadata_key) = unsafe { CStr::from_ptr(metadata_key_ptr.cast()) }.to_str() else {
-        tracing::error!("opsqueue_metadata_count got non-utf8 metadata_key");
-        unsafe { ffi::sqlite3_result_null(context) };
-        return;
-    };
-
-    let metadata_value = unsafe { ffi::sqlite3_value_int64(*args.add(1)) };
-
-    if let Some(meta_count) = unsafe { &*user_data }
-        .get(metadata_key)
-        .and_then(|meta_keys| meta_keys.get(&metadata_value))
-    {
+unsafe extern "C" fn sqlite_cstring_destructor(ptr: *mut std::ffi::c_void) {
+    if !ptr.is_null() {
         unsafe {
-            ffi::sqlite3_result_int64(context, i64::try_from(meta_count).unwrap_or(i64::MAX));
-        };
-    } else {
-        unsafe { ffi::sqlite3_result_null(context) };
+            drop(CString::from_raw(ptr.cast()));
+        }
     }
 }
 
@@ -166,15 +126,35 @@ unsafe extern "C" fn sqlite_metadata_counts_lookup(
         return;
     };
 
-    let json = match unsafe { &*user_data }.get(metadata_key) {
-        Some(field) => field.to_json(),
-        None => "{}".to_string(),
-    };
-    let len = i32::try_from(json.len()).unwrap_or(i32::MAX);
-    unsafe {
-        // SQLITE_TRANSIENT tells SQLite to copy the bytes before we drop them.
-        ffi::sqlite3_result_text(context, json.as_ptr().cast(), len, ffi::SQLITE_TRANSIENT());
-    };
+    match unsafe { &*user_data }.get(metadata_key) {
+        Some(field) => {
+            let json = field.to_json();
+            match i32::try_from(json.len()) {
+                // No SQLite allocation by passing a destructor.
+                // c.f. https://sqlite.org/c3ref/result_blob.html
+                Ok(len) => unsafe {
+                    ffi::sqlite3_result_text(
+                        context,
+                        CString::new(json)
+                            .expect("JSON doesn't contain null-bytes")
+                            .into_raw()
+                            .cast(),
+                        len,
+                        Some(sqlite_cstring_destructor),
+                    );
+                },
+                Err(_) => unsafe {
+                    // Report to SQLite that the generated JSON is too large.
+                    ffi::sqlite3_result_error_toobig(context);
+                },
+            }
+        }
+        // No Rust allocation, and SQLITE_STATIC means no SQLite allocation.
+        // c.f. https://sqlite.org/c3ref/c_static.html
+        None => unsafe {
+            ffi::sqlite3_result_text(context, c"{}".as_ptr(), 2, ffi::SQLITE_STATIC());
+        },
+    }
 }
 
 unsafe extern "C" fn sqlite_metadata_count_lookup_destructor(ptr: *mut std::ffi::c_void) {
@@ -256,8 +236,8 @@ impl Dispatcher {
     async fn register_lookups(&self, conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Error> {
         let mut handle = conn.lock_handle().await?;
         let sqlite = handle.as_raw_handle().as_ptr();
-        let reserved_function_name = b"opsqueue_is_reserved\0";
-        let metadata_count_function_name = b"opsqueue_metadata_count\0";
+        let reserved_function_name = c"opsqueue_is_reserved";
+        let counts_function_name = c"opsqueue_metadata_counts";
 
         // Register the current reserver state on this connection.
         // Re-registering replaces any previous callback on this handle.
@@ -286,38 +266,9 @@ impl Dispatcher {
             )));
         }
 
-        // Register metadata count lookup backed by current metastate.
-        // Re-registering replaces any previous callback on this handle.
-        let user_data = Box::new(self.metastate.clone());
-        let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
-
-        let rc = unsafe {
-            ffi::sqlite3_create_function_v2(
-                sqlite,
-                metadata_count_function_name.as_ptr().cast(),
-                2,
-                ffi::SQLITE_UTF8,
-                user_data,
-                Some(sqlite_metadata_count_lookup),
-                None,
-                None,
-                Some(sqlite_metadata_count_lookup_destructor),
-            )
-        };
-
-        if rc != ffi::SQLITE_OK {
-            // We don't need to explicitly call the destructor.
-            // c.f. https://sqlite.org/c3ref/create_function.html
-            return Err(sqlx::Error::Protocol(format!(
-                "sqlite3_create_function_v2 failed with rc={rc}"
-            )));
-        }
-
         // Register the bulk metadata counts lookup backed by current metastate.
-        let counts_function_name = b"opsqueue_metadata_counts\0";
         let user_data = Box::new(self.metastate.clone());
         let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
-
         let rc = unsafe {
             ffi::sqlite3_create_function_v2(
                 sqlite,

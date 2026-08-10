@@ -12,6 +12,20 @@ pub enum Strategy {
     Oldest,
     Newest,
     Random,
+    /// Perform a sort of submissions by metadata (ordered by in-flight counts),
+    /// ties are broken by the underlying strategy. For example: if we have two
+    /// submissions with 2 in-flight chunks then with PreferDistinct(Oldest) we
+    /// will stream chunks from the oldest submission first.
+    ///
+    /// So note that fairness is on the granularity of submissions, not chunks!
+    /// For underlying strategies of `Oldest` and `Newest` this doesn't matter
+    /// for the chunks because all chunks within a submission have the same age,
+    /// they are ordered by `chunk_index`.
+    ///
+    /// But what if you use the `Random` underlying strategy? Chunks will NOT
+    /// have per-chunk randomness. Randomness will only be at the granularity of
+    /// the submissions (used as a tie-breaker for submissions with equal
+    /// metadata counts).
     PreferDistinct {
         meta_key: String,
         underlying: Box<Strategy>,
@@ -19,15 +33,19 @@ pub enum Strategy {
 }
 
 /// Iterator over the `meta_key`s of a chain of nested
-/// [`Strategy::PreferDistinct`]. outermost first. Stops at the first
+/// [`Strategy::PreferDistinct`], outermost first. Stops at the first
 /// non-`PreferDistinct` strategy, which can afterwards be retrieved with
 /// [`MetaKeysIter::take`].
 pub struct MetaKeysIter<'a> {
+    // The "current" strategy in the nesting. Updated as we iterate.
     strategy: &'a Strategy,
 }
 
 impl<'a> MetaKeysIter<'a> {
-    /// The first non-[`Strategy::PreferDistinct`] strategy in the chain.
+    /// Consumes the iterator and returns the remaining strategy.
+    ///
+    /// If called after the iterator has been fully exhausted, this will be the
+    /// first non-[`Strategy::PreferDistinct`] strategy at the end of the chain.
     #[must_use]
     pub fn take(self) -> &'a Strategy {
         self.strategy
@@ -76,17 +94,16 @@ impl Strategy {
         qb: &'a mut QueryBuilder<Sqlite>,
     ) -> &'a mut QueryBuilder<Sqlite> {
         use Strategy::{Newest, Oldest, PreferDistinct, Random};
-        let ffi_is_reserved = "opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0";
+        let ffi_is_not_reserved =
+            "opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE";
         match self {
-            Oldest => qb
-                .push("SELECT * FROM chunks")
-                .push(format!(" WHERE {ffi_is_reserved}"))
-                .push(" ORDER BY submission_id ASC"),
-            Newest => qb
-                .push("SELECT * FROM chunks")
-                .push(format!(" WHERE {ffi_is_reserved}"))
-                .push(" ORDER BY submission_id DESC"),
-            Random => Self::push_random_order_query(qb, "*", "chunks", Some(ffi_is_reserved)),
+            Oldest => qb.push(format!(
+                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC"
+            )),
+            Newest => qb.push(format!(
+                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id DESC"
+            )),
+            Random => Self::push_random_order_query(qb, "*", "chunks", Some(ffi_is_not_reserved)),
             PreferDistinct { .. } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH underlying_submission_ids AS MATERIALIZED (");
@@ -102,7 +119,7 @@ impl Strategy {
                         FROM underlying_submission_ids
                         CROSS JOIN chunks
                         ON chunks.submission_id = underlying_submission_ids.submission_id
-                        AND {ffi_is_reserved}",
+                        AND {ffi_is_not_reserved}",
                 ))
             }
         }
@@ -118,17 +135,24 @@ impl Strategy {
             Newest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC"),
             Random => Self::push_random_order_query(qb, "id as submission_id", "submissions", None),
             PreferDistinct { .. } => {
-                // Nested `PreferDistinct`s are flattened into a single query
-                // level: rather than one CTE per level, we emit one `counts_N`
-                // CTE per meta key and a single multi-key `ORDER BY`.
                 let mut meta_keys_iter = self.meta_keys();
                 let meta_keys: Vec<&str> = meta_keys_iter.by_ref().collect();
+                assert!(
+                    !meta_keys.is_empty(),
+                    "`PreferDistinct` always yields at least one meta key."
+                );
                 let underlying = meta_keys_iter.take();
 
-                // Unique submission IDs from the underlying strategy.
-                let qb = qb.push("WITH inner AS NOT MATERIALIZED (");
+                // Unique submission IDs from the underlying strategy. Note how
+                // we also keep the row number from the underlying query, this
+                // is used as a tie-breaker if metadata counts are equal.
+                let qb = qb.push(
+                    "WITH inner AS NOT MATERIALIZED (
+                  SELECT submission_id, ROW_NUMBER() OVER () as underlying_row FROM ( ",
+                );
                 let qb = underlying.build_query_snippet_returning_submission_ids(qb);
-                qb.push(")");
+                qb.push(" ))");
+
                 // In-flight chunk count per submission, per meta key.
                 //
                 // The FFI call returns all counts as JSON in a single call.
@@ -137,19 +161,21 @@ impl Strategy {
                 for (i, meta_key) in meta_keys.iter().enumerate() {
                     qb.push(format!(
                         ", counts_{i} AS (
-                            SELECT sm.submission_id, je.value AS count
+                            SELECT sm.submission_id, ffi_counts.value AS count
                             FROM json_each(opsqueue_metadata_counts("
                     ));
                     qb.push_bind(*meta_key);
                     qb.push(
-                        ")) je
+                        "))
+                            AS ffi_counts
                             CROSS JOIN submissions_metadata sm
-                                ON sm.metadata_value = CAST(je.key AS INTEGER)
+                            ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
                             WHERE sm.metadata_key = ",
                     );
                     qb.push_bind(*meta_key);
                     qb.push(")");
                 }
+
                 // Submissions ranked by in-flight chunks. Submissions without a
                 // value for a key get a NULL count and so are ranked first.
                 qb.push(" SELECT inner.submission_id FROM inner");
@@ -162,18 +188,33 @@ impl Strategy {
                     qb.push(if i == 0 { " ORDER BY " } else { ", " });
                     qb.push(format!("counts_{i}.count ASC NULLS FIRST"));
                 }
-                qb
+
+                // Ensure that submissions with equal metadata counts use the
+                // ordering of the underlying strategy as a tie-breaker.
+                qb.push(", inner.underlying_row ASC")
             }
         }
     }
 
-    /// Append a query snippet to select from the `random_order` column on the
-    /// given table using the "cutting the deck" technique.
-    fn push_random_order_query<'a>(
+    /// Append a query snippet to a `QueryBuilder` to select `columns` using the
+    /// `random_order` column as a filter (the "cutting the deck" technique),
+    /// from table `table`.
+    ///
+    /// ```
+    /// use opsqueue::consumer::strategy::Strategy;
+    /// use sqlx::{QueryBuilder, Sqlite};
+    /// let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("");
+    /// Strategy::push_random_order_query(&mut qb, "id, name", "users", Some("status = 'active'"));
+    /// let expected_sql = "SELECT id, name FROM users WHERE random_order >= ? AND status = 'active' \
+    ///                     UNION ALL \
+    ///                     SELECT id, name FROM users WHERE random_order < ? AND status = 'active'";
+    /// assert_eq!(qb.sql(), expected_sql);
+    /// ```
+    pub fn push_random_order_query<'a>(
         qb: &'a mut QueryBuilder<Sqlite>,
-        columns: &str,
-        table_name: &str,
-        condition: Option<&str>,
+        columns: &'static str,
+        table_name: &'static str,
+        condition: Option<&'static str>,
     ) -> &'a mut QueryBuilder<Sqlite> {
         let random_offset: u16 = rand::random();
         let push_select = |qb: &mut QueryBuilder<Sqlite>, operator: &str| {
@@ -225,18 +266,10 @@ pub mod test {
         };
     }
 
-    unsafe extern "C" fn sqlite_metadata_count_lookup_noop(
-        context: *mut ffi::sqlite3_context,
-        _n_args: i32,
-        _args: *mut *mut ffi::sqlite3_value,
-    ) {
-        unsafe { ffi::sqlite3_result_null(context) };
-    }
-
     async fn register_lookup_noops(conn: &mut SqliteConnection) {
         let mut handle = conn.lock_handle().await.unwrap();
         let sqlite = handle.as_raw_handle().as_ptr();
-        let function_name = b"opsqueue_is_reserved\0";
+        let function_name = c"opsqueue_is_reserved";
         let rc = unsafe {
             ffi::sqlite3_create_function_v2(
                 sqlite,
@@ -252,27 +285,7 @@ pub mod test {
         };
         assert_eq!(rc, ffi::SQLITE_OK, "register opsqueue_is_reserved failed");
 
-        let function_name = b"opsqueue_metadata_count\0";
-        let rc = unsafe {
-            ffi::sqlite3_create_function_v2(
-                sqlite,
-                function_name.as_ptr().cast(),
-                2,
-                ffi::SQLITE_UTF8,
-                std::ptr::null_mut(),
-                Some(sqlite_metadata_count_lookup_noop),
-                None,
-                None,
-                None,
-            )
-        };
-        assert_eq!(
-            rc,
-            ffi::SQLITE_OK,
-            "register opsqueue_metadata_count failed"
-        );
-
-        let function_name = b"opsqueue_metadata_counts\0";
+        let function_name = c"opsqueue_metadata_counts";
         let rc = unsafe {
             ffi::sqlite3_create_function_v2(
                 sqlite,
@@ -364,7 +377,7 @@ pub mod test {
         FROM
           chunks
         WHERE
-          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
           submission_id ASC
         ");
@@ -389,7 +402,7 @@ pub mod test {
         FROM
           chunks
         WHERE
-          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
           submission_id DESC
         ");
@@ -419,7 +432,7 @@ pub mod test {
           chunks
         WHERE
           random_order >= ?
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         UNION ALL
         SELECT
           *
@@ -427,7 +440,7 @@ pub mod test {
           chunks
         WHERE
           random_order < ?
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -465,19 +478,25 @@ pub mod test {
           WITH
           inner AS NOT MATERIALIZED (
             SELECT
-              id as submission_id
+              submission_id,
+              ROW_NUMBER() OVER () as underlying_row
             FROM
-              submissions
-            ORDER BY
-              id ASC
+              (
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                ORDER BY
+                  id ASC
+              )
           ),
           counts_0 AS (
             SELECT
               sm.submission_id,
-              je.value AS count
+              ffi_counts.value AS count
             FROM
-              json_each(opsqueue_metadata_counts(?)) je
-              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
+              json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -487,29 +506,34 @@ pub mod test {
             inner
             LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
           ORDER BY
-            counts_0.count ASC NULLS FIRST
+            counts_0.count ASC NULLS FIRST,
+            inner.underlying_row ASC
         )
         SELECT
           chunks.*
         FROM
           underlying_submission_ids
           CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE counts_0
-        10, 6, SCAN je VIRTUAL TABLE INDEX 1:
-        15, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
-        35, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        41, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        51, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        69, 3, USE TEMP B-TREE FOR ORDER BY
-        81, 0, SCAN underlying_submission_ids
-        83, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-6)
+        11, 8, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        22, 5, SCAN (subquery-6)
+        59, 3, MATERIALIZE counts_0
+        63, 59, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        68, 59, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        87, 3, SCAN inner
+        94, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        104, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        124, 3, USE TEMP B-TREE FOR ORDER BY
+        136, 0, SCAN underlying_submission_ids
+        138, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -537,19 +561,25 @@ pub mod test {
           WITH
           inner AS NOT MATERIALIZED (
             SELECT
-              id as submission_id
+              submission_id,
+              ROW_NUMBER() OVER () as underlying_row
             FROM
-              submissions
-            ORDER BY
-              id DESC
+              (
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                ORDER BY
+                  id DESC
+              )
           ),
           counts_0 AS (
             SELECT
               sm.submission_id,
-              je.value AS count
+              ffi_counts.value AS count
             FROM
-              json_each(opsqueue_metadata_counts(?)) je
-              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
+              json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -559,29 +589,34 @@ pub mod test {
             inner
             LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
           ORDER BY
-            counts_0.count ASC NULLS FIRST
+            counts_0.count ASC NULLS FIRST,
+            inner.underlying_row ASC
         )
         SELECT
           chunks.*
         FROM
           underlying_submission_ids
           CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_chunks(qb, &explained);
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
-        6, 3, MATERIALIZE counts_0
-        10, 6, SCAN je VIRTUAL TABLE INDEX 1:
-        15, 6, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
-        35, 3, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
-        41, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        51, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        69, 3, USE TEMP B-TREE FOR ORDER BY
-        81, 0, SCAN underlying_submission_ids
-        83, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-6)
+        11, 8, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        22, 5, SCAN (subquery-6)
+        59, 3, MATERIALIZE counts_0
+        63, 59, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        68, 59, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        87, 3, SCAN inner
+        94, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        104, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        124, 3, USE TEMP B-TREE FOR ORDER BY
+        136, 0, SCAN underlying_submission_ids
+        138, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -609,26 +644,32 @@ pub mod test {
           WITH
           inner AS NOT MATERIALIZED (
             SELECT
-              id as submission_id
+              submission_id,
+              ROW_NUMBER() OVER () as underlying_row
             FROM
-              submissions
-            WHERE
-              random_order >= ?
-            UNION ALL
-            SELECT
-              id as submission_id
-            FROM
-              submissions
-            WHERE
-              random_order < ?
+              (
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                WHERE
+                  random_order >= ?
+                UNION ALL
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                WHERE
+                  random_order < ?
+              )
           ),
           counts_0 AS (
             SELECT
               sm.submission_id,
-              je.value AS count
+              ffi_counts.value AS count
             FROM
-              json_each(opsqueue_metadata_counts(?)) je
-              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
+              json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -638,14 +679,15 @@ pub mod test {
             inner
             LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
           ORDER BY
-            counts_0.count ASC NULLS FIRST
+            counts_0.count ASC NULLS FIRST,
+            inner.underlying_row ASC
         )
         SELECT
           chunks.*
         FROM
           underlying_submission_ids
           CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -653,20 +695,22 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
         5, 3, CO-ROUTINE inner
-        6, 5, COMPOUND QUERY
-        7, 6, LEFT-MOST SUBQUERY
-        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
-        19, 6, UNION ALL
-        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        35, 3, MATERIALIZE counts_0
-        39, 35, SCAN je VIRTUAL TABLE INDEX 1:
-        44, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
-        63, 3, SCAN inner
-        70, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        80, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        99, 3, USE TEMP B-TREE FOR ORDER BY
-        111, 0, SCAN underlying_submission_ids
-        113, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        8, 5, CO-ROUTINE (subquery-7)
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        41, 5, SCAN (subquery-7)
+        78, 3, MATERIALIZE counts_0
+        82, 78, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        87, 78, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        106, 3, SCAN inner
+        113, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        123, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        143, 3, USE TEMP B-TREE FOR ORDER BY
+        155, 0, SCAN underlying_submission_ids
+        157, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -698,36 +742,42 @@ pub mod test {
           WITH
           inner AS NOT MATERIALIZED (
             SELECT
-              id as submission_id
+              submission_id,
+              ROW_NUMBER() OVER () as underlying_row
             FROM
-              submissions
-            WHERE
-              random_order >= ?
-            UNION ALL
-            SELECT
-              id as submission_id
-            FROM
-              submissions
-            WHERE
-              random_order < ?
+              (
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                WHERE
+                  random_order >= ?
+                UNION ALL
+                SELECT
+                  id as submission_id
+                FROM
+                  submissions
+                WHERE
+                  random_order < ?
+              )
           ),
           counts_0 AS (
             SELECT
               sm.submission_id,
-              je.value AS count
+              ffi_counts.value AS count
             FROM
-              json_each(opsqueue_metadata_counts(?)) je
-              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
+              json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           ),
           counts_1 AS (
             SELECT
               sm.submission_id,
-              je.value AS count
+              ffi_counts.value AS count
             FROM
-              json_each(opsqueue_metadata_counts(?)) je
-              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(je.key AS INTEGER)
+              json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+              CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
             WHERE
               sm.metadata_key = ?
           )
@@ -739,14 +789,15 @@ pub mod test {
             LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
           ORDER BY
             counts_0.count ASC NULLS FIRST,
-            counts_1.count ASC NULLS FIRST
+            counts_1.count ASC NULLS FIRST,
+            inner.underlying_row ASC
         )
         SELECT
           chunks.*
         FROM
           underlying_submission_ids
           CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = 0
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ");
 
         let explained = explain(qb, &mut conn).await;
@@ -754,25 +805,27 @@ pub mod test {
         insta::assert_snapshot!(explained, @"
         3, 0, MATERIALIZE underlying_submission_ids
         5, 3, CO-ROUTINE inner
-        6, 5, COMPOUND QUERY
-        7, 6, LEFT-MOST SUBQUERY
-        10, 7, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
-        19, 6, UNION ALL
-        22, 19, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
-        35, 3, MATERIALIZE counts_0
-        39, 35, SCAN je VIRTUAL TABLE INDEX 1:
-        44, 35, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
-        63, 3, MATERIALIZE counts_1
-        67, 63, SCAN je VIRTUAL TABLE INDEX 1:
-        72, 63, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
-        91, 3, SCAN inner
-        98, 3, BLOOM FILTER ON counts_0 (submission_id=?)
-        108, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        121, 3, BLOOM FILTER ON counts_1 (submission_id=?)
-        131, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
-        155, 3, USE TEMP B-TREE FOR ORDER BY
-        167, 0, SCAN underlying_submission_ids
-        169, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        8, 5, CO-ROUTINE (subquery-8)
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        41, 5, SCAN (subquery-8)
+        78, 3, MATERIALIZE counts_0
+        82, 78, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        87, 78, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        106, 3, MATERIALIZE counts_1
+        110, 106, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        115, 106, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        134, 3, SCAN inner
+        141, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        151, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        164, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        174, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        199, 3, USE TEMP B-TREE FOR ORDER BY
+        211, 0, SCAN underlying_submission_ids
+        213, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
         ");
     }
 

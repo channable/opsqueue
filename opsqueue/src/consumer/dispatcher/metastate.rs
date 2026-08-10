@@ -109,16 +109,7 @@ impl MetaStateField {
     /// in a single FFI call.
     #[must_use]
     pub fn to_json(&self) -> String {
-        use std::fmt::Write as _;
-        let mut out = String::from("{");
-        for entry in &self.vals_to_counts {
-            if out.len() > 1 {
-                out.push(',');
-            }
-            let _ = write!(out, "\"{}\":{}", entry.key(), entry.value());
-        }
-        out.push('}');
-        out
+        serde_json::to_string(&self.vals_to_counts).unwrap_or_else(|_| String::from("{}"))
     }
 }
 
