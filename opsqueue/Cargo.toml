@@ -81,6 +81,11 @@ workspace = true
 [dev-dependencies]
 insta.workspace = true
 
+[[bench]]
+name = "chunks_select"
+harness = false
+required-features = ["server-logic"]
+
 [features]
 # Dependencies only in use by the server-logic:
 server-logic = [
