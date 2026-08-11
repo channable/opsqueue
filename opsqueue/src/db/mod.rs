@@ -200,6 +200,18 @@ impl DBPools {
             write_pool: Pool::new(pool.clone()),
         }
     }
+
+    /// Create a `DBPools` instance from a single test pool. Only usable in tests.
+    #[cfg(test)]
+    pub(crate) fn from_test_pools(
+        read_pool: &sqlx::SqlitePool,
+        write_pool: &sqlx::SqlitePool,
+    ) -> Self {
+        DBPools {
+            read_pool: Pool::new(read_pool.clone()),
+            write_pool: Pool::new(write_pool.clone()),
+        }
+    }
     /// We check whether we can not only reach the DB but especially if we can run a transaction.
     ///
     /// This handles the case where for whatever reason some other thing holds the write lock for
