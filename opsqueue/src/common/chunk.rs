@@ -225,14 +225,13 @@ impl Chunk {
 #[cfg(feature = "server-logic")]
 pub mod db {
     use super::{
-        Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, ChunkSize, DateTime, SubmissionId,
-        Utc, u63,
+        Chunk, ChunkCompleted, ChunkFailed, ChunkId, ChunkIndex, DateTime, SubmissionId, Utc,
     };
-    use crate::common::errors::{ChunkNotFound, DatabaseError, E, SubmissionNotFound};
+    use crate::common::errors::{DatabaseError, E, SubmissionNotFound};
     use crate::db::{Connection, True, WriterConnection};
     use axum_prometheus::metrics::{counter, gauge};
     use sqlx::{QueryBuilder, Sqlite};
-    use sqlx::{query, query_as};
+    use sqlx::{query, query_as, query_scalar};
 
     impl<'q> sqlx::Encode<'q, Sqlite> for super::ChunkIndex {
         fn encode_by_ref(
@@ -301,27 +300,34 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
-    ) -> Result<(), E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> {
-        let _chunk_size: Result<ChunkSize, E<DatabaseError, E<SubmissionNotFound, ChunkNotFound>>> =
-            conn.transaction(move |mut tx| {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let chunks_moved = conn
+            .transaction(move |mut tx| {
                 Box::pin(async move {
-                    let completed_work =
+                    let chunks_moved =
                         complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
-                    crate::common::submission::db::maybe_complete_submission(
-                        chunk_id.submission_id,
-                        &mut tx,
-                    )
-                    .await
-                    .map_err(|e| match e {
-                        E::L(e) => E::L(e),
-                        E::R(e) => E::R(E::L(e)),
-                    })?;
-                    Ok(completed_work.unwrap_or_default())
+                    if chunks_moved {
+                        crate::common::submission::db::maybe_complete_submission(
+                            chunk_id.submission_id,
+                            &mut tx,
+                        )
+                        .await?;
+                    } else {
+                        tracing::warn!(
+                            "Could not complete chunk {:?} because it was either: \
+                completed, failed, or cancelled before. Ignoring.",
+                            chunk_id
+                        );
+                    }
+
+                    Result::<bool, E<DatabaseError, SubmissionNotFound>>::Ok(chunks_moved)
                 })
             })
-            .await;
+            .await?;
 
-        counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+        if chunks_moved {
+            counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
+        }
         Ok(())
     }
 
@@ -335,17 +341,16 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut tx: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<Option<ChunkSize>> {
+    ) -> sqlx::Result<bool> {
         let now = chrono::prelude::Utc::now();
-        query!(
+        let chunk_moved = query!(
             "
         INSERT INTO chunks_completed
         (submission_id, chunk_index, output_content, completed_at)
         SELECT submission_id, chunk_index, $1, julianday($2) FROM chunks
         WHERE chunks.submission_id = $3 AND chunks.chunk_index = $4;
 
-        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6
-        RETURNING submission_id, chunk_index;
+        DELETE FROM chunks WHERE chunks.submission_id = $5 AND chunks.chunk_index = $6;
         ",
             output_content,
             now,
@@ -354,26 +359,36 @@ pub mod db {
             chunk_id.submission_id,
             chunk_id.chunk_index,
         )
-        .fetch_one(tx.get_inner())
-        .await?;
-        // Defense in depth: Above query should never be called twice on the same chunk.
-        // If it _does_ happen, it means that either a consumer is attempting a chunk they didn't reserve,
-        // or we gave out the same reservation twice.
+        .execute(tx.get_inner())
+        .await?
+        .rows_affected()
+            > 0;
+        // Defense in depth: Above query could be called twice on the same chunk. For instance,
+        // when the server was restarted and the reservations are forgotten, and the same chunk
+        // was reserved again.
         //
-        // By returning early if the chunk was not found,
-        // we ensure that even in these situations
-        // we never mess up the submission's `chunks_done` counter.
+        // In addition, cancelling a submission while a chunk is reserved also results in the chunk
+        // not being in the `chunks` table. Which is fine, because cancelled submissions count as
+        // failed.
+        //
+        // By only updating `chunks_done` when we actually moved a chunk, we ensure that we never
+        // mess up the submission's `chunks_done` counter.
+        //
+        // This does mean we potentially run the same chunk twice, but that is fine because we
+        // assume chunks to be processed idempotently.
         //
         // (Not doing that resulted in a hard-to-track-down bug in the past.
         // https://github.com/channable/opsqueue/issues/76
         // )
-        sqlx::query_scalar!(
-            "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
-            chunk_id.submission_id,
-        )
-        .fetch_one(tx.get_inner())
-        .await
-        .map(|opt| opt.map(ChunkSize))
+        if chunk_moved {
+            sqlx::query_scalar!(
+                "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
+                chunk_id.submission_id,
+            )
+                .fetch_one(tx.get_inner())
+                .await?;
+        }
+        Ok(chunk_moved)
     }
 
     /// Increment retries for a chunk, or move it to failed state.
@@ -395,7 +410,7 @@ pub mod db {
                         submission_id,
                         chunk_index,
                     } = chunk_id;
-                    let fields = query!(
+                    let retries = query_scalar!(
                         "
         UPDATE chunks SET retries = retries + 1
         WHERE submission_id = $1 AND chunk_index = $2
@@ -404,23 +419,32 @@ pub mod db {
                         submission_id,
                         chunk_index
                     )
-                    .fetch_one(tx.get_inner())
+                    .fetch_optional(tx.get_inner())
                     .await?;
-                    tracing::trace!("Retries: {}", fields.retries);
-                    if fields.retries >= max_retries.into() {
-                        crate::common::submission::db::fail_submission_notx(
-                            submission_id,
-                            chunk_index,
-                            failure,
-                            &mut tx,
-                        )
-                        .await?;
+                    if let Some(retries) = retries {
+                        tracing::trace!("Retries: {}", retries);
+                        if retries >= max_retries.into() {
+                            crate::common::submission::db::fail_submission_notx(
+                                submission_id,
+                                chunk_index,
+                                failure,
+                                &mut tx,
+                            )
+                            .await?;
 
-                        Ok::<_, sqlx::Error>(true)
+                            Ok::<_, sqlx::Error>(true)
+                        } else {
+                            counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
+                            // When retrying, the chunk re-enters ('stays') in the backlog,
+                            // so we *don't* decrement the backlog gauge here.
+                            Ok::<_, sqlx::Error>(false)
+                        }
                     } else {
-                        counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
-                        // When retrying, the chunk re-enters ('stays') in the backlog,
-                        // so we *don't* decrement the backlog gauge here.
+                        tracing::warn!(
+                            "Could not fail chunk {:?} because it was either: \
+                            completed, failed, or cancelled before. Ignoring.",
+                            chunk_id
+                        );
                         Ok::<_, sqlx::Error>(false)
                     }
                 })
@@ -583,6 +607,93 @@ pub mod db {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if a SQL query fails.
+    #[tracing::instrument(skip(chunks, conn))]
+    pub async fn insert_many_paused_chunks(
+        chunks: &[Chunk],
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        const ROWS_PER_QUERY: usize = 1000;
+
+        let mut iter = chunks.iter().peekable();
+        while iter.peek().is_some() {
+            let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
+
+            let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+                "INSERT INTO chunks_paused (submission_id, chunk_index, input_content) ",
+            );
+            query_builder.push_values(query_chunks, |mut b, chunk| {
+                b.push_bind(chunk.submission_id)
+                    .push_bind(chunk.chunk_index)
+                    .push_bind(chunk.input_content.clone());
+            });
+            let query = query_builder.build();
+
+            query.execute(conn.get_inner()).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Move all chunks of a paused submission from `chunks_paused` back to `chunks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SQL query fails.
+    #[tracing::instrument(skip(conn))]
+    pub async fn restore_paused_chunks(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        sqlx::query!(
+            "
+    INSERT INTO chunks (submission_id, chunk_index, input_content, retries)
+    SELECT submission_id, chunk_index, input_content, retries FROM chunks_paused WHERE submission_id = $1;
+
+    DELETE FROM chunks_paused WHERE submission_id = $2;
+    ",
+            submission_id,
+            submission_id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+        Ok(())
+    }
+
+    /// Skip (cancel) all chunks of a paused submission by moving them from
+    /// `chunks_paused` to `chunks_failed` with `skipped = true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the SQL query fails.
+    #[tracing::instrument(skip(conn))]
+    pub async fn skip_remaining_paused_chunks(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        let now = chrono::prelude::Utc::now();
+
+        let query_res = sqlx::query!(
+            "
+    INSERT INTO chunks_failed
+    (submission_id, chunk_index, input_content, failure, skipped, failed_at)
+    SELECT submission_id, chunk_index, input_content, '', TRUE, julianday($1) FROM chunks_paused WHERE submission_id = $2;
+
+    DELETE FROM chunks_paused WHERE submission_id = $3;
+    ",
+            now,
+            submission_id,
+            submission_id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+
+        counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
+        Ok(())
+    }
+
     /// Mark all remaining chunks for a submission as skipped/failed.
     ///
     /// # Errors
@@ -600,7 +711,7 @@ pub mod db {
 
     INSERT INTO chunks_failed
     (submission_id, chunk_index, input_content, failure, skipped, failed_at)
-    SELECT submission_id, chunk_index, input_content, '', 1, julianday($1) FROM chunks WHERE chunks.submission_id = $2;
+    SELECT submission_id, chunk_index, input_content, '', TRUE, julianday($1) FROM chunks WHERE chunks.submission_id = $2;
 
     DELETE FROM chunks WHERE chunks.submission_id = $3;
 
@@ -620,13 +731,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count completed chunks.
@@ -634,13 +748,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_completed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_completed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_completed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count failed chunks.
@@ -648,13 +765,33 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_chunks_failed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_failed;")
             .fetch_one(db.get_inner())
             .await?;
-        let count = u63::new(count.cast_unsigned());
-        Ok(count)
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
+    /// Count paused chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_chunks_paused(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM chunks_paused;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Looks up the number of operations in the backlog.
@@ -675,9 +812,10 @@ pub mod db {
 #[cfg(feature = "server-logic")]
 pub mod test {
     use crate::common::StrategicMetadataMap;
-    use crate::common::submission::db::insert_submission_raw;
+    use crate::common::submission::db::{insert_submission, insert_submission_raw};
     use crate::common::submission::{Submission, SubmissionStatus};
     use crate::db::{Connection as _, WriterPool};
+    use std::assert_matches;
 
     use super::db::*;
     use super::*;
@@ -692,11 +830,11 @@ pub mod test {
             vec![1, 2, 3, 4, 5].into(),
         );
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         insert_chunk(chunk.clone(), &mut conn)
             .await
             .expect("Insert chunk failed");
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -752,12 +890,9 @@ pub mod test {
         .await
         .expect("complete chunk failed");
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_chunks_completed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
-        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -770,12 +905,13 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
         .unwrap();
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 1);
 
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -804,6 +940,35 @@ pub mod test {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_calling_complete_chunk_twice_for_same_chunk_does_not_error(
+        db: sqlx::SqlitePool,
+    ) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+
+        let chunk_id = ChunkId {
+            submission_id: chunks[0].submission_id,
+            chunk_index: chunks[0].chunk_index,
+        };
+
+        insert_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let res = complete_chunk(chunk_id, None, &mut conn).await;
+        assert_matches!(res, Ok(()));
+
+        let res = complete_chunk(chunk_id, None, &mut conn).await;
+        assert_matches!(res, Ok(()));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fail_chunk(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
@@ -824,11 +989,40 @@ pub mod test {
         .await
         .expect("Succeed chunk failed");
 
-        assert_eq!(count_chunks(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_chunks_completed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
-        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 1);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_calling_fail_chunk_after_exceeding_retries_does_not_error(
+        db: sqlx::SqlitePool,
+    ) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+
+        let chunk_id = ChunkId {
+            submission_id: chunks[0].submission_id,
+            chunk_index: chunks[0].chunk_index,
+        };
+
+        insert_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(false));
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(true));
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
+        assert_matches!(res, Ok(false));
     }
 }

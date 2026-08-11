@@ -212,12 +212,32 @@ pub struct SubmissionCancelled {
     pub cancelled_at: DateTime<Utc>,
 }
 
+/// A submission that has been paused.
+///
+/// A submission can only be submitted in a paused state. We don't support pausing submissions
+/// after submission.
+///
+/// A paused submission can be unpaused or canceled.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubmissionPaused {
+    pub id: SubmissionId,
+    pub prefix: Option<String>,
+    pub chunks_total: ChunkCount,
+    pub chunks_done: ChunkCount,
+    pub chunk_size: ChunkSize,
+    pub metadata: Option<Metadata>,
+    #[serde(default)]
+    pub strategic_metadata: StrategicMetadataMap,
+    pub otel_trace_carrier: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
     Completed(SubmissionCompleted),
     Failed(SubmissionFailed, ChunkFailed),
     Cancelled(SubmissionCancelled),
+    Paused(SubmissionPaused),
 }
 
 impl Default for Submission {
@@ -284,13 +304,13 @@ pub mod db {
                 DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound,
                 TooManyMatchingSubmissions,
             },
+            submission::SubmissionPaused,
         },
         db::{Connection, True, WriterConnection, WriterPool},
     };
     use axum_prometheus::metrics::{counter, histogram};
     use chunk::ChunkSize;
-    use sqlx::{QueryBuilder, Sqlite, query, query_scalar};
-    use ux::u63;
+    use sqlx::{Database, QueryBuilder, Sqlite, query, query_as, query_scalar};
 
     use super::{
         Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
@@ -430,9 +450,126 @@ pub mod db {
         res
     }
 
+    #[tracing::instrument(skip(chunks, conn))]
+    pub(crate) async fn insert_paused_submission(
+        submission: Submission,
+        chunks: Vec<Chunk>,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), DatabaseError> {
+        use axum_prometheus::metrics::counter;
+        use futures::FutureExt as _;
+
+        let chunks_total = submission.chunks_total.into();
+        tracing::debug!("Inserting paused submission {}", submission.id);
+
+        let res = conn
+            .transaction(move |mut tx| {
+                async move {
+                    insert_paused_submission_raw(&submission, &mut tx).await?;
+                    insert_submission_metadata_raw(
+                        &submission,
+                        &submission.strategic_metadata,
+                        &mut tx,
+                    )
+                    .await?;
+                    super::chunk::db::insert_many_paused_chunks(&chunks, &mut tx).await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        counter!(crate::prometheus::SUBMISSIONS_PAUSED_COUNTER).increment(1);
+        counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
+        counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
+        res
+    }
+
+    #[tracing::instrument(skip(conn))]
+    async fn insert_paused_submission_raw(
+        submission: &Submission,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query!(
+            "
+        INSERT INTO submissions_paused (id, prefix, chunks_total, chunks_done, metadata, otel_trace_carrier, chunk_size)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ",
+            submission.id,
+            submission.prefix,
+            submission.chunks_total,
+            submission.chunks_done,
+            submission.metadata,
+            submission.otel_trace_carrier,
+            submission.chunk_size.0,
+        )
+        .execute(conn.get_inner())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Unpause a paused submission. Atomically moves it back from `submissions_paused`
+    /// to `submissions` and its chunks from `chunks_paused` to `chunks`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseError`] if the transaction or any SQL query fails.
+    ///
+    /// Returns [`SubmissionNotFound`] if the submission is not currently paused.
+    #[tracing::instrument(skip(conn))]
+    pub async fn unpause_submission(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                unpause_submission_raw(id, &mut tx).await?;
+                super::chunk::db::restore_paused_chunks(id, &mut tx).await?;
+                // NOTE: We need to check whether the submission is completed, because it might
+                // be the case that we are unpausing a 0-chunk submission.
+                maybe_complete_submission(id, &mut tx).await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn unpause_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let res = query!(
+            "
+    INSERT INTO submissions
+    (id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size)
+    SELECT id, chunks_total, chunks_done, prefix, metadata, otel_trace_carrier, chunk_size
+    FROM submissions_paused WHERE id = $1;
+
+    DELETE FROM submissions_paused WHERE id = $2;
+    ",
+            id,
+            id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+        if res.rows_affected() == 0 {
+            Err(E::R(SubmissionNotFound(id)))
+        } else {
+            counter!(crate::prometheus::SUBMISSIONS_UNPAUSED_COUNTER).increment(1);
+            Ok(())
+        }
+    }
+
     /// Creates a new submission with the given chunks and inserts it into the database.
     ///
-    /// If the number of chunks is 0, the submission is marked as completed immediately afterwards.
+    /// If `paused` is false and the number of chunks is 0, the submission is marked
+    /// as completed immediately afterwards.
+    ///
+    /// If `paused` is true, the submission is inserted directly into `submissions_paused`
+    /// (and its chunks into `chunks_paused`), so it won't be picked up by consumers
+    /// until explicitly unpaused. Zero-chunk paused submissions stay paused.
     ///
     /// # Panics
     ///
@@ -448,6 +585,7 @@ pub mod db {
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
         chunk_size: ChunkSize,
+        paused: bool,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = SubmissionId::new();
@@ -463,7 +601,7 @@ pub mod db {
             strategic_metadata,
             otel_trace_carrier,
         };
-        let iter = chunks_contents
+        let chunks: Vec<Chunk> = chunks_contents
             .into_iter()
             .enumerate()
             .map(move |(chunk_index, uri)| {
@@ -471,25 +609,30 @@ pub mod db {
                 Chunk::new(submission_id, chunk_index.try_into().unwrap(), uri)
             })
             .collect();
-        insert_submission(submission, iter, &mut conn).await?;
-        // Empty submissions get special handling: we mark them as completed right away.
-        // See https://github.com/channable/opsqueue/issues/86 for rationale.
-        if len == 0 {
-            match maybe_complete_submission(submission_id, conn).await {
-                // Forward our database errors to the caller.
-                Err(E::L(e)) => return Err(e),
-                // If the submission ID can't be found, that's too bad, but it's not our problem anymore i guess.
-                Err(E::R(_)) => {
-                    tracing::warn!(%submission_id, "Presumed zero-length submission not found");
-                }
-                // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
-                // Our future selves might thank us.
-                Ok(true) => {
-                    tracing::debug!(%submission_id, "Zero-length submission marked as completed");
-                }
-                // This should never happen. If it does, better log it.
-                Ok(false) => {
-                    tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
+
+        if paused {
+            insert_paused_submission(submission, chunks, &mut conn).await?;
+        } else {
+            insert_submission(submission, chunks, &mut conn).await?;
+            // Empty submissions get special handling: we mark them as completed right away.
+            // See https://github.com/channable/opsqueue/issues/86 for rationale.
+            if len == 0 {
+                match maybe_complete_submission(submission_id, conn).await {
+                    // Forward our database errors to the caller.
+                    Err(E::L(e)) => return Err(e),
+                    // If the submission ID can't be found, that's too bad, but it's not our problem anymore I guess.
+                    Err(E::R(_)) => {
+                        tracing::warn!(%submission_id, "Presumed zero-length submission not found");
+                    }
+                    // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
+                    // Our future selves might thank us.
+                    Ok(true) => {
+                        tracing::debug!(%submission_id, "Zero-length submission marked as completed");
+                    }
+                    // This should never happen. If it does, better log it.
+                    Ok(false) => {
+                        tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
+                    }
                 }
             }
         }
@@ -580,13 +723,13 @@ pub mod db {
             r#"
             SELECT id AS "id: SubmissionId" FROM submissions WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $2
+            SELECT id AS "id: SubmissionId" FROM submissions_paused WHERE prefix = $1
             UNION ALL
-            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $3
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE prefix = $1
+            UNION ALL
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE prefix = $1
             "#,
             prefix,
-            prefix,
-            prefix
         )
         .fetch_optional(conn.get_inner())
         .await?;
@@ -665,27 +808,28 @@ pub mod db {
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
         // from InProgress to Completed/Failed in-between the queries.
+        // TODO: Rewrite the queries here into a single query using `UNION ALL`.
 
-        let submission_row = query!(
-            r#"
-        SELECT
-              id AS "id: SubmissionId"
-            , prefix
-            , chunks_total AS "chunks_total: ChunkCount"
-            , chunks_done AS "chunks_done: ChunkCount"
-            , chunk_size AS "chunk_size!: ChunkSize"
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions.id
-              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
-            , otel_trace_carrier
-        FROM submissions WHERE id = $1
-        "#,
-            id
-        )
-        .fetch_optional(conn.get_inner())
-        .await?;
+        let paused_row_opt = submission_status_paused_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
+        if let Some(row) = paused_row_opt {
+            let paused_submission = SubmissionPaused {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                chunk_size: row.chunk_size,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.0,
+                otel_trace_carrier: row.otel_trace_carrier,
+            };
+            return Ok(Some(SubmissionStatus::Paused(paused_submission)));
+        }
+
+        let submission_row = submission_status_in_progress_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
         if let Some(row) = submission_row {
             let submission = Submission {
                 id: row.id,
@@ -700,26 +844,9 @@ pub mod db {
             return Ok(Some(SubmissionStatus::InProgress(submission)));
         }
 
-        let completed_row_opt = query!(
-            r#"
-        SELECT
-            id AS "id: SubmissionId"
-            , prefix
-            , chunks_total AS "chunks_total: ChunkCount"
-            , chunk_size AS "chunk_size!: ChunkSize"
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions_completed.id
-              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
-            , completed_at AS "completed_at: DateTime<Utc>"
-            , otel_trace_carrier
-        FROM submissions_completed WHERE id = $1
-        "#,
-            id
-        )
-        .fetch_optional(conn.get_inner())
-        .await?;
+        let completed_row_opt = submission_status_completed_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
         if let Some(row) = completed_row_opt {
             let submission_completed = SubmissionCompleted {
                 id: row.id,
@@ -734,28 +861,9 @@ pub mod db {
             return Ok(Some(SubmissionStatus::Completed(submission_completed)));
         }
 
-        let failed_row_opt = query!(
-            r#"
-        SELECT
-              id AS "id: SubmissionId"
-            , prefix
-            , chunks_total AS "chunks_total: ChunkCount"
-            , chunks_done AS "chunks_done: ChunkCount"
-            , chunk_size AS "chunk_size!: ChunkSize"
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions_failed.id
-              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
-            , failed_at AS "failed_at: DateTime<Utc>"
-            , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
-            , otel_trace_carrier
-        FROM submissions_failed WHERE id = $1
-        "#,
-            id
-        )
-        .fetch_optional(conn.get_inner())
-        .await?;
+        let failed_row_opt = submission_status_failed_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
         if let Some(row) = failed_row_opt {
             let failed_submission = SubmissionFailed {
                 id: row.id,
@@ -777,7 +885,173 @@ pub mod db {
             )));
         }
 
-        let cancelled_row_opt = query!(
+        let cancelled_row_opt = submission_status_cancelled_query(id)
+            .fetch_optional(conn.get_inner())
+            .await?;
+        if let Some(row) = cancelled_row_opt {
+            let cancelled_submission = SubmissionCancelled {
+                id: row.id,
+                prefix: row.prefix,
+                chunks_total: row.chunks_total,
+                chunks_done: row.chunks_done,
+                metadata: row.metadata,
+                strategic_metadata: row.strategic_metadata.0,
+                cancelled_at: row.cancelled_at,
+            };
+            return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
+        }
+
+        Ok(None)
+    }
+
+    pub(crate) struct SubmissionStatusInProgressRow {
+        id: SubmissionId,
+        prefix: Option<String>,
+        chunks_total: ChunkCount,
+        chunks_done: ChunkCount,
+        chunk_size: ChunkSize,
+        metadata: Option<Metadata>,
+        strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
+        otel_trace_carrier: String,
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn submission_status_in_progress_query(
+        id: SubmissionId,
+    ) -> query::Map<
+        'static,
+        Sqlite,
+        fn(<Sqlite as Database>::Row) -> Result<SubmissionStatusInProgressRow, sqlx::Error>,
+        <Sqlite as Database>::Arguments,
+    > {
+        query_as!(
+            SubmissionStatusInProgressRow,
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size!: ChunkSize"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions.id
+              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
+            , otel_trace_carrier
+        FROM submissions WHERE id = $1
+        "#,
+            id
+        )
+    }
+
+    pub(crate) struct SubmissionStatusCompletedRow {
+        id: SubmissionId,
+        prefix: Option<String>,
+        chunks_total: ChunkCount,
+        chunk_size: ChunkSize,
+        metadata: Option<Metadata>,
+        strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
+        completed_at: DateTime<Utc>,
+        otel_trace_carrier: String,
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn submission_status_completed_query(
+        id: SubmissionId,
+    ) -> query::Map<
+        'static,
+        Sqlite,
+        fn(<Sqlite as Database>::Row) -> Result<SubmissionStatusCompletedRow, sqlx::Error>,
+        <Sqlite as Database>::Arguments,
+    > {
+        query_as!(
+            SubmissionStatusCompletedRow,
+            r#"
+        SELECT
+            id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunk_size AS "chunk_size!: ChunkSize"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_completed.id
+              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
+            , completed_at AS "completed_at: DateTime<Utc>"
+            , otel_trace_carrier
+        FROM submissions_completed WHERE id = $1
+        "#,
+            id
+        )
+    }
+
+    pub(crate) struct SubmissionStatusFailedRow {
+        id: SubmissionId,
+        prefix: Option<String>,
+        chunks_total: ChunkCount,
+        chunks_done: Option<ChunkCount>,
+        chunk_size: ChunkSize,
+        metadata: Option<Metadata>,
+        strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
+        failed_at: DateTime<Utc>,
+        failed_chunk_id: ChunkIndex,
+        otel_trace_carrier: String,
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn submission_status_failed_query(
+        id: SubmissionId,
+    ) -> query::Map<
+        'static,
+        Sqlite,
+        fn(<Sqlite as Database>::Row) -> Result<SubmissionStatusFailedRow, sqlx::Error>,
+        <Sqlite as Database>::Arguments,
+    > {
+        query_as!(
+            SubmissionStatusFailedRow,
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size!: ChunkSize"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_failed.id
+              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
+            , failed_at AS "failed_at: DateTime<Utc>"
+            , failed_chunk_id AS "failed_chunk_id: ChunkIndex"
+            , otel_trace_carrier
+        FROM submissions_failed WHERE id = $1
+        "#,
+            id
+        )
+    }
+
+    pub(crate) struct SubmissionStatusCancelledRow {
+        id: SubmissionId,
+        prefix: Option<String>,
+        chunks_total: ChunkCount,
+        chunks_done: ChunkCount,
+        metadata: Option<Metadata>,
+        strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
+        cancelled_at: DateTime<Utc>,
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn submission_status_cancelled_query(
+        id: SubmissionId,
+    ) -> query::Map<
+        'static,
+        Sqlite,
+        fn(<Sqlite as Database>::Row) -> Result<SubmissionStatusCancelledRow, sqlx::Error>,
+        <Sqlite as Database>::Arguments,
+    > {
+        query_as!(
+            SubmissionStatusCancelledRow,
             r#"
         SELECT
               id AS "id: SubmissionId"
@@ -794,22 +1068,47 @@ pub mod db {
         "#,
             id
         )
-        .fetch_optional(conn.get_inner())
-        .await?;
-        if let Some(row) = cancelled_row_opt {
-            let cancelled_submission = SubmissionCancelled {
-                id: row.id,
-                prefix: row.prefix,
-                chunks_total: row.chunks_total,
-                chunks_done: row.chunks_done,
-                metadata: row.metadata,
-                strategic_metadata: row.strategic_metadata.0,
-                cancelled_at: row.cancelled_at,
-            };
-            return Ok(Some(SubmissionStatus::Cancelled(cancelled_submission)));
-        }
+    }
 
-        Ok(None)
+    pub(crate) struct SubmissionStatusPausedRow {
+        id: SubmissionId,
+        prefix: Option<String>,
+        chunks_total: ChunkCount,
+        chunks_done: ChunkCount,
+        chunk_size: ChunkSize,
+        metadata: Option<Metadata>,
+        strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
+        otel_trace_carrier: String,
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn submission_status_paused_query(
+        id: SubmissionId,
+    ) -> query::Map<
+        'static,
+        Sqlite,
+        fn(<Sqlite as Database>::Row) -> Result<SubmissionStatusPausedRow, sqlx::Error>,
+        <Sqlite as Database>::Arguments,
+    > {
+        query_as!(
+            SubmissionStatusPausedRow,
+            r#"
+        SELECT
+              id AS "id: SubmissionId"
+            , prefix
+            , chunks_total AS "chunks_total: ChunkCount"
+            , chunks_done AS "chunks_done: ChunkCount"
+            , chunk_size AS "chunk_size!: ChunkSize"
+            , metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions_paused.id
+              ) AS "strategic_metadata!: sqlx::types::Json<StrategicMetadataMap>"
+            , otel_trace_carrier
+        FROM submissions_paused WHERE id = $1
+        "#,
+            id
+        )
     }
 
     #[tracing::instrument(skip(conn))]
@@ -878,6 +1177,15 @@ pub mod db {
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
                             }
+                            Ok(Some(SubmissionStatus::Paused(_))) => {
+                                // Paused submissions are cancellable.
+                                cancel_paused_submission_notx(id, &mut tx).await.map_err(
+                                    |e| match e {
+                                        E::L(db_err) => E::L(db_err),
+                                        E::R(not_found) => E::R(E::L(not_found)),
+                                    },
+                                )
+                            }
                             Err(db_err) => Err(E::L(db_err)),
                         }
                     }
@@ -892,12 +1200,28 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if cancellation or chunk skipping fails.
-    pub async fn cancel_submission_notx(
+    async fn cancel_submission_notx(
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         cancel_submission_raw(id, &mut conn).await?;
         super::chunk::db::skip_remaining_chunks(id, conn).await?;
+        Ok(())
+    }
+
+    /// Do not call directly! Must be called inside a transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseError`] if any SQL query fails.
+    ///
+    /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
+    async fn cancel_paused_submission_notx(
+        id: SubmissionId,
+        mut conn: impl WriterConnection<Transaction = True>,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        cancel_paused_submission_raw(id, &mut conn).await?;
+        super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
         Ok(())
     }
 
@@ -908,21 +1232,53 @@ pub mod db {
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
-        let submission_opt = query!(
+        let res = query!(
             "
     INSERT INTO submissions_cancelled
     (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
     SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions WHERE id = $2;
 
-    DELETE FROM submissions WHERE id = $3 RETURNING *;
+    DELETE FROM submissions WHERE id = $3;
     ",
             now,
             id,
             id,
         )
-        .fetch_optional(conn.get_inner())
+        .execute(conn.get_inner())
         .await?;
-        if submission_opt.is_none() {
+        if res.rows_affected() == 0 {
+            Err(E::R(SubmissionNotFound(id)))
+        } else {
+            counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+            histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
+                crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
+            );
+            Ok(())
+        }
+    }
+
+    #[tracing::instrument(skip(conn))]
+    pub(super) async fn cancel_paused_submission_raw(
+        id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        let now = chrono::prelude::Utc::now();
+
+        let res = query!(
+            "
+    INSERT INTO submissions_cancelled
+    (id, chunks_total, prefix, metadata, cancelled_at, chunks_done)
+    SELECT id, chunks_total, prefix, metadata, julianday($1), chunks_done FROM submissions_paused WHERE id = $2;
+
+    DELETE FROM submissions_paused WHERE id = $3;
+    ",
+            now,
+            id,
+            id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+        if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
             counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
@@ -1026,7 +1382,7 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if submission/chunk failure transitions cannot be persisted.
-    pub async fn fail_submission_notx(
+    pub(crate) async fn fail_submission_notx(
         id: SubmissionId,
         failed_chunk_index: ChunkIndex,
         failure: String,
@@ -1048,12 +1404,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count completed submissions.
@@ -1061,12 +1421,16 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions_completed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_completed;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Count failed submissions.
@@ -1074,12 +1438,50 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
     #[tracing::instrument(skip(db))]
-    pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<u63> {
+    pub async fn count_submissions_failed(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_failed;")
             .fetch_one(db.get_inner())
             .await?;
-        Ok(u63::new(count.cast_unsigned()))
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
+    /// Count paused submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_submissions_paused(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_paused;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
+    }
+
+    /// Count cancelled submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the count query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `COUNT(*)` returns a negative value, which `SQLite` never does.
+    #[tracing::instrument(skip(db))]
+    pub async fn count_submissions_cancelled(mut db: impl Connection) -> sqlx::Result<u64> {
+        let count = sqlx::query_scalar!("SELECT COUNT(1) as count FROM submissions_cancelled;")
+            .fetch_one(db.get_inner())
+            .await?;
+        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
     /// Transactionally removes all completed/failed submissions,
@@ -1194,48 +1596,46 @@ pub mod test {
     use chunk::ChunkSize;
     use itertools::Itertools;
     use sqlformat::{FormatOptions, QueryParams, format};
-    use sqlx::{Row, SqliteConnection};
+    use sqlx::{Execute, Row, Sqlite};
+    use std::assert_matches;
 
     use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
     use crate::db::{Connection as _, WriterPool};
 
     use super::db::*;
     use super::*;
 
-    async fn explain_query_plan(query: &str, conn: &mut SqliteConnection) -> String {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {query}")))
-            .fetch_all(&mut *conn)
-            .await
-            .unwrap_or_else(|_| panic!("Invalid query: \n{query}\n"))
-            .into_iter()
-            .map(|row| {
-                let id = row.get::<i64, &str>("id");
-                let parent = row.get::<i64, &str>("parent");
-                let detail = row.get::<String, &str>("detail");
-                format!("{id}, {parent}, {detail}")
-            })
-            .join("\n")
-    }
-
-    fn assert_non_regressing_query_plan(query: &str, explained: &str) {
-        assert!(
-            !explained.contains("MATERIALIZED"),
-            "Query should contain no materialization, but it did.\n\nQuery: {query}\n\nPlan:\n\n{explained}"
-        );
-        assert!(
-            !explained.contains("B-TREE"),
-            "Query should contain no temporary B-tree construction, but it did.\n\nQuery: {query}\n\nPlan:\n\n{explained}"
-        );
+    async fn explain_query_plan<'q, Q: Execute<'q, Sqlite>>(
+        query: Q,
+        db: sqlx::SqlitePool,
+    ) -> String {
+        let mut conn = db.acquire().await.unwrap();
+        let query = query.sql();
+        let query_string = query.as_str();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {query_string}"
+        )))
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap_or_else(|_| panic!("Invalid query: \n{query_string}\n"))
+        .into_iter()
+        .map(|row| {
+            let id = row.get::<i64, &str>("id");
+            let parent = row.get::<i64, &str>("parent");
+            let detail = row.get::<String, &str>("detail");
+            format!("{id}, {parent}, {detail}")
+        })
+        .join("\n")
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_lookup_by_strategic_metadata(db: sqlx::SqlitePool) {
-        let mut conn = db.acquire().await.unwrap();
         let strategic_metadata: StrategicMetadataMap =
             [("company_id".to_string(), 1), ("project_id".to_string(), 2)]
                 .into_iter()
                 .collect();
-        let qb = lookup_ids_by_strategic_metadata_query(&strategic_metadata, 100_000);
+        let mut qb = lookup_ids_by_strategic_metadata_query(&strategic_metadata, 100_000);
         let options = FormatOptions::default();
         let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
@@ -1254,8 +1654,7 @@ pub mod test {
         LIMIT
           ?
         ");
-        let explained = explain_query_plan(&formatted_query, &mut conn).await;
-        assert_non_regressing_query_plan(&formatted_query, &explained);
+        let explained = explain_query_plan(qb.build_query_scalar::<SubmissionId>(), db).await;
         insta::assert_snapshot!(explained, @"
         8, 0, SEARCH s0 USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
         16, 0, SEARCH submissions USING COVERING INDEX sqlite_autoindex_submissions_1 (id=?)
@@ -1265,114 +1664,46 @@ pub mod test {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_in_progress(db: sqlx::SqlitePool) {
-        let mut conn = db.acquire().await.unwrap();
-        let query = r"
-        SELECT
-              id
-            , prefix
-            , chunks_total
-            , chunks_done
-            , chunk_size
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions.id
-              ) AS strategic_metadata
-            , otel_trace_carrier
-        FROM submissions WHERE id = 1
-        ";
-
-        let explained = explain_query_plan(query, &mut conn).await;
-        assert_non_regressing_query_plan(query, &explained);
-        insta::assert_snapshot!(explained, @r"
+        let query = submission_status_in_progress_query(SubmissionId::new());
+        let explained = explain_query_plan(query, db).await;
+        insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
-        15, 0, CORRELATED SCALAR SUBQUERY 1
-        20, 15, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        17, 0, CORRELATED SCALAR SUBQUERY 1
+        22, 17, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_completed(db: sqlx::SqlitePool) {
-        let mut conn = db.acquire().await.unwrap();
-        let query = r"
-        SELECT
-              id
-            , prefix
-            , chunks_total
-            , chunk_size
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions_completed.id
-              ) AS strategic_metadata
-            , completed_at
-            , otel_trace_carrier
-        FROM submissions_completed WHERE id = 1
-        ";
+        let query = submission_status_completed_query(SubmissionId::new());
 
-        let explained = explain_query_plan(query, &mut conn).await;
-        assert_non_regressing_query_plan(query, &explained);
-        insta::assert_snapshot!(explained, @r"
+        let explained = explain_query_plan(query, db).await;
+        insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_completed USING INDEX sqlite_autoindex_submissions_completed_1 (id=?)
-        14, 0, CORRELATED SCALAR SUBQUERY 1
-        19, 14, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        16, 0, CORRELATED SCALAR SUBQUERY 1
+        21, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_failed(db: sqlx::SqlitePool) {
-        let mut conn = db.acquire().await.unwrap();
-        let query = r"
-        SELECT
-              id
-            , prefix
-            , chunks_total
-            , chunks_done
-            , chunk_size
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions_failed.id
-              ) AS strategic_metadata
-            , failed_at
-            , failed_chunk_id
-            , otel_trace_carrier
-        FROM submissions_failed WHERE id = 1
-        ";
-
-        let explained = explain_query_plan(query, &mut conn).await;
-        assert_non_regressing_query_plan(query, &explained);
-        insta::assert_snapshot!(explained, @r"
+        let query = submission_status_failed_query(SubmissionId::new());
+        let explained = explain_query_plan(query, db).await;
+        insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_failed USING INDEX sqlite_autoindex_submissions_failed_1 (id=?)
-        15, 0, CORRELATED SCALAR SUBQUERY 1
-        20, 15, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        17, 0, CORRELATED SCALAR SUBQUERY 1
+        22, 17, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_submission_status_cancelled(db: sqlx::SqlitePool) {
-        let mut conn = db.acquire().await.unwrap();
-        let query = r"
-        SELECT
-              id
-            , prefix
-            , chunks_total
-            , chunks_done
-            , metadata
-            , ( SELECT json_group_object(metadata_key, metadata_value)
-                FROM submissions_metadata
-                WHERE submission_id = submissions_cancelled.id
-              ) AS strategic_metadata
-            , cancelled_at
-        FROM submissions_cancelled WHERE id = 1
-        ";
-
-        let explained = explain_query_plan(query, &mut conn).await;
-        assert_non_regressing_query_plan(query, &explained);
-        insta::assert_snapshot!(explained, @r"
+        let query = submission_status_cancelled_query(SubmissionId::new());
+        let explained = explain_query_plan(query, db).await;
+        insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_cancelled USING INDEX sqlite_autoindex_submissions_cancelled_1 (id=?)
-        14, 0, CORRELATED SCALAR SUBQUERY 1
-        19, 14, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        16, 0, CORRELATED SCALAR SUBQUERY 1
+        21, 16, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -1381,7 +1712,7 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
 
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -1393,7 +1724,7 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(1));
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1435,6 +1766,7 @@ pub mod test {
             None,
             strategic_metadata.clone(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1466,15 +1798,9 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1499,15 +1825,9 @@ pub mod test {
         )
         .await
         .unwrap();
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1522,6 +1842,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1532,6 +1853,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1542,6 +1864,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1552,6 +1875,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1584,6 +1908,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1594,6 +1919,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1604,6 +1930,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
@@ -1626,18 +1953,12 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(5)
-        );
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
 
         let mut conn2 = db.writer_conn().await.unwrap();
         cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
 
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(2)
-        );
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
 
         let _sub1 = submission_status(old_four_unfailed, &mut conn)
             .await
@@ -1663,20 +1984,15 @@ pub mod test {
             StrategicMetadataMap::default(),
             // chunk size
             ChunkSize::default(),
+            false,
             &mut conn,
         )
         .await
         .expect("insertion failed");
 
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), u63::new(0));
-        assert_eq!(
-            count_submissions_completed(&mut conn).await.unwrap(),
-            u63::new(1)
-        );
-        assert_eq!(
-            count_submissions_failed(&mut conn).await.unwrap(),
-            u63::new(0)
-        );
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     /// Removes the given top-level key from a JSON object, panicking if it was not present.
@@ -1773,5 +2089,134 @@ pub mod test {
         );
         let deserialized: SubmissionCancelled = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, cancelled);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_submission_status_paused(db: sqlx::SqlitePool) {
+        let query = submission_status_paused_query(SubmissionId::new());
+        let explained = explain_query_plan(query, db).await;
+        insta::assert_snapshot!(explained, @"
+        3, 0, SEARCH submissions_paused USING INDEX sqlite_autoindex_submissions_paused_1 (id=?)
+        17, 0, CORRELATED SCALAR SUBQUERY 1
+        22, 17, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_unpause_submission(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
+
+        unpause_submission(submission.id, &mut conn).await.unwrap();
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 3);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_unpausing_a_zero_chunk_submission_completes_it(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) =
+            Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+
+        unpause_submission(submission.id, &mut conn).await.unwrap();
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_cancel_paused_submission(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
+
+        cancel_submission(submission.id, &mut conn).await.unwrap();
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_cancelled(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 3);
+        assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_submission_status_paused(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) = Submission::from_vec(
+            vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
+            None,
+            ChunkSize::default(),
+        )
+        .unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        let status = submission_status(submission.id, &mut conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_matches!(status, SubmissionStatus::Paused(_));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    /// Test that an empty submission inserted in the paused state stays paused
+    /// (unlike empty non-paused submissions which are auto-completed).
+    pub async fn insert_empty_paused_submission_stays_paused(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+        let (submission, chunks) =
+            Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
+        insert_paused_submission(submission.clone(), chunks, &mut conn)
+            .await
+            .expect("insertion failed");
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
     }
 }
