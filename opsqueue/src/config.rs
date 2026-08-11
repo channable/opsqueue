@@ -105,6 +105,9 @@ pub struct Config {
     /// `lookup_submission_ids_by_strategic_metadata` request may return.
     #[arg(long, default_value_t = default_max_submissions_returned())]
     pub max_submissions_returned: MaxSubmissions,
+
+    #[arg(long)]
+    pub delegation_server_url: Option<url::Url>,
 }
 
 impl Default for Config {
@@ -122,6 +125,7 @@ impl Default for Config {
         let max_chunk_retries = 10;
         let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
         let max_submissions_returned = default_max_submissions_returned();
+        let delegation_server_url = None;
         Config {
             port,
             report_bound_port_pipe,
@@ -133,6 +137,7 @@ impl Default for Config {
             max_chunk_retries,
             max_submission_age,
             max_submissions_returned,
+            delegation_server_url,
         }
     }
 }

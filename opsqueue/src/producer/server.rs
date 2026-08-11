@@ -17,15 +17,21 @@ use super::common::{ChunkContents, InsertSubmission};
 
 pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
     let max_submissions = crate::config::Config::default().max_submissions_returned;
-    ServerState::new(database_pool, Arc::new(Notify::new()), max_submissions)
-        .serve_for_tests(server_addr)
-        .await;
+    ServerState::new(
+        database_pool,
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        max_submissions,
+    )
+    .serve_for_tests(server_addr)
+    .await;
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: DBPools,
     notify_on_insert: Arc<Notify>,
+    notify_on_submission_change: Arc<Notify>,
     max_submissions: MaxSubmissions,
 }
 
@@ -33,11 +39,13 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
+        notify_on_submission_change: Arc<Notify>,
         max_submissions: MaxSubmissions,
     ) -> Self {
         ServerState {
             pool,
             notify_on_insert,
+            notify_on_submission_change,
             max_submissions,
         }
     }
@@ -131,7 +139,10 @@ async fn cancel_submission(
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
     match submission::db::cancel_submission(submission_id, &mut conn).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            state.notify_on_submission_change.notify_one();
+            Ok(())
+        }
         Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
         Err(R(L(not_found_err))) => {
             Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
@@ -158,6 +169,7 @@ async fn unpause_submission(
         Ok(()) => {
             // Wake up any waiting consumers now that new chunks are available.
             state.notify_on_insert.notify_waiters();
+            state.notify_on_submission_change.notify_one();
             Ok(())
         }
         Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),

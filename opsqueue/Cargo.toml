@@ -7,12 +7,12 @@ repository = "https://github.com/channable/opsqueue"
 license = "MIT"
 
 [lib]
-name="opsqueue"
-path="src/lib.rs"
+name = "opsqueue"
+path = "src/lib.rs"
 
 [[bin]]
-name="opsqueue"
-path="app/main.rs"
+name = "opsqueue"
+path = "app/main.rs"
 required-features = ["server-logic"]
 
 [dependencies]
@@ -80,6 +80,8 @@ workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+wiremock = "0.6.5"
+tower = "0.5.3"
 
 [features]
 # Dependencies only in use by the server-logic:
@@ -92,8 +94,9 @@ server-logic = [
     "dep:tower-http",
     "dep:axum-prometheus",
     "dep:sentry",
-    "dep:sentry-tracing"
-    ]
+    "dep:sentry-tracing",
+    "dep:reqwest",
+]
 # Dependencies only in use by the client libraries:
 client-logic = [
     "dep:reqwest",

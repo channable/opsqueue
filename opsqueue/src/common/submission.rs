@@ -296,6 +296,11 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
+    use super::{
+        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
+        SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId, SubmissionStatus,
+        Utc, chunk,
+    };
     use crate::tracing::as_dyn_error;
     use crate::{
         common::{
@@ -311,12 +316,6 @@ pub mod db {
     use axum_prometheus::metrics::{counter, histogram};
     use chunk::ChunkSize;
     use sqlx::{Database, QueryBuilder, Sqlite, query, query_as, query_scalar};
-
-    use super::{
-        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
-        SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId, SubmissionStatus,
-        Utc, chunk,
-    };
 
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
         fn encode_by_ref(
@@ -379,8 +378,8 @@ pub mod db {
             submission.otel_trace_carrier,
             submission.chunk_size.0,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
 
         Ok(())
     }
@@ -503,8 +502,8 @@ pub mod db {
             submission.otel_trace_carrier,
             submission.chunk_size.0,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
 
         Ok(())
     }
@@ -1165,6 +1164,9 @@ pub mod db {
                         // but it could still be in one of the other tables.
                         match submission_status(id, &mut tx).await {
                             Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::Paused(submission))) => {
+                                panic!("Failed to cancel paused submission {submission:?}")
+                            }
                             Ok(Some(SubmissionStatus::InProgress(submission))) => {
                                 panic!("Failed to cancel in progress submission {submission:?}")
                             }
@@ -1176,15 +1178,6 @@ pub mod db {
                             )),
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
-                            }
-                            Ok(Some(SubmissionStatus::Paused(_))) => {
-                                // Paused submissions are cancellable.
-                                cancel_paused_submission_notx(id, &mut tx).await.map_err(
-                                    |e| match e {
-                                        E::L(db_err) => E::L(db_err),
-                                        E::R(not_found) => E::R(E::L(not_found)),
-                                    },
-                                )
                             }
                             Err(db_err) => Err(E::L(db_err)),
                         }
@@ -1200,29 +1193,23 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if cancellation or chunk skipping fails.
-    async fn cancel_submission_notx(
+    pub(crate) async fn cancel_submission_notx(
         id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
+        mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_chunks(id, conn).await?;
-        Ok(())
-    }
+        match cancel_submission_raw(id, &mut conn).await {
+            Ok(()) => {
+                super::chunk::db::skip_remaining_chunks(id, conn).await?;
+                Ok(())
+            }
+            Err(E::R(_not_found)) => {
+                cancel_paused_submission_raw(id, &mut conn).await?;
+                super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
 
-    /// Do not call directly! Must be called inside a transaction.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DatabaseError`] if any SQL query fails.
-    ///
-    /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
-    async fn cancel_paused_submission_notx(
-        id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
-    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_paused_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
-        Ok(())
+                Ok(())
+            }
+            Err(E::L(db_err)) => Err(E::L(db_err)),
+        }
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1244,8 +1231,8 @@ pub mod db {
             id,
             id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
@@ -1276,8 +1263,8 @@ pub mod db {
             id,
             id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
@@ -1347,8 +1334,8 @@ pub mod db {
             id,
             id,
         )
-        .fetch_one(conn.get_inner())
-        .await?;
+            .fetch_one(conn.get_inner())
+            .await?;
         counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
         histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(
             crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
@@ -1500,6 +1487,8 @@ pub mod db {
         tracing::info!("Cleaning up old completed/failed submissions...");
         conn.transaction(move |mut tx| {
             Box::pin(async move {
+                // TODO(delegation): Prevent deletion if it is still referenced in
+                //  `submissions_external_task`.
                 // Clean up old submissions_metadata
                 query!(
                     "DELETE FROM submissions_metadata
@@ -1508,8 +1497,8 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
@@ -1517,8 +1506,8 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
@@ -1526,41 +1515,41 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
 
                 // Clean up old submissions:
                 let n_submissions_completed = query!(
                     "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_submissions_failed = query!(
                     "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_submissions_cancelled = query!(
                     "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
 
                 let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_chunks_failed = query!(
                     "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
 
                 tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
                 tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
@@ -1568,7 +1557,7 @@ pub mod db {
                 Ok(())
             })
         })
-        .await
+            .await
     }
 
     pub async fn periodically_cleanup_old(db: &WriterPool, max_age: Duration) {
