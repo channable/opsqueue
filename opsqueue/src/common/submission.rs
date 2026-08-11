@@ -1177,6 +1177,9 @@ pub mod db {
                         // but it could still be in one of the other tables.
                         match submission_status(id, &mut tx).await {
                             Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::Paused(submission))) => {
+                                panic!("Failed to cancel paused submission {submission:?}")
+                            }
                             Ok(Some(SubmissionStatus::InProgress(submission))) => {
                                 panic!("Failed to cancel in progress submission {submission:?}")
                             }
@@ -1188,15 +1191,6 @@ pub mod db {
                             )),
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
-                            }
-                            Ok(Some(SubmissionStatus::Paused(_))) => {
-                                // Paused submissions are cancellable.
-                                cancel_paused_submission_notx(id, &mut tx).await.map_err(
-                                    |e| match e {
-                                        E::L(db_err) => E::L(db_err),
-                                        E::R(not_found) => E::R(E::L(not_found)),
-                                    },
-                                )
                             }
                             Err(db_err) => Err(E::L(db_err)),
                         }
@@ -1212,29 +1206,23 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if cancellation or chunk skipping fails.
-    async fn cancel_submission_notx(
+    pub(crate) async fn cancel_submission_notx(
         id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
+        mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_chunks(id, conn).await?;
-        Ok(())
-    }
+        match cancel_submission_raw(id, &mut conn).await {
+            Ok(()) => {
+                super::chunk::db::skip_remaining_chunks(id, conn).await?;
+                Ok(())
+            }
+            Err(E::R(_not_found)) => {
+                cancel_paused_submission_raw(id, &mut conn).await?;
+                super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
 
-    /// Do not call directly! Must be called inside a transaction.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DatabaseError`] if any SQL query fails.
-    ///
-    /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
-    async fn cancel_paused_submission_notx(
-        id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
-    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_paused_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
-        Ok(())
+                Ok(())
+            }
+            Err(E::L(db_err)) => Err(E::L(db_err)),
+        }
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1512,6 +1500,8 @@ pub mod db {
         tracing::info!("Cleaning up old completed/failed submissions...");
         conn.transaction(move |mut tx| {
             Box::pin(async move {
+                // TODO(delegation): Prevent deletion if it is still referenced in
+                //  `submissions_external_task`.
                 // Clean up old submissions_metadata
                 query!(
                     "DELETE FROM submissions_metadata

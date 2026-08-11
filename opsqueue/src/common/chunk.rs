@@ -312,17 +312,20 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
-    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        let chunk_moved = conn
+    ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
+        let (chunk_moved, completed_submission) = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
                     let chunk_moved = complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
+
+                    let mut completed_submission = false;
                     if chunk_moved {
-                        crate::common::submission::db::maybe_complete_submission(
-                            chunk_id.submission_id,
-                            &mut tx,
-                        )
-                        .await?;
+                        completed_submission =
+                            crate::common::submission::db::maybe_complete_submission(
+                                chunk_id.submission_id,
+                                &mut tx,
+                            )
+                            .await?;
                     } else {
                         tracing::warn!(
                             "Could not complete chunk {:?} because it was either: \
@@ -331,7 +334,10 @@ pub mod db {
                         );
                     }
 
-                    Result::<bool, E<DatabaseError, SubmissionNotFound>>::Ok(chunk_moved)
+                    Result::<(bool, bool), E<DatabaseError, SubmissionNotFound>>::Ok((
+                        chunk_moved,
+                        completed_submission,
+                    ))
                 })
             })
             .await?;
@@ -339,7 +345,7 @@ pub mod db {
         if chunk_moved {
             counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         }
-        Ok(())
+        Ok(completed_submission)
     }
 
     /// This function MUST be called inside a transaction.
@@ -973,10 +979,10 @@ pub mod test {
             .expect("insertion failed");
 
         let res = complete_chunk(chunk_id, None, &mut conn).await;
-        assert_matches!(res, Ok(()));
+        assert_matches!(res, Ok(false));
 
         let res = complete_chunk(chunk_id, None, &mut conn).await;
-        assert_matches!(res, Ok(()));
+        assert_matches!(res, Ok(false));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

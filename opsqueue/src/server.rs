@@ -99,10 +99,12 @@ pub fn build_router(
     prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
     let notify_on_insert = Arc::new(Notify::new());
+    let notify_on_submission_change = Arc::new(Notify::new());
 
     let consumer_routes = crate::consumer::server::ServerState::new(
         pool.clone(),
         notify_on_insert.clone(),
+        notify_on_submission_change.clone(),
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -110,15 +112,30 @@ pub fn build_router(
     .run_background()
     .build_router();
     let producer_routes = crate::producer::server::ServerState::new(
-        pool,
-        notify_on_insert,
+        pool.clone(),
+        notify_on_insert.clone(),
+        notify_on_submission_change.clone(),
         config.max_submissions_returned,
     )
     .build_router();
 
-    let routes = Router::new()
+    let mut routes = Router::new()
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
+
+    if config.delegation_server_url.is_some() {
+        let delegation_routes = crate::delegation::server::ServerState::new(
+            pool,
+            config,
+            cancellation_token.clone(),
+            notify_on_insert.clone(),
+            notify_on_submission_change.clone(),
+        )
+        .run_background()
+        .build_router();
+
+        routes = routes.nest("/job", delegation_routes);
+    }
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(|request: &http::Request<_>| {

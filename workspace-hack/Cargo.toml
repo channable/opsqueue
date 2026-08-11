@@ -26,7 +26,8 @@ futures-channel = { version = "0.3", features = ["sink"] }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "server", "service"] }
 libsqlite3-sys = { version = "0.30", default-features = false, features = ["bundled", "pkg-config", "unlock_notify", "vcpkg"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
@@ -35,8 +36,9 @@ opentelemetry-http = { version = "0.32", default-features = false, features = ["
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["metrics", "rt-tokio", "trace"] }
 rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
 rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "meta", "std", "unicode-perl", "unicode-word-boundary"] }
-regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode-perl"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+regex-syntax = { version = "0.8" }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "rustls", "stream"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
@@ -51,6 +53,7 @@ thiserror = { version = "2" }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["fs"] }
 tokio-util = { version = "0.7", features = ["codec", "io", "rt", "time"] }
+tower = { version = "0.5", default-features = false, features = ["balance", "buffer", "limit", "load-shed", "log"] }
 tracing-core = { version = "0.1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
@@ -89,9 +92,9 @@ url = { version = "2", features = ["serde"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2", default-features = false, features = ["std"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "http2", "server", "service"] }
+hyper-util = { version = "0.1", default-features = false, features = ["client-proxy"] }
 libc = { version = "0.2", features = ["extra_traits"] }
-tower = { version = "0.5", default-features = false, features = ["balance", "buffer", "limit", "load-shed", "log", "retry", "timeout"] }
+tower = { version = "0.5", default-features = false, features = ["retry", "timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]

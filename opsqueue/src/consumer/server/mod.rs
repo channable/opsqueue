@@ -37,10 +37,12 @@ pub async fn serve_for_tests(
     reservation_expiration: Duration,
 ) {
     let notify_on_insert = Arc::new(Notify::new());
+    let notify_on_submission_change = Arc::new(Notify::new());
     let config = Box::leak(Box::default());
     let state = ServerState::new(
         pool,
         notify_on_insert,
+        notify_on_submission_change,
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -73,13 +75,18 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
+        notify_on_submission_change: Arc<Notify>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) =
-            Completer::new(pool.writer_pool(), &dispatcher, config.max_chunk_retries);
+        let (completer, completer_tx) = Completer::new(
+            pool.writer_pool(),
+            &dispatcher,
+            config.max_chunk_retries,
+            notify_on_submission_change,
+        );
         Self {
             pool,
             completer: Some(completer),
@@ -186,6 +193,7 @@ pub struct Completer {
     dispatcher: Dispatcher,
     count: usize,
     max_chunk_retries: u32,
+    notify_on_submission_change: Arc<Notify>,
 }
 
 impl Completer {
@@ -194,6 +202,7 @@ impl Completer {
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
         max_chunk_retries: u32,
+        notify_on_submission_change: Arc<Notify>,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         let pool = pool.clone();
@@ -203,6 +212,7 @@ impl Completer {
             dispatcher: dispatcher.clone(),
             count: 0,
             max_chunk_retries,
+            notify_on_submission_change,
         };
         (me, tx)
     }
@@ -237,7 +247,7 @@ impl Completer {
                 } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let db_res =
+                    let submission_completed =
                         crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
                             .await;
 
@@ -259,7 +269,9 @@ impl Completer {
                         let _ = db::perform_explicit_wal_checkpoint(conn).await;
                     }
 
-                    db_res?;
+                    if submission_completed? {
+                        self.notify_on_submission_change.notify_one();
+                    }
                     Ok(())
                 }
                 CompleterMessage::Fail {
@@ -293,7 +305,9 @@ impl Completer {
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
 
-                    failed_permanently?;
+                    if failed_permanently? {
+                        self.notify_on_submission_change.notify_one();
+                    }
                     Ok(())
                 }
             }
