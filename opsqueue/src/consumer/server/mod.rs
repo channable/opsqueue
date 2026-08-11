@@ -14,13 +14,13 @@ use axum_prometheus::metrics::{gauge, histogram};
 use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 
+use super::dispatcher::Dispatcher;
+use crate::common::submission::SubmissionId;
 use crate::{
     common::chunk::ChunkId,
     config::Config,
     db::{self, DBPools},
 };
-
-use super::dispatcher::Dispatcher;
 
 pub mod conn;
 pub mod state;
@@ -37,10 +37,12 @@ pub async fn serve_for_tests(
     reservation_expiration: Duration,
 ) {
     let notify_on_insert = Arc::new(Notify::new());
+    let submission_status_changed = tokio::sync::broadcast::channel(10).0;
     let config = Box::leak(Box::default());
     let state = ServerState::new(
         pool,
         notify_on_insert,
+        submission_status_changed,
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -73,13 +75,18 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
+        submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) =
-            Completer::new(pool.writer_pool(), &dispatcher, config.max_chunk_retries);
+        let (completer, completer_tx) = Completer::new(
+            pool.writer_pool(),
+            &dispatcher,
+            config.max_chunk_retries,
+            submission_status_changed,
+        );
         Self {
             pool,
             completer: Some(completer),
@@ -186,6 +193,7 @@ pub struct Completer {
     dispatcher: Dispatcher,
     count: usize,
     max_chunk_retries: u32,
+    submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
 }
 
 impl Completer {
@@ -194,6 +202,7 @@ impl Completer {
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
         max_chunk_retries: u32,
+        submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         let pool = pool.clone();
@@ -203,6 +212,7 @@ impl Completer {
             dispatcher: dispatcher.clone(),
             count: 0,
             max_chunk_retries,
+            submission_status_changed,
         };
         (me, tx)
     }
@@ -237,9 +247,13 @@ impl Completer {
                 } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let db_res =
-                        crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
-                            .await;
+                    let db_res = crate::common::chunk::db::complete_chunk(
+                        id,
+                        output_content,
+                        &mut conn,
+                        &self.submission_status_changed,
+                    )
+                    .await;
 
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self
@@ -274,6 +288,7 @@ impl Completer {
                         failure,
                         &mut conn,
                         self.max_chunk_retries,
+                        &self.submission_status_changed,
                     )
                     .await;
                     reservations.lock().expect("No poison").remove(&id);
