@@ -418,7 +418,7 @@ pub mod db {
                         &mut tx,
                     )
                     .await?;
-                    super::chunk::db::insert_many_chunks(&chunks, &mut tx).await?;
+                    super::chunk::db::insert_many_chunks(chunks, &mut tx).await?;
                     Ok(())
                 }
                 .boxed()
