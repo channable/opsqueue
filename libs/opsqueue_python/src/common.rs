@@ -33,6 +33,7 @@ pub struct SubmissionId {
 #[pymethods]
 impl SubmissionId {
     #[new]
+    #[pyo3(signature = (id))]
     fn new(id: u64) -> CPyResult<Self, TryFromIntError> {
         let _is_inner_valid =
             opsqueue::common::submission::SubmissionId::try_from(id).map_err(CError)?;
@@ -69,6 +70,7 @@ pub struct ChunkIndex {
 #[pymethods]
 impl ChunkIndex {
     #[new]
+    #[pyo3(signature = (id))]
     fn new(id: u64) -> CPyResult<Self, TryFromIntError> {
         let _is_inner_valid = opsqueue::common::chunk::ChunkIndex::new(id).map_err(CError)?;
         Ok(ChunkIndex { id })
@@ -230,7 +232,7 @@ impl Chunk {
     /// # Errors
     ///
     /// Returns an error if fetching chunk bytes from object storage fails.
-    pub async fn from_internal(
+    pub(crate) async fn from_internal(
         c: chunk::Chunk,
         s: submission::Submission,
         object_store_client: &ObjectStoreClient,
@@ -285,7 +287,7 @@ pub struct ChunkFailed {
 
 impl ChunkFailed {
     #[must_use]
-    pub fn from_internal(c: chunk::ChunkFailed, _s: &submission::SubmissionFailed) -> Self {
+    pub(crate) fn from_internal(c: chunk::ChunkFailed, _s: &submission::SubmissionFailed) -> Self {
         ChunkFailed {
             submission_id: c.submission_id.into(),
             chunk_index: c.chunk_index.into(),
@@ -561,7 +563,7 @@ impl SubmissionNotCancellable {
 ///
 /// Returns the underlying future error, or a fatal Python exception when
 /// an interrupt signal is detected.
-pub async fn run_unless_interrupted<T, E>(
+pub(crate) async fn run_unless_interrupted<T, E>(
     future: impl IntoFuture<Output = Result<T, E>>,
 ) -> Result<T, E>
 where
@@ -573,7 +575,7 @@ where
     }
 }
 
-pub async fn check_signals_in_background() -> FatalPythonException {
+async fn check_signals_in_background() -> FatalPythonException {
     loop {
         tokio::time::sleep(SIGNAL_CHECK_INTERVAL).await;
         let res = Python::attach(|py| {
@@ -615,7 +617,7 @@ pub async fn check_signals_in_background() -> FatalPythonException {
 ///
 /// Panics if creating the Tokio runtime fails.
 #[must_use]
-pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
+pub(crate) fn start_runtime() -> Arc<tokio::runtime::Runtime> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -635,7 +637,7 @@ pub fn start_runtime() -> Arc<tokio::runtime::Runtime> {
 /// # Panics
 ///
 /// Panics if formatting a Python traceback fails.
-pub fn format_pyerr(err: &PyErr) -> String {
+pub(crate) fn format_pyerr(err: &PyErr) -> String {
     Python::attach(|py| {
         let msg: Option<String> = (|| {
             let traceback = err.traceback(py)?;

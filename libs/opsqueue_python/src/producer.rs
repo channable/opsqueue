@@ -135,6 +135,7 @@ impl ProducerClient {
     ///
     /// Returns an error if the submission cannot be cancelled or if the request fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (id))]
     pub fn cancel_submission(
         &self,
         py: Python<'_>,
@@ -168,6 +169,7 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if contacting the server fails.
+    #[pyo3(signature = (id))]
     pub fn get_submission_status(
         &self,
         py: Python<'_>,
@@ -193,6 +195,7 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if contacting the server fails.
+    #[pyo3(signature = (prefix))]
     pub fn lookup_submission_id_by_prefix(
         &self,
         py: Python<'_>,
@@ -216,6 +219,7 @@ impl ProducerClient {
     ///
     /// Returns an error if too many submissions match or if the request fails.
     #[allow(clippy::needless_pass_by_value)]
+    #[pyo3(signature = (strategic_metadata))]
     pub fn lookup_submission_ids_by_strategic_metadata(
         &self,
         py: Python<'_>,
@@ -246,17 +250,16 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if submission insertion fails.
-    #[pyo3(signature = (chunk_contents, metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
         chunk_contents: Vec<chunk::Content>,
         metadata: Option<submission::Metadata>,
+        strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
-        let strategic_metadata = std::collections::HashMap::default();
-
         py.detach(|| {
             let submission = opsqueue::producer::InsertSubmission {
                 chunk_size: chunk_size.map(|n| chunk::ChunkSize(n.cast_signed())),
@@ -264,7 +267,7 @@ impl ProducerClient {
                     contents: chunk_contents,
                 },
                 metadata,
-                strategic_metadata,
+                strategic_metadata: strategic_metadata.unwrap_or_default(),
             };
             self.block_unless_interrupted(async move {
                 self.client
@@ -276,13 +279,13 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
-    #[allow(clippy::type_complexity)]
     /// Insert submission chunks via object storage and enqueue the submission.
     ///
     /// # Errors
     ///
     /// Returns an error if chunk upload or submission insertion fails.
+    #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
@@ -343,12 +346,13 @@ impl ProducerClient {
         })
     }
 
-    #[allow(clippy::result_large_err, clippy::type_complexity)]
     /// Try streaming completed submission chunks without waiting.
     ///
     /// # Errors
     ///
     /// Returns an error if the submission is incomplete/failed or if the request fails.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (id))]
     pub fn try_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
@@ -376,13 +380,13 @@ impl ProducerClient {
         })
     }
 
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
-    #[allow(clippy::result_large_err, clippy::type_complexity)]
     /// Submit chunks and then stream the completed output chunks.
     ///
     /// # Errors
     ///
     /// Returns an error if upload, submission creation, or streaming fails.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
     pub fn run_submission_chunks(
         &self,
         py: Python<'_>,
@@ -438,6 +442,7 @@ impl ProducerClient {
     ///
     /// Returns an error if polling or output streaming fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (submission_id))]
     pub fn blocking_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
@@ -462,6 +467,7 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns a Python error if creating the awaitable fails.
+    #[pyo3(signature = (submission_id))]
     pub fn async_stream_completed_submission_chunks<'p>(
         &self,
         py: Python<'p>,

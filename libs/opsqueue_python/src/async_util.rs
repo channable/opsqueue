@@ -36,7 +36,7 @@ where
 }
 
 /// Version of `future_into_py` that uses the `TokioRuntimeThatIsInScope`
-pub fn future_into_py<T, F>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
+pub(crate) fn future_into_py<T, F>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
