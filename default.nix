@@ -47,9 +47,10 @@ let
       # Rust build tools
       pkgs.cargo-audit
       pkgs.cargo-edit
-      pkgs.cargo-insta
       pkgs.cargo-hakari
+      pkgs.cargo-insta
       pkgs.cargo-nextest
+      pkgs.cargo-semver-checks
       pkgs.maturin
 
       # Resolve native sqlite from Nix for libsqlite3-sys

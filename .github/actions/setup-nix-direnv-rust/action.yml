@@ -3,14 +3,14 @@ description: Checks out the git repo and sets up Nix, Direnv and Rust, with appr
 runs:
   using: "composite"
   steps:
-    - uses: nixbuild/nix-quick-install-action@8505cd40ae3d4791ca658f2697c5767212e5ce71  # v30
-    - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a  # v6
+    - uses: nixbuild/nix-quick-install-action@9f63be77f412a248c9d9a65a4c82cf066cdf8f0c  # Latest as of 2026-07-31
+    - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569  # Latest as of 2026-07-31
       with:
           # restore and save a cache using this key
           primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', 'nix/sources.json', 'rust-toolchain.toml') }}
           # if there's no cache hit, restore a cache by this prefix
           restore-prefixes-first-match: nix-${{ runner.os }}-
-    - uses: HatsuneMiku3939/direnv-action@89ed6f6786c25aa7a69cd12f9fd0fdcb46c7c489  # Latest as of 2025-05-16
-    - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6  # v2.7.8
+    - uses: HatsuneMiku3939/direnv-action@c81e6f10d47895cdd46432d8801bff0fabc73a6b  # Latest as of 2026-07-31
+    - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # Latest as of 2026-07-31
       with:
         cache-all-crates: "true"
