@@ -3,6 +3,8 @@
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
 from collections.abc import Iterator, Sequence
+import asyncio
+import time
 from opsqueue.producer import (
     SubmissionId,
     ProducerClient,
@@ -667,3 +669,95 @@ def test_lookup_too_many_submission_ids_by_strategic_metadata() -> None:
             )
         assert exc.type is TooManyMatchingSubmissionsError
         assert exc.value.max_submissions == max_
+
+
+def test_streams_completed_chunks_before_submission_finishes(
+    opsqueue: OpsqueueProcess,
+    any_consumer_strategy: StrategyDescription,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_results"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]", b"[2]"], chunk_size=1
+    )
+
+    def complete_chunks(
+        _submission_id_value: int,
+        strategy: StrategyDescription,
+    ) -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        chunks = sorted(
+            consumer_client.reserve_chunks(
+                max=2,
+                strategy=strategy_from_description(strategy),
+            ),
+            key=lambda chunk: chunk.chunk_index,
+        )
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
+        time.sleep(0.25)
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
+        )
+
+    with background_process(
+        complete_chunks,
+        args=(submission_id.id, any_consumer_strategy),
+    ):
+        results = producer_client.stream_submission_chunks(submission_id)
+        assert next(results) == b"[1]"
+        assert next(results) == b"[2]"
+
+
+def test_async_streams_completed_chunks_before_submission_finishes(
+    opsqueue: OpsqueueProcess,
+    any_consumer_strategy: StrategyDescription,
+) -> None:
+    url = "file:///tmp/opsqueue/test_async_streaming_results"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]", b"[2]"], chunk_size=1
+    )
+
+    def complete_chunks(
+        _submission_id_value: int,
+        strategy: StrategyDescription,
+    ) -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        chunks = sorted(
+            consumer_client.reserve_chunks(
+                max=2,
+                strategy=strategy_from_description(strategy),
+            ),
+            key=lambda chunk: chunk.chunk_index,
+        )
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
+        time.sleep(0.25)
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
+        )
+
+    async def collect() -> list[bytes]:
+        results = await producer_client.async_stream_submission_chunks(submission_id)
+        return [chunk async for chunk in results]
+
+    with background_process(
+        complete_chunks,
+        args=(submission_id.id, any_consumer_strategy),
+    ):
+        assert asyncio.run(collect()) == [b"[1]", b"[2]"]
