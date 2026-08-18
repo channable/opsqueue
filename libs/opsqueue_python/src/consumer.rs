@@ -91,12 +91,13 @@ impl ConsumerClient {
         )
     }
 
-    #[allow(clippy::type_complexity)]
     /// Reserve up to `max` chunks from the queue.
     ///
     /// # Errors
     ///
     /// Returns an error if reservation fails or if chunk bytes cannot be retrieved.
+    #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (max, strategy))]
     pub fn reserve_chunks(
         &self,
         py: Python<'_>,
@@ -114,12 +115,12 @@ impl ConsumerClient {
         py.detach(|| self.reserve_chunks_gilless(max, strategy.into()))
     }
 
-    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
     /// Complete a chunk and optionally upload output content to object storage.
     ///
     /// # Errors
     ///
     /// Returns an error if upload or completion request fails.
+    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, output_content))]
     pub fn complete_chunk(
         &self,
         py: Python<'_>,
@@ -145,12 +146,12 @@ impl ConsumerClient {
         })
     }
 
-    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, failure))]
     /// Mark a chunk as failed.
     ///
     /// # Errors
     ///
     /// Returns an error if the failure report cannot be submitted.
+    #[pyo3(signature = (submission_id, submission_prefix, chunk_index, failure))]
     pub fn fail_chunk(
         &self,
         py: Python<'_>,
@@ -165,6 +166,7 @@ impl ConsumerClient {
     }
 
     #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (strategy, fun))]
     pub fn run_per_chunk(
         &self,
         strategy: &Strategy,
@@ -316,7 +318,7 @@ impl ConsumerClient {
     /// # Errors
     ///
     /// Returns an error if the failure report cannot be submitted.
-    pub fn fail_chunk_gilless(
+    fn fail_chunk_gilless(
         &self,
         submission_id: SubmissionId,
         _submission_prefix: Option<String>,
