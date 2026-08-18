@@ -12,7 +12,6 @@ allowed-duplicate-crates = [
     "sha1",
     "sha2",
     "syn",
-    "thiserror",
     "tokio-tungstenite",
     "tower-http",
     "tungstenite",
