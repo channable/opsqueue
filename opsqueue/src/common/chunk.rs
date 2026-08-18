@@ -558,12 +558,12 @@ pub mod db {
     /// Returns an error if any batch insert fails.
     #[tracing::instrument(skip(chunks, conn))]
     pub async fn insert_many_chunks(
-        chunks: &[Chunk],
+        chunks: impl IntoIterator<Item = Chunk>,
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
         const ROWS_PER_QUERY: usize = 1000;
 
-        let mut iter = chunks.iter().peekable();
+        let mut iter = chunks.into_iter().peekable();
         while iter.peek().is_some() {
             let query_chunks = iter.by_ref().take(ROWS_PER_QUERY);
 
@@ -573,7 +573,7 @@ pub mod db {
             query_builder.push_values(query_chunks, |mut b, chunk| {
                 b.push_bind(chunk.submission_id)
                     .push_bind(chunk.chunk_index)
-                    .push_bind(chunk.input_content.clone());
+                    .push_bind(chunk.input_content);
             });
             let query = query_builder.build();
 
