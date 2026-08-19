@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "opsqueue"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "opsqueue_python"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "chrono",
