@@ -530,16 +530,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-skiplist"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df29de440c58ca2cc6e587ec3d22347551a32435fbde9d2bff64e78a9ffa151b"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -591,6 +581,7 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+ "serde",
 ]
 
 [[package]]
@@ -2014,7 +2005,6 @@ dependencies = [
  "chrono",
  "ciborium",
  "clap",
- "crossbeam-skiplist",
  "dashmap",
  "either",
  "futures",
@@ -2022,6 +2012,7 @@ dependencies = [
  "humantime",
  "insta",
  "itertools 0.15.0",
+ "libsqlite3-sys",
  "moka",
  "moro-local",
  "object_store",
@@ -4252,7 +4243,6 @@ dependencies = [
  "bitflags",
  "cc",
  "chrono",
- "crossbeam-epoch",
  "crossbeam-utils",
  "either",
  "event-listener",

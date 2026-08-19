@@ -41,7 +41,14 @@ clean:
 
 # Run all tests
 [group('test')]
-test: test-unit test-integration
+test: test-doc test-unit test-integration
+
+# Run doctests
+# Nextest doesn't currently support doctests
+# c.f. https://nexte.st/docs/integrations/test-coverage/
+[group('test')]
+test-doc *TEST_ARGS:
+  cargo test --doc --workspace {{TEST_ARGS}}
 
 # Rust unit test suite
 [group('test')]

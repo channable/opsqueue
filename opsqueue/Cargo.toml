@@ -29,6 +29,7 @@ ux.workspace = true
 anyhow.workspace = true
 # Database:
 sqlx = { workspace = true, optional = true }
+libsqlite3-sys = { workspace = true, optional = true }
 # Serialization:
 serde.workspace = true
 serde_json.workspace = true
@@ -69,7 +70,6 @@ clap.workspace = true
 humantime.workspace = true
 
 dashmap.workspace = true
-crossbeam-skiplist.workspace = true
 sqlformat.workspace = true
 workspace-hack.workspace = true
 
@@ -90,6 +90,7 @@ required-features = ["server-logic"]
 # Dependencies only in use by the server-logic:
 server-logic = [
     "dep:sqlx",
+    "dep:libsqlite3-sys",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry-semantic-conventions",
     "dep:moka",

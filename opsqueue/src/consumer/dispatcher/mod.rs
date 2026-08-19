@@ -3,15 +3,17 @@ pub mod reserver;
 
 use crate::{
     common::{
-        chunk::{Chunk, ChunkId},
-        submission::Submission,
+        chunk::{Chunk, ChunkId, ChunkIndex},
+        submission::{Submission, SubmissionId},
     },
     db::{Connection, Pool, ReaderPool, magic::Bool},
 };
 use futures::stream::{StreamExt as _, TryStreamExt as _};
+use libsqlite3_sys as ffi;
 use metastate::MetaState;
 use reserver::Reserver;
 use sqlx::QueryBuilder;
+use std::ffi::{CStr, CString};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +22,147 @@ use std::sync::Arc;
 
 use super::strategy;
 use crate::common::StrategicMetadataMap;
+
+unsafe extern "C" fn sqlite_reserved_chunk_lookup(
+    context: *mut ffi::sqlite3_context,
+    n_args: i32,
+    args: *mut *mut ffi::sqlite3_value,
+) {
+    if n_args != 2 {
+        tracing::error!(
+            n_args,
+            "opsqueue_is_reserved called with unexpected argument count"
+        );
+        // Fail open: this callback is an optimization only.
+        unsafe { ffi::sqlite3_result_int(context, 0) };
+        return;
+    }
+
+    let user_data = unsafe { ffi::sqlite3_user_data(context) }
+        .cast_const()
+        .cast::<Reserver<ChunkId, ChunkId>>();
+    if user_data.is_null() {
+        tracing::error!("opsqueue_is_reserved called without registered reserver user_data");
+        // Fail open: this callback is an optimization only.
+        unsafe { ffi::sqlite3_result_int(context, 0) };
+        return;
+    }
+
+    let submission_id_raw = unsafe { ffi::sqlite3_value_int64(*args.add(0)) };
+    let chunk_index_raw = unsafe { ffi::sqlite3_value_int64(*args.add(1)) };
+
+    let Ok(submission_id) = SubmissionId::try_from(submission_id_raw) else {
+        tracing::error!(
+            submission_id_raw,
+            "opsqueue_is_reserved got invalid submission_id"
+        );
+        // Fail open: this callback is an optimization only.
+        unsafe { ffi::sqlite3_result_int(context, 0) };
+        return;
+    };
+    let Ok(chunk_index) = ChunkIndex::try_from(chunk_index_raw) else {
+        tracing::error!(
+            chunk_index_raw,
+            "opsqueue_is_reserved got invalid chunk_index"
+        );
+        // Fail open: this callback is an optimization only.
+        unsafe { ffi::sqlite3_result_int(context, 0) };
+        return;
+    };
+
+    let chunk_id = ChunkId::from((submission_id, chunk_index));
+    let is_reserved = unsafe { &*user_data }.is_reserved(&chunk_id);
+    unsafe { ffi::sqlite3_result_int(context, i32::from(is_reserved)) };
+}
+
+unsafe extern "C" fn sqlite_reserved_chunk_lookup_destructor(ptr: *mut std::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    let _boxed: Box<Reserver<ChunkId, ChunkId>> = unsafe { Box::from_raw(ptr.cast()) };
+}
+
+unsafe extern "C" fn sqlite_cstring_destructor(ptr: *mut std::ffi::c_void) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(CString::from_raw(ptr.cast()));
+        }
+    }
+}
+
+/// Returns the whole value -> count map for one metadata key as a JSON object,
+/// so the caller can obtain every count in a single FFI call.
+unsafe extern "C" fn sqlite_metadata_counts_lookup(
+    context: *mut ffi::sqlite3_context,
+    n_args: i32,
+    args: *mut *mut ffi::sqlite3_value,
+) {
+    if n_args != 1 {
+        tracing::error!(
+            n_args,
+            "opsqueue_metadata_counts called with unexpected argument count"
+        );
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let user_data = unsafe { ffi::sqlite3_user_data(context) }
+        .cast_const()
+        .cast::<Arc<MetaState>>();
+    if user_data.is_null() {
+        tracing::error!("opsqueue_metadata_counts called without registered metastate user_data");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+
+    let metadata_key_ptr = unsafe { ffi::sqlite3_value_text(*args.add(0)) };
+    if metadata_key_ptr.is_null() {
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    }
+    let Ok(metadata_key) = unsafe { CStr::from_ptr(metadata_key_ptr.cast()) }.to_str() else {
+        tracing::error!("opsqueue_metadata_counts got non-utf8 metadata_key");
+        unsafe { ffi::sqlite3_result_null(context) };
+        return;
+    };
+
+    match unsafe { &*user_data }.get(metadata_key) {
+        Some(field) => {
+            let json = field.to_json();
+            match i32::try_from(json.len()) {
+                // No SQLite allocation by passing a destructor.
+                // c.f. https://sqlite.org/c3ref/result_blob.html
+                Ok(len) => unsafe {
+                    ffi::sqlite3_result_text(
+                        context,
+                        CString::new(json)
+                            .expect("JSON doesn't contain null-bytes")
+                            .into_raw()
+                            .cast(),
+                        len,
+                        Some(sqlite_cstring_destructor),
+                    );
+                },
+                Err(_) => unsafe {
+                    // Report to SQLite that the generated JSON is too large.
+                    ffi::sqlite3_result_error_toobig(context);
+                },
+            }
+        }
+        // No Rust allocation, and SQLITE_STATIC means no SQLite allocation.
+        // c.f. https://sqlite.org/c3ref/c_static.html
+        None => unsafe {
+            ffi::sqlite3_result_text(context, c"{}".as_ptr(), 2, ffi::SQLITE_STATIC());
+        },
+    }
+}
+
+unsafe extern "C" fn sqlite_metadata_count_lookup_destructor(ptr: *mut std::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    let _boxed: Box<Arc<MetaState>> = unsafe { Box::from_raw(ptr.cast()) };
+}
 
 #[derive(Debug, Clone)]
 pub struct Dispatcher {
@@ -74,9 +217,10 @@ impl Dispatcher {
         stale_chunks_notifier: &UnboundedSender<ChunkId>,
     ) -> Result<Vec<(Chunk, Submission)>, sqlx::Error> {
         let mut conn = pool.reader_conn().await?;
+        self.register_lookups(conn.get_inner()).await?;
         let mut query_builder = QueryBuilder::new("");
         let stream = strategy
-            .build_query(&mut query_builder, &self.metastate)
+            .build_query(&mut query_builder)
             .build_query_as()
             .fetch(conn.get_inner());
         stream
@@ -87,6 +231,65 @@ impl Dispatcher {
             .take(limit)
             .try_collect()
             .await
+    }
+
+    async fn register_lookups(&self, conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Error> {
+        let mut handle = conn.lock_handle().await?;
+        let sqlite = handle.as_raw_handle().as_ptr();
+        let reserved_function_name = c"opsqueue_is_reserved";
+        let counts_function_name = c"opsqueue_metadata_counts";
+
+        // Register the current reserver state on this connection.
+        // Re-registering replaces any previous callback on this handle.
+        let user_data = Box::new(self.reserver.clone());
+        let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
+
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                reserved_function_name.as_ptr().cast(),
+                2,
+                ffi::SQLITE_UTF8,
+                user_data,
+                Some(sqlite_reserved_chunk_lookup),
+                None,
+                None,
+                Some(sqlite_reserved_chunk_lookup_destructor),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
+            // We don't need to explicitly call the destructor.
+            // c.f. https://sqlite.org/c3ref/create_function.html
+            return Err(sqlx::Error::Protocol(format!(
+                "sqlite3_create_function_v2 failed with rc={rc}"
+            )));
+        }
+
+        // Register the bulk metadata counts lookup backed by current metastate.
+        let user_data = Box::new(self.metastate.clone());
+        let user_data = Box::into_raw(user_data).cast::<std::ffi::c_void>();
+        let rc = unsafe {
+            ffi::sqlite3_create_function_v2(
+                sqlite,
+                counts_function_name.as_ptr().cast(),
+                1,
+                ffi::SQLITE_UTF8,
+                user_data,
+                Some(sqlite_metadata_counts_lookup),
+                None,
+                None,
+                Some(sqlite_metadata_count_lookup_destructor),
+            )
+        };
+
+        if rc != ffi::SQLITE_OK {
+            return Err(sqlx::Error::Protocol(format!(
+                "sqlite3_create_function_v2 failed with rc={rc}"
+            )));
+        }
+
+        Ok(())
     }
 
     fn reserve_chunk(
@@ -150,5 +353,60 @@ impl Dispatcher {
     pub fn run_pending_tasks_periodically(&self, cancellation_token: CancellationToken) {
         self.reserver
             .run_pending_tasks_periodically(cancellation_token);
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "server-logic")]
+mod test {
+    use super::*;
+    use crate::common::chunk::ChunkId;
+    use crate::common::chunk::ChunkSize;
+    use crate::db::DBPools;
+    use tokio::sync::mpsc::unbounded_channel;
+    use ux::u63;
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn fetch_and_reserve_chunks_excludes_already_reserved(db: sqlx::SqlitePool) {
+        let pools = DBPools::from_test_pool(&db);
+        let dispatcher = Dispatcher::new(Duration::from_mins(1));
+        let (stale_chunks_notifier, mut _stale_chunks_receiver) = unbounded_channel::<ChunkId>();
+
+        let mut writer_conn = pools.writer_conn().await.unwrap();
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            vec![Some("a".into()), Some("b".into()), Some("c".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            &mut writer_conn,
+        )
+        .await
+        .unwrap();
+
+        let pre_reserved_chunk = ChunkId::from((submission_id, u63::new(0).into()));
+        dispatcher
+            .reserver()
+            .try_reserve(
+                pre_reserved_chunk,
+                pre_reserved_chunk,
+                &stale_chunks_notifier,
+            )
+            .expect("precondition: pre-reserving chunk should succeed");
+
+        let reserved = dispatcher
+            .fetch_and_reserve_chunks(
+                pools.reader_pool(),
+                strategy::Strategy::Oldest,
+                10,
+                &stale_chunks_notifier,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(reserved.len(), 2);
+        assert!(reserved.iter().all(|(chunk, _submission)| {
+            ChunkId::from((chunk.submission_id, chunk.chunk_index)) != pre_reserved_chunk
+        }));
     }
 }
