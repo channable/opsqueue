@@ -14,7 +14,7 @@ hakari-package = "workspace-hack"
 
 [workspace.package]
 edition = "2024"
-version = "0.40.0"
+version = "0.40.1"
 
 [workspace.dependencies]
 anyhow = { version = "1.0.102", default-features = false }
@@ -42,7 +42,7 @@ object_store = { version = "0.14.0", default-features = false, features = ["gcp"
 once_cell = { version = "1.21.4", default-features = false }
 opentelemetry = { version = "0.32", default-features = false, features = ["trace"] }
 opentelemetry-http = { version = "0.32", default-features = false }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "http-proto", "reqwest-client"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "http-proto", "reqwest-blocking-client"] }
 opentelemetry-resource-detectors = { version = "0.11.0", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32.0", default-features = false, features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "rt-tokio"] }

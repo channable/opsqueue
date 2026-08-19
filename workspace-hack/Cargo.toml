@@ -31,7 +31,7 @@ libsqlite3-sys = { version = "0.30", default-features = false, features = ["bund
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 opentelemetry = { version = "0.32" }
-opentelemetry-http = { version = "0.32", default-features = false, features = ["reqwest"] }
+opentelemetry-http = { version = "0.32", default-features = false, features = ["reqwest-blocking"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["metrics", "rt-tokio", "trace"] }
 rand-274715c4dabd11b0 = { package = "rand", version = "0.9" }
 rand-93f6ce9d446188ac = { package = "rand", version = "0.10" }
