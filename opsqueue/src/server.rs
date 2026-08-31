@@ -16,6 +16,11 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "server-logic")]
+pub mod interface;
+#[cfg(feature = "server-logic")]
+pub use interface::Interface;
+
 fn retry_policy() -> impl BackoffBuilder {
     FibonacciBuilder::default()
         .with_jitter()
@@ -44,7 +49,7 @@ pub async fn serve_producer_and_consumer(
     (|| async {
         let router = build_router(
             config,
-            pool.clone(),
+            pool,
             reservation_expiration,
             cancellation_token,
             app_healthy_flag.clone(),
@@ -92,30 +97,35 @@ pub async fn serve_producer_and_consumer(
 #[cfg(feature = "server-logic")]
 pub fn build_router(
     config: &'static crate::config::Config,
-    pool: DBPools,
+    pool: &DBPools,
     reservation_expiration: Duration,
     cancellation_token: &CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
     prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
     let notify_on_insert = Arc::new(Notify::new());
-    let notify_on_submission_change = Arc::new(Notify::new());
+    let (status_changed_sender, status_changed_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let interface = interface::Interface::new(
+        pool.clone(),
+        status_changed_sender.clone(),
+        status_changed_receiver,
+    );
 
-    let consumer_routes = crate::consumer::server::ServerState::new(
+    let consumer_routes = crate::consumer::server::ServerState::new_with_status_sender(
         pool.clone(),
         notify_on_insert.clone(),
-        notify_on_submission_change.clone(),
         cancellation_token.clone(),
         reservation_expiration,
         config,
+        Some(status_changed_sender.clone()),
     )
     .run_background()
     .build_router();
-    let producer_routes = crate::producer::server::ServerState::new(
+    let producer_routes = crate::producer::server::ServerState::new_with_status_sender(
         pool.clone(),
         notify_on_insert.clone(),
-        notify_on_submission_change.clone(),
         config.max_submissions_returned,
+        Some(status_changed_sender),
     )
     .build_router();
 
@@ -123,13 +133,12 @@ pub fn build_router(
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
 
-    if config.delegation_server_url.is_some() {
+    if let Some(delegation_server_url) = config.delegation_server_url.clone() {
         let delegation_routes = crate::delegation::server::ServerState::new(
-            pool,
-            config,
+            delegation_server_url,
             cancellation_token.clone(),
+            interface,
             notify_on_insert.clone(),
-            notify_on_submission_change.clone(),
         )
         .run_background()
         .build_router();

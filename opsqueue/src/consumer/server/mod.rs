@@ -18,6 +18,7 @@ use crate::{
     common::chunk::ChunkId,
     config::Config,
     db::{self, DBPools},
+    server::interface::SubmissionStatusChangedSender,
 };
 
 use super::dispatcher::Dispatcher;
@@ -37,12 +38,10 @@ pub async fn serve_for_tests(
     reservation_expiration: Duration,
 ) {
     let notify_on_insert = Arc::new(Notify::new());
-    let notify_on_submission_change = Arc::new(Notify::new());
     let config = Box::leak(Box::default());
     let state = ServerState::new(
         pool,
         notify_on_insert,
-        notify_on_submission_change,
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -75,17 +74,34 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
-        notify_on_submission_change: Arc<Notify>,
         cancellation_token: CancellationToken,
         reservation_expiration: Duration,
         config: &'static Config,
+    ) -> Self {
+        Self::new_with_status_sender(
+            pool,
+            notify_on_insert,
+            cancellation_token,
+            reservation_expiration,
+            config,
+            None,
+        )
+    }
+
+    pub fn new_with_status_sender(
+        pool: DBPools,
+        notify_on_insert: Arc<Notify>,
+        cancellation_token: CancellationToken,
+        reservation_expiration: Duration,
+        config: &'static Config,
+        status_changed_sender: Option<SubmissionStatusChangedSender>,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
         let (completer, completer_tx) = Completer::new(
             pool.writer_pool(),
             &dispatcher,
             config.max_chunk_retries,
-            notify_on_submission_change,
+            status_changed_sender,
         );
         Self {
             pool,
@@ -193,7 +209,7 @@ pub struct Completer {
     dispatcher: Dispatcher,
     count: usize,
     max_chunk_retries: u32,
-    notify_on_submission_change: Arc<Notify>,
+    status_changed_sender: Option<SubmissionStatusChangedSender>,
 }
 
 impl Completer {
@@ -202,7 +218,7 @@ impl Completer {
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
         max_chunk_retries: u32,
-        notify_on_submission_change: Arc<Notify>,
+        status_changed_sender: Option<SubmissionStatusChangedSender>,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         let pool = pool.clone();
@@ -212,7 +228,7 @@ impl Completer {
             dispatcher: dispatcher.clone(),
             count: 0,
             max_chunk_retries,
-            notify_on_submission_change,
+            status_changed_sender,
         };
         (me, tx)
     }
@@ -269,8 +285,8 @@ impl Completer {
                         let _ = db::perform_explicit_wal_checkpoint(conn).await;
                     }
 
-                    if submission_completed? {
-                        self.notify_on_submission_change.notify_one();
+                    if submission_completed? && let Some(sender) = &self.status_changed_sender {
+                        let _ = sender.send(id.submission_id);
                     }
                     Ok(())
                 }
@@ -305,8 +321,8 @@ impl Completer {
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
 
-                    if failed_permanently? {
-                        self.notify_on_submission_change.notify_one();
+                    if failed_permanently? && let Some(sender) = &self.status_changed_sender {
+                        let _ = sender.send(id.submission_id);
                     }
                     Ok(())
                 }
