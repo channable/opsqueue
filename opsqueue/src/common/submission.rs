@@ -535,7 +535,7 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(conn))]
-    pub(super) async fn unpause_submission_raw(
+    pub(crate) async fn unpause_submission_raw(
         id: SubmissionId,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
