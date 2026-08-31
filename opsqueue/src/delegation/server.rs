@@ -1,7 +1,8 @@
-use crate::common::errors::{E, SubmissionNotFound};
-use crate::common::submission::{self, SubmissionId};
-use crate::config::Config;
-use crate::db::{Connection, DBPools, WriterConnection};
+use crate::common::submission::{SubmissionId, SubmissionStatus};
+#[cfg(test)]
+use crate::db::DBPools;
+use crate::db::{Connection, WriterConnection};
+use crate::server::interface::Interface;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -13,60 +14,50 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 pub(crate) fn app_for_tests(
-    pool: DBPools,
+    pool: &DBPools,
     cancellation_token: &CancellationToken,
     delegation_server_url: url::Url,
-    notify_on_submission_change: Arc<Notify>,
-) -> Router {
+) -> (Router, tokio::sync::mpsc::UnboundedSender<SubmissionId>) {
     let notify_on_insert = Arc::new(Notify::new());
-    let config: &mut Config = Box::leak(Box::default());
-    config.delegation_server_url = Some(delegation_server_url);
+    let (status_changed_sender, status_changed_receiver) = tokio::sync::mpsc::unbounded_channel();
     let router = ServerState::new(
-        pool,
-        config,
+        delegation_server_url,
         cancellation_token.clone(),
+        Interface::new(
+            pool.clone(),
+            status_changed_sender.clone(),
+            status_changed_receiver,
+        ),
         notify_on_insert,
-        notify_on_submission_change,
     )
     .run_background()
     .build_router();
 
-    Router::new().nest("/job", router)
+    (Router::new().nest("/job", router), status_changed_sender)
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
-    pool: DBPools,
+    interface: Interface,
     cancellation_token: CancellationToken,
     /// Notified when new chunks become available for dispatch (e.g. after unpausing a submission).
     pub notify_on_insert: Arc<Notify>,
-    /// Notified whenever a submission changes status, so the background loop can report
-    /// it to the external service.
-    pub notify_on_submission_change: Arc<Notify>,
     delegation_server_url: url::Url,
     http_client: reqwest::Client,
 }
 
 impl ServerState {
-    /// # Panics
-    ///
-    /// Panics if `config.delegation_server_url` is not set.
     pub fn new(
-        pool: DBPools,
-        config: &'static Config,
+        delegation_server_url: url::Url,
         cancellation_token: CancellationToken,
+        interface: Interface,
         notify_on_insert: Arc<Notify>,
-        notify_on_submission_change: Arc<Notify>,
     ) -> Self {
         Self {
-            pool,
+            interface,
             cancellation_token,
             notify_on_insert,
-            notify_on_submission_change,
-            delegation_server_url: config
-                .delegation_server_url
-                .clone()
-                .expect("delegation_server_url not set"),
+            delegation_server_url,
             http_client: reqwest::Client::new(),
         }
     }
@@ -76,13 +67,7 @@ impl ServerState {
         let state = self.clone();
         let cancellation_token = self.cancellation_token.clone();
         tokio::spawn(async move {
-            run_in_background(
-                state.notify_on_submission_change.clone(),
-                state,
-                cancellation_token,
-            )
-            .await
-            .ok();
+            run_in_background(state, cancellation_token).await.ok();
         });
         self
     }
@@ -224,16 +209,27 @@ async fn job_delegate(
     State(state): State<ServerState>,
     Json(job): Json<DelegatedJob>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut conn = state.pool.writer_conn().await.map_err(|e| {
+    let mut conn = state.interface.pool.writer_conn().await.map_err(|e| {
         tracing::error!("DB error acquiring writer connection: {e:?}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    handle_delegate_event(&mut conn, &job).await.map_err(|e| {
-        tracing::error!("DB error handling delegate event: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    insert_external_task(&mut conn, job.payload.submission_id, &job.task_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error handling delegate event: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    drop(conn);
 
-    state.notify_on_submission_change.notify_one();
+    state
+        .interface
+        .unpause_submissions(vec![job.payload.submission_id])
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error handling delegate event: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
     state.notify_on_insert.notify_waiters();
 
     Ok(StatusCode::ACCEPTED)
@@ -244,27 +240,42 @@ async fn job_kill(
     State(state): State<ServerState>,
     Json(task_ids): Json<Vec<String>>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut conn = state.pool.writer_conn().await.map_err(|e| {
+    let mut conn = state.interface.pool.reader_conn().await.map_err(|e| {
         tracing::error!("DB error acquiring writer connection: {e:?}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    conn.transaction(move |mut tx| {
-        Box::pin(async move {
-            for task_id in &task_ids {
-                handle_kill_event(&mut tx, task_id).await?;
-            }
+    let mut submission_ids = Vec::with_capacity(task_ids.len());
+    for task_id in &task_ids {
+        let submission_id = sqlx::query_scalar!(
+            r#"SELECT submission_id AS "submission_id: SubmissionId"
+               FROM submissions_external_task
+               WHERE task_id = $1"#,
+            task_id,
+        )
+        .fetch_optional(conn.get_inner())
+        .await
+        .map_err(|e| {
+            tracing::error!(%task_id, "DB error looking up task for kill event: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-            Ok::<(), sqlx::Error>(())
-        })
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error handling kill event: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+        if let Some(submission_id) = submission_id {
+            submission_ids.push(submission_id);
+        } else {
+            tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
+        }
+    }
+    drop(conn);
 
-    state.notify_on_submission_change.notify_one();
+    state
+        .interface
+        .cancel_submissions(submission_ids)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error handling kill event: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(StatusCode::ACCEPTED)
 }
@@ -279,68 +290,9 @@ async fn job_return(
     Ok(StatusCode::ACCEPTED)
 }
 
-#[tracing::instrument(level = "debug", skip(conn))]
-async fn handle_delegate_event(
-    conn: &mut impl WriterConnection,
-    job: &DelegatedJob,
-) -> sqlx::Result<()> {
-    let task_id = &job.task_id;
-    let submission_id = job.payload.submission_id;
-
-    let rows_affected = insert_external_task(&mut *conn, submission_id, task_id).await?;
-
-    if rows_affected == 0 {
-        tracing::debug!(%submission_id, %task_id, "External task was already registered");
-    }
-
-    match submission::db::unpause_submission(submission_id, &mut *conn).await {
-        Ok(()) => {}
-        Err(E::R(SubmissionNotFound(_))) => {
-            tracing::debug!(%submission_id, "Submission was not in paused state; assuming already active");
-        }
-        Err(E::L(db_err)) => {
-            tracing::error!(%submission_id, "DB error unpausing submission: {db_err:?}");
-            return Err(db_err.0);
-        }
-    }
-
-    Ok(())
-}
-
-#[tracing::instrument(level = "debug", skip(conn))]
-async fn handle_kill_event(conn: &mut impl WriterConnection, task_id: &str) -> sqlx::Result<()> {
-    let submission_id = sqlx::query_scalar!(
-        r#"SELECT submission_id AS "submission_id: SubmissionId"
-           FROM submissions_external_task
-           WHERE task_id = $1"#,
-        task_id,
-    )
-    .fetch_optional(conn.get_inner())
-    .await?;
-
-    let Some(submission_id) = submission_id else {
-        tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
-        return Ok(());
-    };
-
-    match submission::db::cancel_submission_notx(submission_id, conn).await {
-        Ok(()) => {}
-        Err(E::L(db_err)) => {
-            tracing::error!(%submission_id, "DB error cancelling submission: {db_err:?}");
-            return Err(db_err.0);
-        }
-        Err(E::R(SubmissionNotFound(_))) => {
-            tracing::warn!(%submission_id, "Submission not found when attempting to cancel; already gone");
-        }
-    }
-
-    Ok(())
-}
-
 const DELEGATION_BACKGROUND_LOOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn run_in_background(
-    notify_on_submission_change: Arc<Notify>,
     state: ServerState,
     cancellation_token: CancellationToken,
 ) -> Result<(), ()> {
@@ -359,7 +311,7 @@ async fn run_in_background(
 
         triggered_by_timeout = select! {
             () = cancellation_token.cancelled() => break,
-            () = notify_on_submission_change.notified() => false,
+            Some(_) = state.interface.wait_for_submission_status_change() => false,
             () = tokio::time::sleep(DELEGATION_BACKGROUND_LOOP_TIMEOUT) => true,
         };
     }
@@ -371,10 +323,7 @@ async fn report_submission_status(
     state: &ServerState,
     triggered_by_timeout: bool,
 ) -> anyhow::Result<()> {
-    let out_of_date_tasks = {
-        let conn = state.pool.reader_conn().await?;
-        select_out_of_date_tasks(conn).await?
-    };
+    let out_of_date_tasks = select_out_of_date_tasks(&state.interface).await?;
 
     if out_of_date_tasks.is_empty() {
         return Ok(());
@@ -384,7 +333,7 @@ async fn report_submission_status(
         tracing::warn!(
             n_out_of_date_tasks = out_of_date_tasks.len(),
             "Delegation background loop triggered by timeout with pending tasks; \
-             possible missing notify_on_submission_change call"
+             possible missing submission status notification"
         );
     }
 
@@ -423,7 +372,7 @@ async fn report_submission_status(
 
         if !updates.is_empty() {
             send_updates(state, &updates).await?;
-            let conn = state.pool.writer_conn().await?;
+            let conn = state.interface.pool.writer_conn().await?;
             update_last_status_sent(
                 conn,
                 out_of_date_tasks
@@ -439,7 +388,7 @@ async fn report_submission_status(
 
         if !completions.is_empty() {
             send_completions(state, &completions).await?;
-            let conn = state.pool.writer_conn().await?;
+            let conn = state.interface.pool.writer_conn().await?;
             delete_external_tasks(
                 conn,
                 out_of_date_tasks
@@ -487,37 +436,59 @@ struct OutOfDateTaskRow {
     current_status: DelegatedJobStatus,
 }
 
-async fn select_out_of_date_tasks(
-    mut conn: impl Connection,
-) -> sqlx::Result<Vec<OutOfDateTaskRow>> {
-    sqlx::query_as!(
-        OutOfDateTaskRow,
-        r#"WITH out_of_date_tasks AS (
-            SELECT
-                submission_id,
-                task_id
-            FROM submissions_external_task as t
-            WHERE
-               t.last_status_sent IS NULL
-               OR (t.last_status_sent = 'paused' AND NOT EXISTS(SELECT * FROM submissions_paused AS s WHERE s.id = t.submission_id))
-               OR (t.last_status_sent = 'in_progress' AND NOT EXISTS(SELECT * FROM submissions AS s WHERE s.id = t.submission_id))
-               OR (t.last_status_sent = 'completed' AND NOT EXISTS(SELECT * FROM submissions_completed AS s WHERE s.id = t.submission_id))
-               OR (t.last_status_sent = 'failed' AND NOT EXISTS(SELECT * FROM submissions_failed AS s WHERE s.id = t.submission_id))
-               OR (t.last_status_sent = 'cancelled' AND NOT EXISTS(SELECT * FROM submissions_cancelled AS s WHERE s.id = t.submission_id))
-           )
-           SELECT
-               task_id,
-               coalesce(
-                (SELECT 'paused' FROM submissions_paused AS s WHERE s.id = t.submission_id),
-                (SELECT 'in_progress' FROM submissions AS s WHERE s.id = t.submission_id),
-                (SELECT 'completed' FROM submissions_completed AS s WHERE s.id = t.submission_id),
-                (SELECT 'failed' FROM submissions_failed AS s WHERE s.id = t.submission_id),
-                (SELECT 'cancelled' FROM submissions_cancelled AS s WHERE s.id = t.submission_id)
-               ) AS "current_status!: DelegatedJobStatus"
-           FROM out_of_date_tasks AS t
-        "#)
+async fn select_out_of_date_tasks(interface: &Interface) -> anyhow::Result<Vec<OutOfDateTaskRow>> {
+    let external_tasks = {
+        let mut conn = interface.pool.reader_conn().await?;
+        sqlx::query_as!(
+            ExternalTaskRow,
+            r#"SELECT
+                  task_id,
+                  submission_id AS "submission_id: SubmissionId",
+                  last_status_sent AS "last_status_sent: DelegatedJobStatus"
+              FROM submissions_external_task"#
+        )
         .fetch_all(conn.get_inner())
-        .await
+        .await?
+    };
+
+    let submission_ids = external_tasks
+        .iter()
+        .map(|task| task.submission_id)
+        .collect::<Vec<_>>();
+    let statuses = interface.get_submission_statuses(submission_ids).await?;
+
+    let mut out_of_date_tasks = Vec::new();
+    for (task, status) in external_tasks.into_iter().zip(statuses) {
+        let status = status.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Submission {} for external task {} no longer exists",
+                task.submission_id,
+                task.task_id
+            )
+        })?;
+        let current_status = match status {
+            SubmissionStatus::Paused(_) => DelegatedJobStatus::Paused,
+            SubmissionStatus::InProgress(_) => DelegatedJobStatus::InProgress,
+            SubmissionStatus::Completed(_) => DelegatedJobStatus::Completed,
+            SubmissionStatus::Failed(_, _) => DelegatedJobStatus::Failed,
+            SubmissionStatus::Cancelled(_) => DelegatedJobStatus::Cancelled,
+        };
+
+        if task.last_status_sent != Some(current_status) {
+            out_of_date_tasks.push(OutOfDateTaskRow {
+                task_id: task.task_id,
+                current_status,
+            });
+        }
+    }
+    Ok(out_of_date_tasks)
+}
+
+#[derive(Debug)]
+struct ExternalTaskRow {
+    task_id: String,
+    submission_id: SubmissionId,
+    last_status_sent: Option<DelegatedJobStatus>,
 }
 
 async fn update_last_status_sent(
@@ -654,8 +625,8 @@ pub mod test {
     use axum::http::Request;
     use http::{StatusCode, header};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
-    use tokio::sync::{Notify, oneshot};
+    use std::sync::Mutex;
+    use tokio::sync::oneshot;
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
     use wiremock::matchers::{body_partial_json, method, path};
@@ -714,11 +685,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let app = app_for_tests(
-            pool.clone(),
+        let (app, _status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            Arc::new(Notify::new()),
         );
 
         let submission = {
@@ -814,11 +784,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let app = app_for_tests(
-            pool.clone(),
+        let (app, _status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            Arc::new(Notify::new()),
         );
 
         {
@@ -910,12 +879,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let notify_on_submission_change = Arc::new(Notify::new());
-        let _ = app_for_tests(
-            pool.clone(),
+        let (_app, status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            notify_on_submission_change.clone(),
         );
 
         let submission = {
@@ -955,7 +922,7 @@ pub mod test {
         {
             let mut conn = pool.writer_conn().await.unwrap();
             unpause_submission(submission, &mut conn).await.unwrap();
-            notify_on_submission_change.notify_one();
+            status_changed_sender.send(submission).unwrap();
         }
 
         tokio::time::timeout(std::time::Duration::from_secs(2), rx)
@@ -985,12 +952,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let notify_on_submission_change = Arc::new(Notify::new());
-        let _ = app_for_tests(
-            pool.clone(),
+        let (_app, status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            notify_on_submission_change.clone(),
         );
 
         let submission = {
@@ -1032,7 +997,7 @@ pub mod test {
             complete_chunk((submission, ChunkIndex::zero()).into(), None, &mut conn)
                 .await
                 .unwrap();
-            notify_on_submission_change.notify_one();
+            status_changed_sender.send(submission).unwrap();
         }
 
         tokio::time::timeout(std::time::Duration::from_secs(2), rx)
@@ -1062,12 +1027,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let notify_on_submission_change = Arc::new(Notify::new());
-        let _ = app_for_tests(
-            pool.clone(),
+        let (_app, status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            notify_on_submission_change.clone(),
         );
 
         let submission = {
@@ -1112,7 +1075,7 @@ pub mod test {
             )
             .await
             .unwrap();
-            notify_on_submission_change.notify_one();
+            status_changed_sender.send(submission).unwrap();
         }
 
         tokio::time::timeout(std::time::Duration::from_secs(2), rx)
@@ -1142,12 +1105,10 @@ pub mod test {
         let external_server = MockServer::start().await;
 
         let cancellation_token = CancellationToken::new();
-        let notify_on_submission_change = Arc::new(Notify::new());
-        let _ = app_for_tests(
-            pool.clone(),
+        let (_app, status_changed_sender) = app_for_tests(
+            &pool,
             &cancellation_token,
             external_server.uri().parse().unwrap(),
-            notify_on_submission_change.clone(),
         );
 
         let submission = {
@@ -1185,7 +1146,7 @@ pub mod test {
         {
             let mut conn = pool.writer_conn().await.unwrap();
             cancel_submission(submission, &mut conn).await.unwrap();
-            notify_on_submission_change.notify_one();
+            status_changed_sender.send(submission).unwrap();
         }
 
         tokio::time::timeout(std::time::Duration::from_secs(2), rx)
