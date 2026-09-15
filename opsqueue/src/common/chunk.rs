@@ -313,12 +313,11 @@ pub mod db {
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        let chunks_moved = conn
+        let chunk_moved = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
-                    let chunks_moved =
-                        complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
-                    if chunks_moved {
+                    let chunk_moved = complete_chunk_raw(chunk_id, output_content, &mut tx).await?;
+                    if chunk_moved {
                         crate::common::submission::db::maybe_complete_submission(
                             chunk_id.submission_id,
                             &mut tx,
@@ -332,12 +331,12 @@ pub mod db {
                         );
                     }
 
-                    Result::<bool, E<DatabaseError, SubmissionNotFound>>::Ok(chunks_moved)
+                    Result::<bool, E<DatabaseError, SubmissionNotFound>>::Ok(chunk_moved)
                 })
             })
             .await?;
 
-        if chunks_moved {
+        if chunk_moved {
             counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         }
         Ok(())
@@ -649,7 +648,7 @@ pub mod db {
         Ok(())
     }
 
-    /// Move all chunks of a paused submission from `chunks_paused` back to `chunks`.
+    /// Move all chunks of a paused submission from `chunks_paused` to `chunks`.
     ///
     /// # Errors
     ///
@@ -669,8 +668,8 @@ pub mod db {
             submission_id,
             submission_id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
         Ok(())
     }
 
@@ -699,8 +698,8 @@ pub mod db {
             submission_id,
             submission_id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
 
         counter!(crate::prometheus::CHUNKS_SKIPPED_COUNTER).increment(query_res.rows_affected());
         Ok(())

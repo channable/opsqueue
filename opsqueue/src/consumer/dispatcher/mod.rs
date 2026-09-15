@@ -379,6 +379,7 @@ mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            false,
             &mut writer_conn,
         )
         .await

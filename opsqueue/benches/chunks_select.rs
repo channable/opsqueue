@@ -191,6 +191,7 @@ async fn seed_or_extend(
                 None,
                 metadata,
                 ChunkSize::default(),
+                false,
                 &mut conn,
             )
             .await

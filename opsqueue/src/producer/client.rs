@@ -441,7 +441,6 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-
     use crate::{
         common::{
             StrategicMetadataMap,

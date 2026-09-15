@@ -168,6 +168,7 @@ impl ProducerClient {
     ///
     /// Returns an error if the submission is not found or if an internal client error occurs.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (id))]
     pub fn unpause_submission(
         &self,
         py: Python<'_>,
@@ -281,7 +282,9 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if submission insertion fails.
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false)
+    )]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
@@ -318,7 +321,8 @@ impl ProducerClient {
     ///
     /// Returns an error if chunk upload or submission insertion fails.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false))]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false)
+    )]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
@@ -343,18 +347,18 @@ impl ProducerClient {
             let prefix = uuid::Uuid::now_v7().to_string();
             tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = self.block_unless_interrupted(async {
-                    let chunk_contents = std::iter::from_fn(move || {
-                        Python::attach(|py|
-                            chunk_contents.bind(py).clone().next()
-                                .map(|item| item.and_then(
-                                    |item| item.extract()).map_err(Into::into)))
-                    });
-                    let stream = futures::stream::iter(chunk_contents);
-                    self.object_store_client
-                        .store_chunks(&prefix, ChunkType::Input, stream)
-                        .await
-                        .map_err(|e| CError(R(L(e))))
-                })?;
+                let chunk_contents = std::iter::from_fn(move || {
+                    Python::attach(|py|
+                        chunk_contents.bind(py).clone().next()
+                            .map(|item| item.and_then(
+                                |item| item.extract()).map_err(Into::into)))
+                });
+                let stream = futures::stream::iter(chunk_contents);
+                self.object_store_client
+                    .store_chunks(&prefix, ChunkType::Input, stream)
+                    .await
+                    .map_err(|e| CError(R(L(e))))
+            })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
             tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
@@ -426,7 +430,7 @@ impl ProducerClient {
     ///
     /// Returns an error if polling or output streaming fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
-    #[pyo3(signature = (submission_id))]
+    #[pyo3(signature = (submission_id, timeout=None))]
     pub fn blocking_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,

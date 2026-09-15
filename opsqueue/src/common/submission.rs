@@ -379,8 +379,8 @@ pub mod db {
             submission.otel_trace_carrier,
             submission.chunk_size.0,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
 
         Ok(())
     }
@@ -437,11 +437,22 @@ pub mod db {
                         &submission.strategic_metadata,
                         &mut tx,
                     )
-                    .await?;
+                        .await?;
                     super::chunk::db::insert_many_chunks(chunks, &mut tx).await?;
+
+                    // Empty submissions get special handling: we mark them as completed right away.
+                    // See https://github.com/channable/opsqueue/issues/86 for rationale.
+                    if chunks_total == 0 {
+                        maybe_complete_submission(submission.id, tx).await
+                            .map_err(|e| match e {
+                                // Forward our database errors to the caller.
+                                E::L(e) => e,
+                                E::R(_) => panic!("Failed to find submission that was just inserted in this transaction"),
+                            })?;
+                    }
                     Ok(())
                 }
-                .boxed()
+                    .boxed()
             })
             .await;
 
@@ -503,14 +514,17 @@ pub mod db {
             submission.otel_trace_carrier,
             submission.chunk_size.0,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
 
         Ok(())
     }
 
     /// Unpause a paused submission. Atomically moves it back from `submissions_paused`
     /// to `submissions` and its chunks from `chunks_paused` to `chunks`.
+    ///
+    /// If the submission has 0 chunks, the submission is marked as completed immediately
+    /// afterwards.
     ///
     /// # Errors
     ///
@@ -614,27 +628,6 @@ pub mod db {
             insert_paused_submission(submission, chunks, &mut conn).await?;
         } else {
             insert_submission(submission, chunks, &mut conn).await?;
-            // Empty submissions get special handling: we mark them as completed right away.
-            // See https://github.com/channable/opsqueue/issues/86 for rationale.
-            if len == 0 {
-                match maybe_complete_submission(submission_id, conn).await {
-                    // Forward our database errors to the caller.
-                    Err(E::L(e)) => return Err(e),
-                    // If the submission ID can't be found, that's too bad, but it's not our problem anymore I guess.
-                    Err(E::R(_)) => {
-                        tracing::warn!(%submission_id, "Presumed zero-length submission not found");
-                    }
-                    // If everything went OK, this *could* still indicate a bug in producer code, so let's just log it.
-                    // Our future selves might thank us.
-                    Ok(true) => {
-                        tracing::debug!(%submission_id, "Zero-length submission marked as completed");
-                    }
-                    // This should never happen. If it does, better log it.
-                    Ok(false) => {
-                        tracing::warn!(%submission_id, "Zero-length submission wasn't zero-length?!");
-                    }
-                }
-            }
         }
         Ok(submission_id)
     }
@@ -807,8 +800,11 @@ pub mod db {
         mut conn: impl Connection,
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         // NOTE: The order is important here; a concurrent writer could move a submission
-        // from InProgress to Completed/Failed in-between the queries.
-        // TODO: Rewrite the queries here into a single query using `UNION ALL`.
+        // from Paused to InProgress/Cancelled in-between the queries.
+        // from InProgress to Completed/Failed/Cancelled in-between the queries.
+        // TODO(opsqueue#183): Instead of relying on our attention to detail. Let's rewrite the
+        //  queries here to use a transaction and/or merge them into a single query using
+        //  `UNION ALL`.
 
         let paused_row_opt = submission_status_paused_query(id)
             .fetch_optional(conn.get_inner())
@@ -1130,13 +1126,18 @@ pub mod db {
 
                 if submission.chunks_done == submission.chunks_total {
                     complete_submission_raw(id, &mut tx).await?;
+                    if submission.chunks_total == 0 {
+                        // There are no chunks, this might indicate a bug in producer code, so
+                        // let's just log it. Our future selves might thank us.
+                        tracing::debug!(%submission.id, "Zero-length submission marked as completed");
+                    }
                     Ok(true)
                 } else {
                     Ok(false)
                 }
             })
         })
-        .await
+            .await
     }
 
     /// Cancel a submission if it is still cancellable.
@@ -1244,8 +1245,8 @@ pub mod db {
             id,
             id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
@@ -1276,8 +1277,8 @@ pub mod db {
             id,
             id,
         )
-        .execute(conn.get_inner())
-        .await?;
+            .execute(conn.get_inner())
+            .await?;
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
@@ -1347,8 +1348,8 @@ pub mod db {
             id,
             id,
         )
-        .fetch_one(conn.get_inner())
-        .await?;
+            .fetch_one(conn.get_inner())
+            .await?;
         counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
         histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(
             crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
@@ -1508,8 +1509,8 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
@@ -1517,8 +1518,8 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
                 query!(
                     "DELETE FROM submissions_metadata
                     WHERE submission_id IN (
@@ -1526,41 +1527,41 @@ pub mod db {
                     );",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?;
+                    .execute(tx.get_inner())
+                    .await?;
 
                 // Clean up old submissions:
                 let n_submissions_completed = query!(
                     "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_submissions_failed = query!(
                     "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_submissions_cancelled = query!(
                     "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
 
                 let n_chunks_completed = query!(
                     "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
                 let n_chunks_failed = query!(
                     "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
                     older_than
                 )
-                .execute(tx.get_inner())
-                .await?.rows_affected();
+                    .execute(tx.get_inner())
+                    .await?.rows_affected();
 
                 tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
                 tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
@@ -1568,7 +1569,7 @@ pub mod db {
                 Ok(())
             })
         })
-        .await
+            .await
     }
 
     pub async fn periodically_cleanup_old(db: &WriterPool, max_age: Duration) {
@@ -1629,6 +1630,20 @@ pub mod test {
         .join("\n")
     }
 
+    fn assert_no_materialization(explained: &str) {
+        assert!(
+            !explained.contains("MATERIALIZE"),
+            "Query should contain no materialization, but it did."
+        );
+    }
+
+    fn assert_no_temporary_b_trees(explained: &str) {
+        assert!(
+            !explained.contains("TEMP B-TREE"),
+            "Query should contain no temporary B-tree construction, but it did."
+        );
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_lookup_by_strategic_metadata(db: sqlx::SqlitePool) {
         let strategic_metadata: StrategicMetadataMap =
@@ -1655,6 +1670,8 @@ pub mod test {
           ?
         ");
         let explained = explain_query_plan(qb.build_query_scalar::<SubmissionId>(), db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         8, 0, SEARCH s0 USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
         16, 0, SEARCH submissions USING COVERING INDEX sqlite_autoindex_submissions_1 (id=?)
@@ -1666,6 +1683,8 @@ pub mod test {
     pub async fn test_query_plan_submission_status_in_progress(db: sqlx::SqlitePool) {
         let query = submission_status_in_progress_query(SubmissionId::new());
         let explained = explain_query_plan(query, db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
         17, 0, CORRELATED SCALAR SUBQUERY 1
@@ -1678,6 +1697,8 @@ pub mod test {
         let query = submission_status_completed_query(SubmissionId::new());
 
         let explained = explain_query_plan(query, db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_completed USING INDEX sqlite_autoindex_submissions_completed_1 (id=?)
         16, 0, CORRELATED SCALAR SUBQUERY 1
@@ -1689,6 +1710,8 @@ pub mod test {
     pub async fn test_query_plan_submission_status_failed(db: sqlx::SqlitePool) {
         let query = submission_status_failed_query(SubmissionId::new());
         let explained = explain_query_plan(query, db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_failed USING INDEX sqlite_autoindex_submissions_failed_1 (id=?)
         17, 0, CORRELATED SCALAR SUBQUERY 1
@@ -1700,6 +1723,8 @@ pub mod test {
     pub async fn test_query_plan_submission_status_cancelled(db: sqlx::SqlitePool) {
         let query = submission_status_cancelled_query(SubmissionId::new());
         let explained = explain_query_plan(query, db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_cancelled USING INDEX sqlite_autoindex_submissions_cancelled_1 (id=?)
         16, 0, CORRELATED SCALAR SUBQUERY 1
@@ -2095,6 +2120,8 @@ pub mod test {
     pub async fn test_query_plan_submission_status_paused(db: sqlx::SqlitePool) {
         let query = submission_status_paused_query(SubmissionId::new());
         let explained = explain_query_plan(query, db).await;
+        assert_no_materialization(explained.as_str());
+        assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions_paused USING INDEX sqlite_autoindex_submissions_paused_1 (id=?)
         17, 0, CORRELATED SCALAR SUBQUERY 1
