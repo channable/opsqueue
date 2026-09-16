@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::common::errors::E::{L, R};
-use crate::common::submission::{self, SubmissionId};
+use crate::common::submission::{self, InitialSubmissionStatus, SubmissionId};
 use crate::common::{MaxSubmissions, StrategicMetadataMap};
 use crate::db::{self, DBPools};
 use crate::tracing::anyhow_as_dyn_error;
@@ -226,7 +226,7 @@ async fn insert_submission(
         request.metadata,
         request.strategic_metadata,
         request.chunk_size.unwrap_or_default(),
-        request.paused,
+        request.initial_status.clone(),
         &mut conn,
     )
     .await?;
@@ -236,8 +236,8 @@ async fn insert_submission(
     // this is the moment to perform an extra WAL checkpoint
     let _ = db::perform_explicit_wal_checkpoint(conn).await;
 
-    // Notify waiting consumers, but only for non-paused submissions.
-    if !request.paused {
+    // Notify waiting consumers, but only for submissions which start running immediately.
+    if request.initial_status == InitialSubmissionStatus::InProgress {
         state.notify_on_insert.notify_waiters();
     }
 

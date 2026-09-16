@@ -552,9 +552,9 @@ mod tests {
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
-    use crate::{common::StrategicMetadataMap, db};
-
     use super::*;
+    use crate::common::submission::InitialSubmissionStatus;
+    use crate::{common::StrategicMetadataMap, db};
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
@@ -578,7 +578,7 @@ mod tests {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await

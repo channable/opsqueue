@@ -350,6 +350,24 @@ impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCance
     }
 }
 
+#[pyclass(from_py_object, eq, eq_int)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum InitialSubmissionStatus {
+    Paused,
+    #[default]
+    InProgress,
+}
+
+impl From<InitialSubmissionStatus> for opsqueue::common::submission::InitialSubmissionStatus {
+    fn from(value: InitialSubmissionStatus) -> Self {
+        use opsqueue::common::submission::InitialSubmissionStatus::{InProgress, Paused};
+        match value {
+            InitialSubmissionStatus::Paused => Paused,
+            InitialSubmissionStatus::InProgress => InProgress,
+        }
+    }
+}
+
 #[pyclass(from_py_object, frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {

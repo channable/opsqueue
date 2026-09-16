@@ -824,7 +824,7 @@ pub mod db {
 pub mod test {
     use crate::common::StrategicMetadataMap;
     use crate::common::submission::db::{insert_submission, insert_submission_raw};
-    use crate::common::submission::{Submission, SubmissionStatus};
+    use crate::common::submission::{InitialSubmissionStatus, Submission, SubmissionStatus};
     use crate::db::{Connection as _, WriterPool};
     use std::assert_matches;
 
@@ -916,7 +916,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await

@@ -1,5 +1,6 @@
 use crate::common::StrategicMetadataMap;
 
+use crate::common::submission::InitialSubmissionStatus;
 use crate::common::{chunk, submission::Metadata};
 
 /// A producer's request to create a new submission.
@@ -10,10 +11,10 @@ pub struct InsertSubmission {
     #[serde(default)]
     pub strategic_metadata: StrategicMetadataMap,
     pub chunk_size: Option<chunk::ChunkSize>,
-    /// When `true`, the submission is inserted in a paused state and will not
+    /// When `Paused`, the submission is inserted in a paused state and will not
     /// be dispatched to consumers until explicitly unpaused.
     #[serde(default)]
-    pub paused: bool,
+    pub initial_status: InitialSubmissionStatus,
 }
 
 /// Either embedded chunk contents or a reference to object storage.

@@ -8,6 +8,7 @@
 ///         Write result
 use opsqueue::common::StrategicMetadataMap;
 use opsqueue::common::chunk::{ChunkId, ChunkSize};
+use opsqueue::common::submission::InitialSubmissionStatus;
 use opsqueue::common::submission::db::insert_submission_from_chunks;
 use opsqueue::consumer::dispatcher::Dispatcher;
 use opsqueue::consumer::strategy::Strategy;
@@ -191,7 +192,7 @@ async fn seed_or_extend(
                 None,
                 metadata,
                 ChunkSize::default(),
-                false,
+                InitialSubmissionStatus::default(),
                 &mut conn,
             )
             .await

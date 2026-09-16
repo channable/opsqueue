@@ -2,7 +2,21 @@
 # - use pytest's `--log-cli-level=info` (or `=debug`) argument to get more detailed logs from the producer/consumer clients
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
+import logging
+import time
 from collections.abc import Iterator, Sequence
+
+import pytest
+from conftest import (
+    background_process,
+    multiple_background_processes,
+    OpsqueueProcess,
+    opsqueue_service,
+    StrategyDescription,
+    strategy_from_description,
+)
+from opsqueue.common import SerializationFormat
+from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.producer import (
     SubmissionId,
     ProducerClient,
@@ -15,20 +29,8 @@ from opsqueue.producer import (
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
     TooManyMatchingSubmissionsError,
+    InitialSubmissionStatus,
 )
-from opsqueue.consumer import ConsumerClient, Chunk
-from opsqueue.common import SerializationFormat
-from conftest import (
-    background_process,
-    multiple_background_processes,
-    OpsqueueProcess,
-    opsqueue_service,
-    StrategyDescription,
-    strategy_from_description,
-)
-import logging
-import time
-import pytest
 
 SUBMISSION_COMPLETED_TIMEOUT = 10.0
 
@@ -762,7 +764,7 @@ def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
     url = "file:///tmp/opsqueue/test_unpause_and_complete"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission(
-        (1, 2, 3), chunk_size=1, paused=True
+        (1, 2, 3), chunk_size=1, initial_status=InitialSubmissionStatus.Paused
     )
 
     assert isinstance(
@@ -796,7 +798,7 @@ def test_unpause_not_found(opsqueue: OpsqueueProcess) -> None:
     url = "file:///tmp/opsqueue/test_unpause_not_found"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission(
-        (1, 2, 3), chunk_size=1, paused=False
+        (1, 2, 3), chunk_size=1, initial_status=InitialSubmissionStatus.InProgress
     )
     assert isinstance(
         producer_client.get_submission_status(submission_id),
@@ -811,7 +813,7 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
     url = "file:///tmp/opsqueue/test_cancel_paused"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission(
-        (1, 2, 3), chunk_size=1, paused=True
+        (1, 2, 3), chunk_size=1, initial_status=InitialSubmissionStatus.Paused
     )
 
     assert isinstance(

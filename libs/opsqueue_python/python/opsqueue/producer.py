@@ -1,25 +1,24 @@
 from __future__ import annotations
+
+import itertools
 from collections.abc import Iterable, Iterator, AsyncIterator
 from typing import Any, cast
 
-import itertools
-
 from opentelemetry import trace
-
 from opsqueue.common import (
     SerializationFormat,
     encode_chunk,
     decode_chunk,
     DEFAULT_SERIALIZATION_FORMAT,
 )
-from . import opsqueue_internal
-from . import tracing
 from opsqueue.exceptions import (
     SubmissionFailedError,
     SubmissionNotCancellableError,
     SubmissionNotFoundError,
     TooManyMatchingSubmissionsError,
 )
+from . import opsqueue_internal
+from . import tracing
 from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionId,
     SubmissionStatus,
@@ -28,21 +27,23 @@ from .opsqueue_internal import (  # type: ignore[import-not-found]
     ChunkFailed,
     SubmissionNotCancellable,
     SubmissionPaused,
+    InitialSubmissionStatus,
 )
 
 __all__ = [
+    "ChunkFailed",
+    "InitialSubmissionStatus",
     "ProducerClient",
-    "SubmissionId",
-    "SubmissionStatus",
     "SubmissionCompleted",
-    "SubmissionFailedError",
     "SubmissionFailed",
+    "SubmissionFailedError",
+    "SubmissionId",
     "SubmissionNotCancellable",
     "SubmissionNotCancellableError",
     "SubmissionNotFoundError",
     "SubmissionPaused",
+    "SubmissionStatus",
     "TooManyMatchingSubmissionsError",
-    "ChunkFailed",
 ]
 
 
@@ -150,7 +151,7 @@ class ProducerClient:
         serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
-        paused: bool = False,
+        initial_status: InitialSubmissionStatus = InitialSubmissionStatus.InProgress,
     ) -> SubmissionId:
         """
         Inserts a submission into the queue,
@@ -167,7 +168,7 @@ class ProducerClient:
             metadata=metadata,
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
-            paused=paused,
+            initial_status=initial_status,
         )
 
     def blocking_stream_completed_submission(
@@ -267,7 +268,7 @@ class ProducerClient:
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         chunk_size: None | int = None,
-        paused: bool = False,
+        initial_status: InitialSubmissionStatus = InitialSubmissionStatus.InProgress,
     ) -> SubmissionId:
         """
         Inserts an already-chunked submission into the queue,
@@ -284,7 +285,7 @@ class ProducerClient:
             strategic_metadata=strategic_metadata,
             chunk_size=chunk_size,
             otel_trace_carrier=otel_trace_carrier,
-            paused=paused,
+            initial_status=initial_status,
         )
 
     def blocking_stream_completed_submission_chunks(

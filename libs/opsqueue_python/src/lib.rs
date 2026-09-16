@@ -26,6 +26,7 @@ fn opsqueue_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<common::SubmissionFailed>()?;
     m.add_class::<common::SubmissionPaused>()?;
     m.add_class::<common::SubmissionNotCancellable>()?;
+    m.add_class::<common::InitialSubmissionStatus>()?;
     m.add_class::<producer::PyChunksIter>()?;
     m.add_class::<consumer::ConsumerClient>()?;
     m.add_class::<producer::ProducerClient>()?;

@@ -231,6 +231,13 @@ pub struct SubmissionPaused {
     pub otel_trace_carrier: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum InitialSubmissionStatus {
+    Paused,
+    #[default]
+    InProgress,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubmissionStatus {
     InProgress(Submission),
@@ -313,9 +320,9 @@ pub mod db {
     use sqlx::{Database, QueryBuilder, Sqlite, query, query_as, query_scalar};
 
     use super::{
-        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, Metadata, Submission,
-        SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId, SubmissionStatus,
-        Utc, chunk,
+        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, InitialSubmissionStatus, Metadata,
+        Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
+        SubmissionStatus, Utc, chunk,
     };
 
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
@@ -599,7 +606,7 @@ pub mod db {
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
         chunk_size: ChunkSize,
-        paused: bool,
+        initial_status: InitialSubmissionStatus,
         mut conn: impl WriterConnection,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = SubmissionId::new();
@@ -624,11 +631,15 @@ pub mod db {
             })
             .collect();
 
-        if paused {
-            insert_paused_submission(submission, chunks, &mut conn).await?;
-        } else {
-            insert_submission(submission, chunks, &mut conn).await?;
+        match initial_status {
+            InitialSubmissionStatus::Paused => {
+                insert_paused_submission(submission, chunks, &mut conn).await?;
+            }
+            InitialSubmissionStatus::InProgress => {
+                insert_submission(submission, chunks, &mut conn).await?;
+            }
         }
+
         Ok(submission_id)
     }
 
@@ -1791,7 +1802,7 @@ pub mod test {
             None,
             strategic_metadata.clone(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1867,7 +1878,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1878,7 +1889,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1889,7 +1900,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1900,7 +1911,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1933,7 +1944,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1944,7 +1955,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -1955,7 +1966,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -2009,7 +2020,7 @@ pub mod test {
             StrategicMetadataMap::default(),
             // chunk size
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::InProgress,
             &mut conn,
         )
         .await

@@ -7,6 +7,14 @@ use pyo3::{
 use std::time::TryFromFloatSecsError;
 use std::{future::IntoFuture, sync::Arc, time::Duration};
 
+use crate::{
+    async_util,
+    common::{
+        InitialSubmissionStatus, SubmissionId, SubmissionStatus, run_unless_interrupted,
+        start_runtime,
+    },
+    errors::{self, CError, CPyResult, FatalPythonException},
+};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use opsqueue::{
     E,
@@ -20,12 +28,6 @@ use opsqueue::{
 };
 use tokio::time::error::Elapsed;
 use ux::u63;
-
-use crate::{
-    async_util,
-    common::{SubmissionId, SubmissionStatus, run_unless_interrupted, start_runtime},
-    errors::{self, CError, CPyResult, FatalPythonException},
-};
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
@@ -283,7 +285,7 @@ impl ProducerClient {
     ///
     /// Returns an error if submission insertion fails.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false)
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), initial_status=InitialSubmissionStatus::default())
     )]
     pub fn insert_submission_direct(
         &self,
@@ -293,7 +295,7 @@ impl ProducerClient {
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
-        paused: bool,
+        initial_status: InitialSubmissionStatus,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         py.detach(|| {
             let submission = opsqueue::producer::InsertSubmission {
@@ -303,7 +305,7 @@ impl ProducerClient {
                 },
                 metadata,
                 strategic_metadata: strategic_metadata.unwrap_or_default(),
-                paused,
+                initial_status: initial_status.into(),
             };
             self.block_unless_interrupted(async move {
                 self.client
@@ -321,7 +323,7 @@ impl ProducerClient {
     ///
     /// Returns an error if chunk upload or submission insertion fails.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), paused=false)
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), initial_status=InitialSubmissionStatus::default())
     )]
     pub fn insert_submission_chunks(
         &self,
@@ -331,7 +333,7 @@ impl ProducerClient {
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<i64>,
         otel_trace_carrier: CarrierMap,
-        paused: bool,
+        initial_status: InitialSubmissionStatus,
     ) -> CPyResult<
         SubmissionId,
         E![
@@ -371,7 +373,7 @@ impl ProducerClient {
                     },
                     metadata,
                     strategic_metadata: strategic_metadata.unwrap_or_default(),
-                    paused,
+                    initial_status: initial_status.into(),
                 };
                 self.client
                     .insert_submission(&submission, &otel_trace_carrier)

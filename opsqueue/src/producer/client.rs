@@ -441,6 +441,8 @@ impl InternalProducerClientError {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
+    use super::*;
+    use crate::common::submission::InitialSubmissionStatus;
     use crate::{
         common::{
             StrategicMetadataMap,
@@ -450,8 +452,6 @@ mod tests {
         db::{DBPools, WriterPool},
         producer::common::ChunkContents,
     };
-
-    use super::*;
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         let db_pools = DBPools::from_test_pool(pool);
@@ -480,7 +480,7 @@ mod tests {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
-            false,
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
@@ -510,7 +510,7 @@ mod tests {
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
-            paused: false,
+            initial_status: InitialSubmissionStatus::default(),
         };
         client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -554,7 +554,7 @@ mod tests {
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
-            paused: false,
+            initial_status: InitialSubmissionStatus::default(),
         };
         let submission_id = client
             .insert_submission(&submission, &std::collections::HashMap::default())
@@ -601,7 +601,7 @@ mod tests {
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
             chunk_size: None,
-            paused: true,
+            initial_status: InitialSubmissionStatus::Paused,
         };
         let submission_id = client
             .insert_submission(&submission, &std::collections::HashMap::default())
