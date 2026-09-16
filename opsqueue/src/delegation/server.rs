@@ -6,10 +6,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use either::Either;
+use futures::stream::BoxStream;
+use itertools::Itertools;
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+// use tower::ServiceExt;
 
 #[cfg(test)]
 pub(crate) fn app_for_tests(
@@ -89,10 +93,7 @@ impl ServerState {
 
     pub fn build_router(self: ServerState) -> Router<()> {
         Router::new()
-            .route("/delegate", post(job_delegate))
-            .route("/kill", post(job_kill))
-            .route("/return", post(job_return))
-            // .route("/submit", post(submit))
+            .route("/submit", post(submit))
             .with_state(self)
     }
 }
@@ -107,16 +108,16 @@ enum DelegatedJobStatus {
     Cancelled,
 }
 
-// #[derive(Debug, serde::Deserialize)]
-// #[serde(tag = "type", content = "contents")]
-// enum WorkerDelegationEvent {
-//     #[serde(rename = "delegate")]
-//     Delegate(Vec<DelegatedJob>),
-//     #[serde(rename = "kill")]
-//     Kill(Vec<String>),
-//     #[serde(rename = "return")]
-//     Return(Vec<String>),
-// }
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", content = "contents")]
+enum WorkerDelegationEvent {
+    #[serde(rename = "delegate")]
+    Delegate(Vec<DelegatedJob>),
+    #[serde(rename = "kill")]
+    Kill(Vec<String>),
+    #[serde(rename = "return")]
+    Return(Vec<String>),
+}
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct DelegatedJob {
     task_id: String,
@@ -128,14 +129,14 @@ struct DelegatedJobPayload {
     submission_id: SubmissionId,
 }
 
-// #[derive(Debug, serde::Serialize)]
-// #[serde(tag = "type", content = "contents")]
-// enum MasterDelegationEvent<'a> {
-//     #[serde(rename = "updated")]
-//     Updated(Vec<DelegatedJobUpdate<'a>>),
-//     #[serde(rename = "completed")]
-//     Completed(Vec<DelegatedJobCompletion<'a>>),
-// }
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "type", content = "contents")]
+enum MasterDelegationEvent<'a> {
+    #[serde(rename = "updated")]
+    Updated(Vec<DelegatedJobUpdate<'a>>),
+    #[serde(rename = "completed")]
+    Completed(Vec<DelegatedJobCompletion<'a>>),
+}
 
 #[derive(Debug, serde::Serialize)]
 struct DelegatedJobUpdate<'a> {
@@ -172,77 +173,10 @@ enum FailureReason {
     Forced,
 }
 
-// TODO(delegation): Switch to
-// #[tracing::instrument(level = "debug", skip(state))]
-// async fn submit(
-//     State(state): State<ServerState>,
-//     Json(events): Json<Vec<WorkerDelegationEvent>>,
-// ) -> Result<StatusCode, StatusCode> {
-//     let mut conn = state.pool.writer_conn().await.map_err(|e| {
-//         tracing::error!("DB error acquiring writer connection: {e:?}");
-//         StatusCode::INTERNAL_SERVER_ERROR
-//     })?;
-//     // TODO(delegation): Operate within a transaction.
-//     for event in events {
-//         match event {
-//             WorkerDelegationEvent::Delegate(delegations) => {
-//                 for delegation in delegations {
-//                     handle_delegate_event(&state, &mut conn, &delegation)
-//                         .await
-//                         .map_err(|e| {
-//                             tracing::error!("Error handling delegate event: {e:?}");
-//                             e
-//                         })?;
-//                 }
-//             }
-//             WorkerDelegationEvent::Kill(task_ids) => {
-//                 for task_id in task_ids {
-//                     handle_kill_event(&state, &mut conn, &task_id)
-//                         .await
-//                         .map_err(|e| {
-//                             tracing::error!(
-//                                 "Error handling kill event for task_id={task_id}: {e:?}"
-//                             );
-//                             e
-//                         })?;
-//                 }
-//             }
-//             WorkerDelegationEvent::Return(_task_ids) => {
-//                 tracing::info!(
-//                     "Received 'return' delegation event, which is not yet implemented; ignoring."
-//                 );
-//                 return Ok(StatusCode::ACCEPTED);
-//             }
-//         }
-//     }
-//
-//     Ok(StatusCode::ACCEPTED)
-// }
-
 #[tracing::instrument(level = "debug", skip(state))]
-async fn job_delegate(
+async fn submit(
     State(state): State<ServerState>,
-    Json(job): Json<DelegatedJob>,
-) -> Result<StatusCode, StatusCode> {
-    let mut conn = state.pool.writer_conn().await.map_err(|e| {
-        tracing::error!("DB error acquiring writer connection: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    handle_delegate_event(&mut conn, &job).await.map_err(|e| {
-        tracing::error!("DB error handling delegate event: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    state.notify_on_submission_change.notify_one();
-    state.notify_on_insert.notify_waiters();
-
-    Ok(StatusCode::ACCEPTED)
-}
-
-#[tracing::instrument(level = "debug", skip(state))]
-async fn job_kill(
-    State(state): State<ServerState>,
-    Json(task_ids): Json<Vec<String>>,
+    Json(events): Json<Vec<WorkerDelegationEvent>>,
 ) -> Result<StatusCode, StatusCode> {
     let mut conn = state.pool.writer_conn().await.map_err(|e| {
         tracing::error!("DB error acquiring writer connection: {e:?}");
@@ -251,30 +185,44 @@ async fn job_kill(
 
     conn.transaction(move |mut tx| {
         Box::pin(async move {
-            for task_id in &task_ids {
-                handle_kill_event(&mut tx, task_id).await?;
+            for event in events {
+                match event {
+                    WorkerDelegationEvent::Delegate(delegations) => {
+                        for delegation in delegations {
+                            handle_delegate_event(&mut tx, &delegation)
+                                .await
+                                .map_err(|e| {
+                                    tracing::error!("Error handling delegate event: {e:?}");
+                                    e
+                                })?;
+                        }
+                    }
+                    WorkerDelegationEvent::Kill(task_ids) => {
+                        for task_id in task_ids {
+                            handle_kill_event(&mut tx, &task_id)
+                                .await
+                                .map_err(|e| {
+                                    tracing::error!(
+                                            "Error handling kill event for task_id={task_id}: {e:?}"
+                                        );
+                                    e
+                                })?;
+                        }
+                    }
+                    WorkerDelegationEvent::Return(_task_ids) => {
+                        tracing::info!(
+                                "Received 'return' delegation event, which is not yet implemented; ignoring."
+                            );
+                    }
+                }
             }
 
-            Ok::<(), sqlx::Error>(())
+            Ok(())
         })
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!("DB error handling kill event: {e:?}");
+    }).await.map_err(|e: sqlx::Error| {
+        tracing::error!("DB error handling events: {e:?}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-
-    state.notify_on_submission_change.notify_one();
-
-    Ok(StatusCode::ACCEPTED)
-}
-
-#[tracing::instrument(level = "debug", skip(_state))]
-async fn job_return(
-    State(_state): State<ServerState>,
-    Json(task_ids): Json<Vec<String>>,
-) -> Result<StatusCode, StatusCode> {
-    tracing::info!("Received 'return' delegation event, which is not yet implemented; ignoring.");
 
     Ok(StatusCode::ACCEPTED)
 }
@@ -371,95 +319,39 @@ async fn report_submission_status(
     state: &ServerState,
     triggered_by_timeout: bool,
 ) -> anyhow::Result<()> {
-    let out_of_date_tasks = {
-        let conn = state.pool.reader_conn().await?;
-        select_out_of_date_tasks(conn).await?
-    };
+    use futures::{StreamExt, TryStreamExt};
+    let mut conn = state.pool.reader_conn().await?;
 
-    if out_of_date_tasks.is_empty() {
-        return Ok(());
+    let mut out_of_date_tasks = select_out_of_date_tasks(&mut conn).try_chunks(2048);
+
+    let mut task_count = 0;
+
+    while let Some(batch_or_error) = out_of_date_tasks.next().await {
+        let batch = batch_or_error?;
+
+        send_status_updates(state, batch.iter()).await?;
+        // Note that we don't need a transaction here. If `update_statuses_in_db` fails half-way,
+        // we will resend the update next iteration. Which is no big deal because
+        // `send_status_updates` is idempotent.
+
+        update_statuses_in_db(&state.pool, batch.iter()).await?;
+
+        task_count += batch.len();
     }
 
-    if triggered_by_timeout {
+    if task_count > 0 && triggered_by_timeout {
         tracing::warn!(
-            n_out_of_date_tasks = out_of_date_tasks.len(),
-            "Delegation background loop triggered by timeout with pending tasks; \
-             possible missing notify_on_submission_change call"
+            n_out_of_date_tasks = task_count,
+            "Delegation background loop was triggered by timeout with pending tasks; \
+             possibly we are missing a notify_on_submission_change call"
         );
-    }
-
-    for batch in out_of_date_tasks.chunks(2048) {
-        let mut updates = Vec::new();
-        let mut completions = Vec::new();
-
-        for task in batch {
-            match task.current_status {
-                DelegatedJobStatus::Paused => updates.push(DelegatedJobUpdate {
-                    task_id: &task.task_id,
-                    status: DelegatedJobUpdateStatus::Queued,
-                }),
-                DelegatedJobStatus::InProgress => updates.push(DelegatedJobUpdate {
-                    task_id: &task.task_id,
-                    status: DelegatedJobUpdateStatus::Running,
-                }),
-                DelegatedJobStatus::Completed => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Success,
-                }),
-                DelegatedJobStatus::Failed => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Failure {
-                        failure_reason: FailureReason::Unknown,
-                    },
-                }),
-                DelegatedJobStatus::Cancelled => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Failure {
-                        failure_reason: FailureReason::Forced,
-                    },
-                }),
-            }
-        }
-
-        if !updates.is_empty() {
-            send_updates(state, &updates).await?;
-            let conn = state.pool.writer_conn().await?;
-            update_last_status_sent(
-                conn,
-                out_of_date_tasks
-                    .iter()
-                    .filter(|task| {
-                        task.current_status == DelegatedJobStatus::Paused
-                            || task.current_status == DelegatedJobStatus::InProgress
-                    })
-                    .collect(),
-            )
-            .await?;
-        }
-
-        if !completions.is_empty() {
-            send_completions(state, &completions).await?;
-            let conn = state.pool.writer_conn().await?;
-            delete_external_tasks(
-                conn,
-                out_of_date_tasks
-                    .iter()
-                    .filter(|task| {
-                        task.current_status == DelegatedJobStatus::Completed
-                            || task.current_status == DelegatedJobStatus::Failed
-                            || task.current_status == DelegatedJobStatus::Cancelled
-                    })
-                    .collect(),
-            )
-            .await?;
-        }
     }
 
     Ok(())
 }
 
 async fn insert_external_task(
-    mut conn: impl Connection,
+    conn: &mut impl Connection,
     submission_id: SubmissionId,
     task_id: &str,
 ) -> sqlx::Result<u64> {
@@ -487,9 +379,9 @@ struct OutOfDateTaskRow {
     current_status: DelegatedJobStatus,
 }
 
-async fn select_out_of_date_tasks(
-    mut conn: impl Connection,
-) -> sqlx::Result<Vec<OutOfDateTaskRow>> {
+fn select_out_of_date_tasks(
+    conn: &mut impl Connection,
+) -> BoxStream<'_, sqlx::Result<OutOfDateTaskRow>> {
     sqlx::query_as!(
         OutOfDateTaskRow,
         r#"WITH out_of_date_tasks AS (
@@ -516,119 +408,107 @@ async fn select_out_of_date_tasks(
                ) AS "current_status!: DelegatedJobStatus"
            FROM out_of_date_tasks AS t
         "#)
-        .fetch_all(conn.get_inner())
-        .await
+        .fetch(conn.get_inner())
+}
+
+fn status_update(
+    task: &OutOfDateTaskRow,
+) -> Either<DelegatedJobUpdate<'_>, DelegatedJobCompletion<'_>> {
+    match task.current_status {
+        DelegatedJobStatus::Paused => Either::Left(DelegatedJobUpdate {
+            task_id: &task.task_id,
+            status: DelegatedJobUpdateStatus::Queued,
+        }),
+        DelegatedJobStatus::InProgress => Either::Left(DelegatedJobUpdate {
+            task_id: &task.task_id,
+            status: DelegatedJobUpdateStatus::Running,
+        }),
+        DelegatedJobStatus::Completed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Success,
+        }),
+        DelegatedJobStatus::Failed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Failure {
+                failure_reason: FailureReason::Unknown,
+            },
+        }),
+        DelegatedJobStatus::Cancelled => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Failure {
+                failure_reason: FailureReason::Forced,
+            },
+        }),
+    }
+}
+
+async fn update_statuses_in_db(
+    pool: &DBPools,
+    tasks: impl Iterator<Item = &OutOfDateTaskRow>,
+) -> anyhow::Result<()> {
+    let mut conn = pool.writer_conn().await?;
+    for task in tasks {
+        match task.current_status {
+            DelegatedJobStatus::Paused | DelegatedJobStatus::InProgress => {
+                update_last_status_sent(&mut conn, task).await?;
+            }
+            DelegatedJobStatus::Completed
+            | DelegatedJobStatus::Failed
+            | DelegatedJobStatus::Cancelled => {
+                delete_external_task(&mut conn, task).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn update_last_status_sent(
     mut conn: impl WriterConnection,
-    tasks: Vec<&OutOfDateTaskRow>,
+    task: &OutOfDateTaskRow,
 ) -> sqlx::Result<()> {
-    let tasks = tasks
-        .iter()
-        .map(|t| (t.current_status, t.task_id.clone()))
-        .collect::<Vec<_>>();
-
-    conn.transaction(move |mut tx| {
-        Box::pin(async move {
-            for (current_status, task_id) in tasks {
-                sqlx::query!(
-                    "UPDATE submissions_external_task SET last_status_sent = $1 WHERE task_id = $2",
-                    current_status,
-                    task_id,
-                )
-                .execute(tx.get_inner())
-                .await?;
-            }
-
-            Ok::<_, sqlx::Error>(())
-        })
-    })
+    sqlx::query!(
+        "UPDATE submissions_external_task SET last_status_sent = $1 WHERE task_id = $2",
+        task.current_status,
+        task.task_id,
+    )
+    .execute(conn.get_inner())
     .await?;
 
     Ok(())
 }
 
-async fn delete_external_tasks(
+async fn delete_external_task(
     mut conn: impl WriterConnection,
-    tasks: Vec<&OutOfDateTaskRow>,
+    task: &OutOfDateTaskRow,
 ) -> sqlx::Result<()> {
-    let tasks = tasks.iter().map(|t| t.task_id.clone()).collect::<Vec<_>>();
-
-    conn.transaction(move |mut tx| {
-        Box::pin(async move {
-            for task_id in tasks {
-                sqlx::query!(
-                    "DELETE FROM submissions_external_task WHERE task_id = $1",
-                    task_id,
-                )
-                .execute(tx.get_inner())
-                .await?;
-            }
-
-            Ok::<_, sqlx::Error>(())
-        })
-    })
+    sqlx::query!(
+        "DELETE FROM submissions_external_task WHERE task_id = $1",
+        task.task_id,
+    )
+    .execute(conn.get_inner())
     .await?;
 
     Ok(())
 }
 
-// TODO(delegation): Replace `send_updates` and `send_completions` with `send_events`,
-//  after https://github.com/channable/jobmachine/pull/2210 is merged.
-// async fn send_events(
-//     state: &ServerState,
-//     events: &MasterDelegationEvent<'_>,
-// ) -> reqwest::Result<()> {
-//     state
-//         .http_client
-//         .put(
-//             state
-//                 .delegation_server_url
-//                 .join("/delegation/submit")
-//                 .unwrap(),
-//         )
-//         .json(&events)
-//         .send()
-//         .await?
-//         .error_for_status()?;
-//
-//     Ok(())
-// }
-
-async fn send_updates(
+async fn send_status_updates(
     state: &ServerState,
-    updates: &[DelegatedJobUpdate<'_>],
+    events: impl Iterator<Item = &OutOfDateTaskRow>,
 ) -> reqwest::Result<()> {
+    let (updates, completions): (Vec<_>, Vec<_>) = events.partition_map(status_update);
+    let events = vec![
+        MasterDelegationEvent::Updated(updates),
+        MasterDelegationEvent::Completed(completions),
+    ];
     state
         .http_client
         .put(
             state
                 .delegation_server_url
-                .join("/delegation/update")
+                .join("/delegation/submit")
                 .unwrap(),
         )
-        .json(updates)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    Ok(())
-}
-
-async fn send_completions(
-    state: &ServerState,
-    completions: &[DelegatedJobCompletion<'_>],
-) -> reqwest::Result<()> {
-    state
-        .http_client
-        .put(
-            state
-                .delegation_server_url
-                .join("/delegation/complete")
-                .unwrap(),
-        )
-        .json(completions)
+        .json(&events)
         .send()
         .await?
         .error_for_status()?;
