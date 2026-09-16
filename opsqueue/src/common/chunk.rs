@@ -1027,13 +1027,15 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
-        assert_matches!(res, Ok(false));
+        let max_retries = 2;
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
-        assert_matches!(res, Ok(true));
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        assert_matches!(res, Ok(false)); // Retry limit not yet reached.
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, 2).await;
-        assert_matches!(res, Ok(false));
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        assert_matches!(res, Ok(true)); // Retry limit reached, submission is now permanently failed.
+
+        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        assert_matches!(res, Ok(false)); // Submission was already failed, check that we ignore.
     }
 }
