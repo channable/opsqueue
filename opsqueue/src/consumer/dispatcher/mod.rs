@@ -362,6 +362,7 @@ mod test {
     use super::*;
     use crate::common::chunk::ChunkId;
     use crate::common::chunk::ChunkSize;
+    use crate::common::submission::InitialSubmissionStatus;
     use crate::db::DBPools;
     use tokio::sync::mpsc::unbounded_channel;
     use ux::u63;
@@ -379,6 +380,7 @@ mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            InitialSubmissionStatus::default(),
             &mut writer_conn,
         )
         .await

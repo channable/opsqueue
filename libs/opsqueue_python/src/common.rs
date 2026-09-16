@@ -350,6 +350,24 @@ impl From<opsqueue::common::submission::SubmissionCancelled> for SubmissionCance
     }
 }
 
+#[pyclass(from_py_object, eq, eq_int)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum InitialSubmissionStatus {
+    Paused,
+    #[default]
+    InProgress,
+}
+
+impl From<InitialSubmissionStatus> for opsqueue::common::submission::InitialSubmissionStatus {
+    fn from(value: InitialSubmissionStatus) -> Self {
+        use opsqueue::common::submission::InitialSubmissionStatus::{InProgress, Paused};
+        match value {
+            InitialSubmissionStatus::Paused => Paused,
+            InitialSubmissionStatus::InProgress => InProgress,
+        }
+    }
+}
+
 #[pyclass(from_py_object, frozen, module = "opsqueue")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionStatus {
@@ -366,12 +384,15 @@ pub enum SubmissionStatus {
     Cancelled {
         submission: SubmissionCancelled,
     },
+    Paused {
+        submission: SubmissionPaused,
+    },
 }
 
 impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
     fn from(value: opsqueue::common::submission::SubmissionStatus) -> Self {
         use opsqueue::common::submission::SubmissionStatus::{
-            Cancelled, Completed, Failed, InProgress,
+            Cancelled, Completed, Failed, InProgress, Paused,
         };
         match value {
             InProgress(s) => SubmissionStatus::InProgress {
@@ -386,6 +407,9 @@ impl From<opsqueue::common::submission::SubmissionStatus> for SubmissionStatus {
                 SubmissionStatus::Failed { submission, chunk }
             }
             Cancelled(s) => SubmissionStatus::Cancelled {
+                submission: s.into(),
+            },
+            Paused(s) => SubmissionStatus::Paused {
                 submission: s.into(),
             },
         }
@@ -510,6 +534,42 @@ pub struct SubmissionCancelled {
     pub metadata: Option<submission::Metadata>,
     pub strategic_metadata: StrategicMetadataMap,
     pub cancelled_at: DateTime<Utc>,
+}
+
+#[pyclass(from_py_object, frozen, get_all, module = "opsqueue")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionPaused {
+    pub id: SubmissionId,
+    pub chunks_total: u64,
+    pub chunks_done: u64,
+    pub metadata: Option<submission::Metadata>,
+    pub strategic_metadata: StrategicMetadataMap,
+}
+
+impl From<opsqueue::common::submission::SubmissionPaused> for SubmissionPaused {
+    fn from(value: opsqueue::common::submission::SubmissionPaused) -> Self {
+        Self {
+            id: value.id.into(),
+            chunks_total: value.chunks_total.into(),
+            chunks_done: value.chunks_done.into(),
+            metadata: value.metadata,
+            strategic_metadata: value.strategic_metadata,
+        }
+    }
+}
+
+#[pymethods]
+impl SubmissionPaused {
+    fn __repr__(&self) -> String {
+        format!(
+            "SubmissionPaused(id={0}, chunks_total={1}, chunks_done={2}, metadata={3:?}, strategic_metadata={4:?})",
+            self.id.__repr__(),
+            self.chunks_total,
+            self.chunks_done,
+            self.metadata,
+            self.strategic_metadata
+        )
+    }
 }
 
 /// Submission could not be cancelled because it was already completed, failed

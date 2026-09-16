@@ -1,12 +1,20 @@
-use std::{future::IntoFuture, sync::Arc, time::Duration};
-
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyStopAsyncIteration},
     prelude::*,
     types::PyIterator,
 };
+use std::time::TryFromFloatSecsError;
+use std::{future::IntoFuture, sync::Arc, time::Duration};
 
+use crate::{
+    async_util,
+    common::{
+        InitialSubmissionStatus, SubmissionId, SubmissionStatus, run_unless_interrupted,
+        start_runtime,
+    },
+    errors::{self, CError, CPyResult, FatalPythonException},
+};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use opsqueue::{
     E,
@@ -18,13 +26,8 @@ use opsqueue::{
     producer::client::{Client as ActualClient, InternalProducerClientError},
     tracing::CarrierMap,
 };
+use tokio::time::error::Elapsed;
 use ux::u63;
-
-use crate::{
-    async_util,
-    common::{SubmissionId, SubmissionStatus, run_unless_interrupted, start_runtime},
-    errors::{self, CError, CPyResult, FatalPythonException},
-};
 
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
@@ -159,6 +162,37 @@ impl ProducerClient {
         })
     }
 
+    /// Unpause a paused submission, making it available to consumers.
+    ///
+    /// Will return an error if the submission is not currently paused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the submission is not found or if an internal client error occurs.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (id))]
+    pub fn unpause_submission(
+        &self,
+        py: Python<'_>,
+        id: SubmissionId,
+    ) -> CPyResult<
+        (),
+        E![
+            FatalPythonException,
+            SubmissionNotFound,
+            InternalProducerClientError
+        ],
+    > {
+        py.detach(|| {
+            self.block_unless_interrupted(async {
+                self.client
+                    .unpause_submission(id.into())
+                    .await
+                    .map_err(|e| CError(R(e)))
+            })
+        })
+    }
+
     /// Retrieve the status (in progress, completed or failed) of a specific submission.
     ///
     /// The returned `SubmissionStatus` object also includes the number of chunks finished so far,
@@ -250,7 +284,9 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if submission insertion fails.
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), initial_status=InitialSubmissionStatus::default())
+    )]
     pub fn insert_submission_direct(
         &self,
         py: Python<'_>,
@@ -259,6 +295,7 @@ impl ProducerClient {
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<u64>,
         otel_trace_carrier: CarrierMap,
+        initial_status: InitialSubmissionStatus,
     ) -> CPyResult<SubmissionId, E<FatalPythonException, InternalProducerClientError>> {
         py.detach(|| {
             let submission = opsqueue::producer::InsertSubmission {
@@ -268,6 +305,7 @@ impl ProducerClient {
                 },
                 metadata,
                 strategic_metadata: strategic_metadata.unwrap_or_default(),
+                initial_status: initial_status.into(),
             };
             self.block_unless_interrupted(async move {
                 self.client
@@ -284,8 +322,9 @@ impl ProducerClient {
     /// # Errors
     ///
     /// Returns an error if chunk upload or submission insertion fails.
-    #[allow(clippy::type_complexity)]
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default(), initial_status=InitialSubmissionStatus::default())
+    )]
     pub fn insert_submission_chunks(
         &self,
         py: Python<'_>,
@@ -294,6 +333,7 @@ impl ProducerClient {
         strategic_metadata: Option<StrategicMetadataMap>,
         chunk_size: Option<i64>,
         otel_trace_carrier: CarrierMap,
+        initial_status: InitialSubmissionStatus,
     ) -> CPyResult<
         SubmissionId,
         E![
@@ -309,18 +349,18 @@ impl ProducerClient {
             let prefix = uuid::Uuid::now_v7().to_string();
             tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
             let chunk_count = self.block_unless_interrupted(async {
-                    let chunk_contents = std::iter::from_fn(move || {
-                        Python::attach(|py|
-                            chunk_contents.bind(py).clone().next()
-                                .map(|item| item.and_then(
-                                    |item| item.extract()).map_err(Into::into)))
-                    });
-                    let stream = futures::stream::iter(chunk_contents);
-                    self.object_store_client
-                        .store_chunks(&prefix, ChunkType::Input, stream)
-                        .await
-                        .map_err(|e| CError(R(L(e))))
-                })?;
+                let chunk_contents = std::iter::from_fn(move || {
+                    Python::attach(|py|
+                        chunk_contents.bind(py).clone().next()
+                            .map(|item| item.and_then(
+                                |item| item.extract()).map_err(Into::into)))
+                });
+                let stream = futures::stream::iter(chunk_contents);
+                self.object_store_client
+                    .store_chunks(&prefix, ChunkType::Input, stream)
+                    .await
+                    .map_err(|e| CError(R(L(e))))
+            })?;
             let chunk_count = chunk::ChunkIndex::from(chunk_count);
             tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
 
@@ -333,6 +373,7 @@ impl ProducerClient {
                     },
                     metadata,
                     strategic_metadata: strategic_metadata.unwrap_or_default(),
+                    initial_status: initial_status.into(),
                 };
                 self.client
                     .insert_submission(&submission, &otel_trace_carrier)
@@ -380,57 +421,6 @@ impl ProducerClient {
         })
     }
 
-    /// Submit chunks and then stream the completed output chunks.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if upload, submission creation, or streaming fails.
-    #[allow(clippy::result_large_err, clippy::type_complexity)]
-    #[pyo3(signature = (chunk_contents, metadata=None, strategic_metadata=None, chunk_size=None, otel_trace_carrier=CarrierMap::default()))]
-    pub fn run_submission_chunks(
-        &self,
-        py: Python<'_>,
-        chunk_contents: Py<PyIterator>,
-        metadata: Option<submission::Metadata>,
-        strategic_metadata: Option<StrategicMetadataMap>,
-        chunk_size: Option<i64>,
-        otel_trace_carrier: CarrierMap,
-    ) -> CPyResult<
-        PyChunksIter,
-        E![
-            FatalPythonException,
-            errors::SubmissionFailed,
-            ChunksStorageError,
-            InternalProducerClientError,
-        ],
-    > {
-        let submission_id = self
-            .insert_submission_chunks(
-                py,
-                chunk_contents,
-                metadata,
-                strategic_metadata,
-                chunk_size,
-                otel_trace_carrier,
-            )
-            .map_err(|CError(e)| {
-                CError(match e {
-                    L(e) => L(e),
-                    R(e) => R(R(e)),
-                })
-            })?;
-        let res = self
-            .blocking_stream_completed_submission_chunks(py, submission_id)
-            .map_err(|CError(e)| {
-                CError(match e {
-                    L(e) => L(e),
-                    R(L(e)) => R(L(e)),
-                    R(R(e)) => R(R(R(e))),
-                })
-            })?;
-        Ok(res)
-    }
-
     /// Blocks (and short-polls) until the submission is completed.
     ///
     /// We start with a small short-polling interval
@@ -442,22 +432,44 @@ impl ProducerClient {
     ///
     /// Returns an error if polling or output streaming fails.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
-    #[pyo3(signature = (submission_id))]
+    #[pyo3(signature = (submission_id, timeout=None))]
     pub fn blocking_stream_completed_submission_chunks(
         &self,
         py: Python<'_>,
         submission_id: SubmissionId,
+        timeout: Option<f64>,
     ) -> CPyResult<
         PyChunksIter,
         E![
             FatalPythonException,
+            TryFromFloatSecsError,
+            Elapsed,
             errors::SubmissionFailed,
             InternalProducerClientError
         ],
     > {
         py.detach(|| {
             self.block_unless_interrupted(async move {
-                self.stream_completed_submission_chunks(submission_id).await
+                let fut = self.stream_completed_submission_chunks(submission_id);
+                match timeout {
+                    Some(duration) => {
+                        let duration = Duration::try_from_secs_f64(duration)
+                            .map_err(|err| CError(R(L(err))))?;
+                        tokio::time::timeout(duration, fut)
+                            .await
+                            .map_err(|err| CError(R(R(L(err)))))
+                            .and_then(|err| {
+                                err.map_err(|err| match err.0 {
+                                    L(err) => CError(L(err)),
+                                    R(err) => CError(R(R(R(err)))),
+                                })
+                            })
+                    }
+                    None => fut.await.map_err(|err| match err.0 {
+                        L(err) => CError(L(err)),
+                        R(err) => CError(R(R(R(err)))),
+                    }),
+                }
             })
         })
     }

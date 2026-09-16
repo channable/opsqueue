@@ -829,6 +829,7 @@ pub mod test {
         ");
     }
 
+    use crate::common::submission::InitialSubmissionStatus;
     use crate::db::Connection;
     use futures::stream::TryStreamExt as _;
 
@@ -849,6 +850,7 @@ pub mod test {
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
+            InitialSubmissionStatus::default(),
             &mut conn,
         )
         .await
