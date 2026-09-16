@@ -113,7 +113,10 @@ semver:
   set -euo pipefail
   export DATABASE_URL="sqlite://{{justfile_directory()}}/opsqueue/opsqueue_example_database_schema.db"
   # We select the latest git tag, not to be confused with the latest Cargo version.
-  cargo semver-checks --workspace --target x86_64-unknown-linux-gnu --baseline-rev "$(git tag -l --sort=-version:refname | head -1)"
+  cargo semver-checks --workspace --target x86_64-unknown-linux-gnu --baseline-rev "$(git tag -l --sort=-version:refname | head -1)" || {
+    echo "Semver checks failed. Please bump the version in Cargo.toml"
+    exit 1
+  }
 
 # Rust static analysis
 [group('lint')]
