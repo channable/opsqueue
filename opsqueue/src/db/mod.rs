@@ -130,8 +130,7 @@ pub trait Connection {
     where
         for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
             + Send
-            + Sync
-            + 't,
+            + Sync,
         O: Send,
         E: From<sqlx::Error> + Send,
     {

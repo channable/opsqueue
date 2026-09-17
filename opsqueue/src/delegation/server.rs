@@ -6,6 +6,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use futures::Stream;
+use futures::stream::BoxStream;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::Notify;
@@ -372,6 +375,16 @@ async fn run_in_background(
     Ok(())
 }
 
+async fn report_submission_status2(state: &ServerState, triggered_by_timeout: bool,) -> anyhow::Result<()> {
+    let mut conn = state.pool.reader_conn().await?;
+    let out_of_date_tasks = select_out_of_date_tasks(&mut conn).await;
+    for Ok(batch) in out_of_date_tasks.try_chunks(2048).await? {
+        
+    }
+
+    Ok(())
+}
+
 async fn report_submission_status(
     state: &ServerState,
     triggered_by_timeout: bool,
@@ -433,31 +446,34 @@ async fn report_submission_status(
 
         send_events(state, &events).await?;
 
-        let updated = out_of_date_tasks
-            .iter()
-            .filter(|task| {
-                task.current_status == DelegatedJobStatus::Paused
-                    || task.current_status == DelegatedJobStatus::InProgress
-            })
-            .collect();
+        // let updated = batch
+        //     .iter()
+        //     .filter(|task| {
+        //         task.current_status == DelegatedJobStatus::Paused
+        //             || task.current_status == DelegatedJobStatus::InProgress
+        //     })
+        //     .collect();
 
-        let completed = out_of_date_tasks
-            .iter()
-            .filter(|task| {
-                task.current_status == DelegatedJobStatus::Completed
-                    || task.current_status == DelegatedJobStatus::Failed
-                    || task.current_status == DelegatedJobStatus::Cancelled
-            })
-            .collect();
+        // let completed = batch
+        //     .iter()
+        //     .filter(|task| {
+        //         task.current_status == DelegatedJobStatus::Completed
+        //             || task.current_status == DelegatedJobStatus::Failed
+        //             || task.current_status == DelegatedJobStatus::Cancelled
+        //     })
+        //     .collect();
 
         let mut conn = state.pool.writer_conn().await?;
         conn.transaction(move |mut tx| {
             Box::pin(async move {
+                let updated = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Paused || task.current_status == DelegatedJobStatus::InProgress);
                 update_last_status_sent(
                     &mut tx,
                     updated,
                 )
                     .await?;
+
+                let completed = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Completed || task.current_status == DelegatedJobStatus::Failed || task.current_status == DelegatedJobStatus::Cancelled);
                 delete_external_tasks(
                     &mut tx,
                     completed,
@@ -501,8 +517,8 @@ struct OutOfDateTaskRow {
 }
 
 async fn select_out_of_date_tasks(
-    mut conn: impl Connection,
-) -> sqlx::Result<Vec<OutOfDateTaskRow>> {
+    conn: &mut impl Connection,
+) -> BoxStream<'_, sqlx::Result<OutOfDateTaskRow>>  {
     sqlx::query_as!(
         OutOfDateTaskRow,
         r#"WITH out_of_date_tasks AS (
@@ -529,24 +545,18 @@ async fn select_out_of_date_tasks(
                ) AS "current_status!: DelegatedJobStatus"
            FROM out_of_date_tasks AS t
         "#)
-        .fetch_all(conn.get_inner())
-        .await
+        .fetch(conn.get_inner())
 }
 
 async fn update_last_status_sent(
     mut conn: impl WriterConnection,
-    tasks: Vec<&OutOfDateTaskRow>,
+    tasks: impl Iterator<Item = &OutOfDateTaskRow>,
 ) -> sqlx::Result<()> {
-    let tasks = tasks
-        .iter()
-        .map(|t| (t.current_status, t.task_id.clone()))
-        .collect::<Vec<_>>();
-
-    for (current_status, task_id) in tasks {
+    for task in tasks {
         sqlx::query!(
             "UPDATE submissions_external_task SET last_status_sent = $1 WHERE task_id = $2",
-            current_status,
-            task_id,
+            task.current_status,
+            task.task_id,
         )
             .execute(conn.get_inner())
             .await?;
@@ -557,14 +567,12 @@ async fn update_last_status_sent(
 
 async fn delete_external_tasks(
     mut conn: impl WriterConnection,
-    tasks: Vec<&OutOfDateTaskRow>,
+    tasks: impl Iterator<Item = &OutOfDateTaskRow>,
 ) -> sqlx::Result<()> {
-    let tasks = tasks.iter().map(|t| t.task_id.clone()).collect::<Vec<_>>();
-
-    for task_id in tasks {
+    for task in tasks {
         sqlx::query!(
             "DELETE FROM submissions_external_task WHERE task_id = $1",
-            task_id,
+            task.task_id,
         )
             .execute(conn.get_inner())
             .await?;
