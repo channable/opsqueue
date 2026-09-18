@@ -215,12 +215,18 @@ impl InFlightRequests {
         self.0.0.fetch_add(1, Ordering::SeqCst)
     }
 
+    // Create a one-shot channel and atomically associate a one-shot sender with
+    // nonce in `InFlightRequests`
+    //
+    // Returns the nonce and one-shot receiver.
     async fn next_nonce_with_oneshot(
         &self,
     ) -> (usize, oneshot::Receiver<SyncServerToClientResponse>) {
         let (oneshot_sender, oneshot_receiver) = oneshot::channel();
         let mut guard = self.0.1.lock().await;
-        // This is called within the lock, so we know the nonce and the oneshot_sender are inserted atomically.
+        // The remainder of this function executes within the lock, so we know
+        // the nonce and the `oneshot_sender` are inserted atomically. The lock
+        // is released when the guard is dropped at the end of the function.
         let nonce = self.next_nonce();
         guard.insert(nonce, oneshot_sender);
         (nonce, oneshot_receiver)
@@ -361,7 +367,10 @@ impl Client {
                             break;
                         }
                         Some(Err(e)) => {
-                            tracing::error!(error = as_dyn_error(&e), "Opsqueue consumer client background task closing, reason");
+                            tracing::error!(
+                                error = as_dyn_error(&e),
+                                "Opsqueue consumer client background task closing: {e}"
+                            );
                             break;
                         },
                         Some(Ok(msg)) => {
@@ -433,21 +442,32 @@ impl Client {
                 }
             }
         }
-        // Clear any and all in-flight requests on exit of the background task.
-        // This ensures that any waiting requests immediately return with an error as well.
+        // Clear all in-flight requests on exit of the background task. This
+        // ensures that any waiting requests immediately return with an error as
+        // well. When this happens all one-shot senders will be dropped.
         in_flight_requests.clear().await;
     }
 
+    // Synchronously send a `ClientToServerMessage` to the OpsQueue server and
+    // await a `SyncServerToClientResponse`.
     async fn sync_request(
         &self,
         request: ClientToServerMessage,
     ) -> Result<SyncServerToClientResponse, InternalConsumerClientError> {
+        // Create a one-shot channel and atomically associate one-shot sender
+        // with nonce in `InFlightRequests`.
         let (nonce, oneshot_receiver) = self.in_flight_requests.next_nonce_with_oneshot().await;
         let envelope = Envelope {
             nonce,
             contents: request,
         };
+        // We acquire the websocket sink (sender) lock, the sink sends the
+        // request along with the nonce. The OpsQueue server returns a response
+        // which includes the nonce, so the consumer background task can select
+        // the one-shot sender.
         let () = self.ws_sink.lock().await.send(envelope.into()).await?;
+        // May return a `RecvError` converted to a `InternalConsumerClientError`
+        // automatically via the `From` instance.
         let resp = oneshot_receiver.await?;
         Ok(resp)
     }
