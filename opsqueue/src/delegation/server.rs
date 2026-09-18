@@ -6,8 +6,10 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use futures::Stream;
 use futures::stream::BoxStream;
+use futures::{FutureExt, Stream};
+use itertools::Either;
+use itertools::Itertools;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::select;
@@ -32,8 +34,8 @@ pub(crate) fn app_for_tests(
         notify_on_insert,
         notify_on_submission_change,
     )
-        .run_background()
-        .build_router();
+    .run_background()
+    .build_router();
 
     Router::new().nest("/job", router)
 }
@@ -85,8 +87,8 @@ impl ServerState {
                 state,
                 cancellation_token,
             )
-                .await
-                .ok();
+            .await
+            .ok();
         });
         self
     }
@@ -323,8 +325,8 @@ async fn handle_kill_event(conn: &mut impl WriterConnection, task_id: &str) -> s
            WHERE task_id = $1"#,
         task_id,
     )
-        .fetch_optional(conn.get_inner())
-        .await?;
+    .fetch_optional(conn.get_inner())
+    .await?;
 
     let Some(submission_id) = submission_id else {
         tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
@@ -375,117 +377,197 @@ async fn run_in_background(
     Ok(())
 }
 
-async fn report_submission_status2(state: &ServerState, triggered_by_timeout: bool,) -> anyhow::Result<()> {
-    let mut conn = state.pool.reader_conn().await?;
-    let out_of_date_tasks = select_out_of_date_tasks(&mut conn).await;
-    for Ok(batch) in out_of_date_tasks.try_chunks(2048).await? {
-        
-    }
-
-    Ok(())
-}
-
 async fn report_submission_status(
     state: &ServerState,
     triggered_by_timeout: bool,
 ) -> anyhow::Result<()> {
-    let out_of_date_tasks = {
-        let conn = state.pool.reader_conn().await?;
-        select_out_of_date_tasks(conn).await?
-    };
+    use futures::{StreamExt, TryStreamExt};
+    let mut conn = state.pool.reader_conn().await?;
+    let mut out_of_date_tasks = select_out_of_date_tasks(&mut conn).await.try_chunks(2048);
 
-    if out_of_date_tasks.is_empty() {
-        return Ok(());
+    // TODO: triggered_by_timeout early-return ?
+
+    while let Some(batch_or_error) = out_of_date_tasks.next().await {
+        let batch = batch_or_error?;
+
+        send_status_update_events(state, batch.iter()).await?;
+        update_statuses_in_db(&state.pool, batch).await?;
     }
-
-    if triggered_by_timeout {
-        tracing::warn!(
-            n_out_of_date_tasks = out_of_date_tasks.len(),
-            "Delegation background loop triggered by timeout with pending tasks; \
-             possible missing notify_on_submission_change call"
-        );
-    }
-
-    for batch in out_of_date_tasks.chunks(2048) {
-        let mut updates = Vec::new();
-        let mut completions = Vec::new();
-
-        for task in batch {
-            match task.current_status {
-                DelegatedJobStatus::Paused => updates.push(DelegatedJobUpdate {
-                    task_id: &task.task_id,
-                    status: DelegatedJobUpdateStatus::Queued,
-                }),
-                DelegatedJobStatus::InProgress => updates.push(DelegatedJobUpdate {
-                    task_id: &task.task_id,
-                    status: DelegatedJobUpdateStatus::Running,
-                }),
-                DelegatedJobStatus::Completed => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Success,
-                }),
-                DelegatedJobStatus::Failed => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Failure {
-                        failure_reason: FailureReason::Unknown,
-                    },
-                }),
-                DelegatedJobStatus::Cancelled => completions.push(DelegatedJobCompletion {
-                    task_id: &task.task_id,
-                    completion: DelegatedJobCompletionStatus::Failure {
-                        failure_reason: FailureReason::Forced,
-                    },
-                }),
-            }
-        }
-
-        let events = vec![
-            MasterDelegationEvent::Updated(updates),
-            MasterDelegationEvent::Completed(completions),
-        ];
-
-        send_events(state, &events).await?;
-
-        // let updated = batch
-        //     .iter()
-        //     .filter(|task| {
-        //         task.current_status == DelegatedJobStatus::Paused
-        //             || task.current_status == DelegatedJobStatus::InProgress
-        //     })
-        //     .collect();
-
-        // let completed = batch
-        //     .iter()
-        //     .filter(|task| {
-        //         task.current_status == DelegatedJobStatus::Completed
-        //             || task.current_status == DelegatedJobStatus::Failed
-        //             || task.current_status == DelegatedJobStatus::Cancelled
-        //     })
-        //     .collect();
-
-        let mut conn = state.pool.writer_conn().await?;
-        conn.transaction(move |mut tx| {
-            Box::pin(async move {
-                let updated = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Paused || task.current_status == DelegatedJobStatus::InProgress);
-                update_last_status_sent(
-                    &mut tx,
-                    updated,
-                )
-                    .await?;
-
-                let completed = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Completed || task.current_status == DelegatedJobStatus::Failed || task.current_status == DelegatedJobStatus::Cancelled);
-                delete_external_tasks(
-                    &mut tx,
-                    completed,
-                ).await?;
-
-                Ok::<(), sqlx::Error>(())
-            })
-        }).await?;
-    }
-
     Ok(())
 }
+
+async fn update_statuses_in_db(pool: &DBPools, tasks: Vec<OutOfDateTaskRow>) -> anyhow::Result<()> {
+    let mut conn = pool.writer_conn().await?;
+    // NOTE: Instead we could also run many short transactions
+    // I don't think we need atomicity between task updates
+    // (swapping the nesting of `conn.transaction` and the `for task in batch`)
+    conn.transaction(|mut tx| {
+        async move {
+            for task in tasks {
+                match task.current_status {
+                    DelegatedJobStatus::Paused | DelegatedJobStatus::InProgress => {
+                        update_single_last_status_sent(&mut tx, &task).await?;
+                    }
+                    DelegatedJobStatus::Completed
+                    | DelegatedJobStatus::Failed
+                    | DelegatedJobStatus::Cancelled => {
+                        delete_external_task(&mut tx, &task).await?;
+                    }
+                }
+            }
+            Ok::<(), sqlx::Error>(())
+        }
+        .boxed()
+    })
+    .await?;
+    Ok(())
+}
+
+async fn send_status_update_events(
+    state: &ServerState,
+    tasks: impl Iterator<Item = &OutOfDateTaskRow>,
+) -> anyhow::Result<()> {
+    let (updates, completions): (Vec<_>, Vec<_>) = tasks.partition_map(status_update);
+    let events = vec![
+        MasterDelegationEvent::Updated(updates),
+        MasterDelegationEvent::Completed(completions),
+    ];
+    send_events(state, &events).await?;
+    Ok(())
+}
+
+fn status_update(
+    task: &OutOfDateTaskRow,
+) -> Either<DelegatedJobUpdate<'_>, DelegatedJobCompletion<'_>> {
+    match task.current_status {
+        DelegatedJobStatus::Paused => Either::Left(DelegatedJobUpdate {
+            task_id: &task.task_id,
+            status: DelegatedJobUpdateStatus::Queued,
+        }),
+        DelegatedJobStatus::InProgress => Either::Left(DelegatedJobUpdate {
+            task_id: &task.task_id,
+            status: DelegatedJobUpdateStatus::Running,
+        }),
+        DelegatedJobStatus::Completed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Success,
+        }),
+        DelegatedJobStatus::Failed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Failure {
+                failure_reason: FailureReason::Unknown,
+            },
+        }),
+        DelegatedJobStatus::Cancelled => Either::Right(DelegatedJobCompletion {
+            task_id: &task.task_id,
+            completion: DelegatedJobCompletionStatus::Failure {
+                failure_reason: FailureReason::Forced,
+            },
+        }),
+    }
+}
+
+// async fn report_submission_status(
+//     state: &ServerState,
+//     triggered_by_timeout: bool,
+// ) -> anyhow::Result<()> {
+//     let out_of_date_tasks = {
+//         let conn = state.pool.reader_conn().await?;
+//         select_out_of_date_tasks(&mut conn).await?
+//     };
+
+//     if out_of_date_tasks.is_empty() {
+//         return Ok(());
+//     }
+
+//     if triggered_by_timeout {
+//         tracing::warn!(
+//             n_out_of_date_tasks = out_of_date_tasks.len(),
+//             "Delegation background loop triggered by timeout with pending tasks; \
+//              possible missing notify_on_submission_change call"
+//         );
+//     }
+
+//     for batch in out_of_date_tasks.chunks(2048) {
+//         let mut updates = Vec::new();
+//         let mut completions = Vec::new();
+
+//         for task in batch {
+//             match task.current_status {
+//                 DelegatedJobStatus::Paused => updates.push(DelegatedJobUpdate {
+//                     task_id: &task.task_id,
+//                     status: DelegatedJobUpdateStatus::Queued,
+//                 }),
+//                 DelegatedJobStatus::InProgress => updates.push(DelegatedJobUpdate {
+//                     task_id: &task.task_id,
+//                     status: DelegatedJobUpdateStatus::Running,
+//                 }),
+//                 DelegatedJobStatus::Completed => completions.push(DelegatedJobCompletion {
+//                     task_id: &task.task_id,
+//                     completion: DelegatedJobCompletionStatus::Success,
+//                 }),
+//                 DelegatedJobStatus::Failed => completions.push(DelegatedJobCompletion {
+//                     task_id: &task.task_id,
+//                     completion: DelegatedJobCompletionStatus::Failure {
+//                         failure_reason: FailureReason::Unknown,
+//                     },
+//                 }),
+//                 DelegatedJobStatus::Cancelled => completions.push(DelegatedJobCompletion {
+//                     task_id: &task.task_id,
+//                     completion: DelegatedJobCompletionStatus::Failure {
+//                         failure_reason: FailureReason::Forced,
+//                     },
+//                 }),
+//             }
+//         }
+
+//         let events = vec![
+//             MasterDelegationEvent::Updated(updates),
+//             MasterDelegationEvent::Completed(completions),
+//         ];
+
+//         send_events(state, &events).await?;
+
+//         // let updated = batch
+//         //     .iter()
+//         //     .filter(|task| {
+//         //         task.current_status == DelegatedJobStatus::Paused
+//         //             || task.current_status == DelegatedJobStatus::InProgress
+//         //     })
+//         //     .collect();
+
+//         // let completed = batch
+//         //     .iter()
+//         //     .filter(|task| {
+//         //         task.current_status == DelegatedJobStatus::Completed
+//         //             || task.current_status == DelegatedJobStatus::Failed
+//         //             || task.current_status == DelegatedJobStatus::Cancelled
+//         //     })
+//         //     .collect();
+
+//         let mut conn = state.pool.writer_conn().await?;
+//         conn.transaction(move |mut tx| {
+//             Box::pin(async move {
+//                 let updated = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Paused || task.current_status == DelegatedJobStatus::InProgress);
+//                 update_last_status_sent(
+//                     &mut tx,
+//                     updated,
+//                 )
+//                     .await?;
+
+//                 let completed = batch.iter().filter(|task| task.current_status == DelegatedJobStatus::Completed || task.current_status == DelegatedJobStatus::Failed || task.current_status == DelegatedJobStatus::Cancelled);
+//                 delete_external_tasks(
+//                     &mut tx,
+//                     completed,
+//                 ).await?;
+
+//                 Ok::<(), sqlx::Error>(())
+//             })
+//         }).await?;
+//     }
+
+//     Ok(())
+// }
 
 async fn insert_external_task(
     mut conn: impl Connection,
@@ -503,9 +585,9 @@ async fn insert_external_task(
         submission_id,
         task_id,
     )
-        .execute(conn.get_inner())
-        .await?
-        .rows_affected();
+    .execute(conn.get_inner())
+    .await?
+    .rows_affected();
 
     Ok(rows_affected)
 }
@@ -518,7 +600,7 @@ struct OutOfDateTaskRow {
 
 async fn select_out_of_date_tasks(
     conn: &mut impl Connection,
-) -> BoxStream<'_, sqlx::Result<OutOfDateTaskRow>>  {
+) -> BoxStream<'_, sqlx::Result<OutOfDateTaskRow>> {
     sqlx::query_as!(
         OutOfDateTaskRow,
         r#"WITH out_of_date_tasks AS (
@@ -558,9 +640,24 @@ async fn update_last_status_sent(
             task.current_status,
             task.task_id,
         )
-            .execute(conn.get_inner())
-            .await?;
+        .execute(conn.get_inner())
+        .await?;
     }
+
+    Ok(())
+}
+
+async fn update_single_last_status_sent(
+    mut conn: impl WriterConnection,
+    task: &OutOfDateTaskRow,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "UPDATE submissions_external_task SET last_status_sent = $1 WHERE task_id = $2",
+        task.current_status,
+        task.task_id,
+    )
+    .execute(conn.get_inner())
+    .await?;
 
     Ok(())
 }
@@ -574,9 +671,23 @@ async fn delete_external_tasks(
             "DELETE FROM submissions_external_task WHERE task_id = $1",
             task.task_id,
         )
-            .execute(conn.get_inner())
-            .await?;
+        .execute(conn.get_inner())
+        .await?;
     }
+
+    Ok(())
+}
+
+async fn delete_external_task(
+    mut conn: impl WriterConnection,
+    task: &OutOfDateTaskRow,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "DELETE FROM submissions_external_task WHERE task_id = $1",
+        task.task_id,
+    )
+    .execute(conn.get_inner())
+    .await?;
 
     Ok(())
 }
@@ -700,8 +811,8 @@ pub mod test {
                 InitialSubmissionStatus::Paused,
                 &mut conn,
             )
-                .await
-                .unwrap()
+            .await
+            .unwrap()
         };
 
         {
@@ -735,7 +846,7 @@ pub mod test {
                                 submission_id: submission,
                             },
                         })
-                            .unwrap(),
+                        .unwrap(),
                     ))
                     .unwrap(),
             )
@@ -800,8 +911,8 @@ pub mod test {
                 InitialSubmissionStatus::Paused,
                 &mut conn,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
 
             insert_external_task(&mut conn, submission, "test")
                 .await
@@ -897,8 +1008,8 @@ pub mod test {
                 InitialSubmissionStatus::Paused,
                 &mut conn,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
 
             insert_external_task(&mut conn, submission, "test")
                 .await
@@ -972,8 +1083,8 @@ pub mod test {
                 InitialSubmissionStatus::InProgress,
                 &mut conn,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
 
             insert_external_task(&mut conn, submission, "test")
                 .await
@@ -1049,8 +1160,8 @@ pub mod test {
                 InitialSubmissionStatus::InProgress,
                 &mut conn,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
 
             insert_external_task(&mut conn, submission, "test")
                 .await
@@ -1076,8 +1187,8 @@ pub mod test {
                 &mut conn,
                 0,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
             notify_on_submission_change.notify_one();
         }
 
@@ -1129,8 +1240,8 @@ pub mod test {
                 InitialSubmissionStatus::InProgress,
                 &mut conn,
             )
-                .await
-                .unwrap();
+            .await
+            .unwrap();
 
             insert_external_task(&mut conn, submission, "test")
                 .await

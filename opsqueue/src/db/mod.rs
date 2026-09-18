@@ -128,9 +128,8 @@ pub trait Connection {
     #[allow(async_fn_in_trait)]
     async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
     where
-        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
-            + Send
-            + Sync,
+        for<'t> F:
+            FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>> + Send + Sync,
         O: Send,
         E: From<sqlx::Error> + Send,
     {
