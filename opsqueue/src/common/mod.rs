@@ -4,6 +4,7 @@ use std::num::NonZero;
 
 pub mod chunk;
 pub mod errors;
+pub mod extensions;
 pub mod submission;
 
 /// As values, we support the largest number value `SQLite` supports by itself,

@@ -553,7 +553,11 @@ pub mod db {
                 Ok(())
             })
         })
-        .await
+        .await?;
+
+        // Wake up any waiting consumers now that new chunks are available.
+        state.notify_on_insert.notify_waiters();
+        state.notify_on_submission_change.notify_one();
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1198,7 +1202,9 @@ pub mod db {
                 }
             })
         })
-        .await
+        .await?;
+
+        // TODO(delgation): Notify about status change.
     }
 
     /// Do not call directly! Must be called inside a transaction.

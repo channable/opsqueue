@@ -247,7 +247,7 @@ impl Completer {
                 } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
-                    let submission_completed =
+                    let db_res =
                         crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
                             .await;
 
@@ -269,9 +269,7 @@ impl Completer {
                         let _ = db::perform_explicit_wal_checkpoint(conn).await;
                     }
 
-                    if submission_completed? {
-                        self.notify_on_submission_change.notify_one();
-                    }
+                    db_res?;
                     Ok(())
                 }
                 CompleterMessage::Fail {
@@ -305,9 +303,7 @@ impl Completer {
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
 
-                    if failed_permanently? {
-                        self.notify_on_submission_change.notify_one();
-                    }
+                    failed_permanently?;
                     Ok(())
                 }
             }

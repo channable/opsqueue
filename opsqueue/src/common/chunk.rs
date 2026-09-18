@@ -312,7 +312,7 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
-    ) -> Result<bool, E<DatabaseError, SubmissionNotFound>> {
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let (chunk_moved, completed_submission) = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
@@ -345,7 +345,11 @@ pub mod db {
         if chunk_moved {
             counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         }
-        Ok(completed_submission)
+        if completed_submission {
+            // TODO(delegation): Notify status change.
+            state.notify_on_submission_change.notify_one();
+        }
+        Ok(())
     }
 
     /// This function MUST be called inside a transaction.
@@ -467,6 +471,12 @@ pub mod db {
                 })
             })
             .await?;
+
+        if failed_permanently {
+            // TODO(delegation): Notify about a statuys change
+            self.notify_on_submission_change.notify_one();
+        }
+
         Ok(failed_permanently)
     }
 

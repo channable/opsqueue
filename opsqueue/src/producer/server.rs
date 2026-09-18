@@ -138,19 +138,15 @@ async fn cancel_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::cancel_submission(submission_id, &mut conn).await {
-        Ok(()) => {
-            state.notify_on_submission_change.notify_one();
-            Ok(())
-        }
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(L(not_found_err))) => {
-            Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
-        }
-        Err(R(R(not_cancellable_err))) => {
-            Err((StatusCode::CONFLICT, Json(not_cancellable_err)).into_response())
-        }
-    }
+    submission::db::cancel_submission(submission_id, &mut conn)
+        .await
+        .map_err(|err| match err {
+            L(db_err) => ServerError(db_err.into()).into_response(),
+            R(L(not_found_err)) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+            R(R(not_cancellable_err)) => {
+                (StatusCode::CONFLICT, Json(not_cancellable_err)).into_response()
+            }
+        })
 }
 
 /// 200 if the submission was successfully unpaused.
@@ -165,16 +161,12 @@ async fn unpause_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::unpause_submission(submission_id, &mut conn).await {
-        Ok(()) => {
-            // Wake up any waiting consumers now that new chunks are available.
-            state.notify_on_insert.notify_waiters();
-            state.notify_on_submission_change.notify_one();
-            Ok(())
-        }
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(not_found_err)) => Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response()),
-    }
+    submission::db::unpause_submission(submission_id, &mut conn)
+        .await
+        .map_err(|err| match err {
+            L(db_err) => ServerError(db_err.into()).into_response(),
+            R(not_found_err) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+        })
 }
 
 async fn submission_status(
