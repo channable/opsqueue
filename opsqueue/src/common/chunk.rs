@@ -312,6 +312,7 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut conn: impl WriterConnection,
+        submission_status_changed: &tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let (chunk_moved, completed_submission) = conn
             .transaction(move |mut tx| {
@@ -346,8 +347,7 @@ pub mod db {
             counter!(crate::prometheus::CHUNKS_COMPLETED_COUNTER).increment(1);
         }
         if completed_submission {
-            // TODO(delegation): Notify status change.
-            state.notify_on_submission_change.notify_one();
+            let _ = submission_status_changed.send(chunk_id.submission_id);
         }
         Ok(())
     }
@@ -423,6 +423,7 @@ pub mod db {
         failure: String,
         mut conn: impl WriterConnection,
         max_retries: u32,
+        submission_status_changed: &tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> sqlx::Result<bool> {
         let failed_permanently = conn
             .transaction(move |mut tx| {
@@ -473,8 +474,7 @@ pub mod db {
             .await?;
 
         if failed_permanently {
-            // TODO(delegation): Notify about a statuys change
-            self.notify_on_submission_change.notify_one();
+            let _ = submission_status_changed.send(chunk_id.submission_id);
         }
 
         Ok(failed_permanently)
@@ -753,6 +753,27 @@ pub mod db {
         Ok(())
     }
 
+    /// Delete all chunks belonging to the given submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deletion failed.
+    #[tracing::instrument(skip(conn))]
+    pub async fn delete_chunks(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        sqlx::query!(
+            "
+            DELETE FROM chunks WHERE chunks.submission_id = $1;
+            ",
+            submission_id,
+        )
+        .execute(conn.get_inner())
+        .await?;
+        Ok(())
+    }
+
     /// Count chunks currently in progress.
     ///
     /// # Errors
@@ -972,6 +993,8 @@ pub mod test {
     ) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
+        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
@@ -988,11 +1011,11 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        let res = complete_chunk(chunk_id, None, &mut conn).await;
-        assert_matches!(res, Ok(false));
+        let res = complete_chunk(chunk_id, None, &mut conn, &submission_status_changed_tx).await;
+        assert!(res.is_ok());
 
-        let res = complete_chunk(chunk_id, None, &mut conn).await;
-        assert_matches!(res, Ok(false));
+        let res = complete_chunk(chunk_id, None, &mut conn, &submission_status_changed_tx).await;
+        assert!(res.is_ok());
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1027,6 +1050,8 @@ pub mod test {
     ) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
+        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
@@ -1045,13 +1070,34 @@ pub mod test {
 
         let max_retries = 2;
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        let res = retry_or_fail_chunk(
+            chunk_id,
+            "kapot".into(),
+            &mut conn,
+            max_retries,
+            &submission_status_changed_tx,
+        )
+        .await;
         assert_matches!(res, Ok(false)); // Retry limit not yet reached.
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        let res = retry_or_fail_chunk(
+            chunk_id,
+            "kapot".into(),
+            &mut conn,
+            max_retries,
+            &submission_status_changed_tx,
+        )
+        .await;
         assert_matches!(res, Ok(true)); // Retry limit reached, submission is now permanently failed.
 
-        let res = retry_or_fail_chunk(chunk_id, "kapot".into(), &mut conn, max_retries).await;
+        let res = retry_or_fail_chunk(
+            chunk_id,
+            "kapot".into(),
+            &mut conn,
+            max_retries,
+            &submission_status_changed_tx,
+        )
+        .await;
         assert_matches!(res, Ok(false)); // Submission was already failed, check that we ignore.
     }
 }

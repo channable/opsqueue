@@ -66,7 +66,7 @@ pub async fn async_main() {
         ));
 
         let max_age = config.max_submission_age.into();
-        let cleanup_handle = scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
+        let cleanup_handle = scope.spawn(periodically_cleanup_old(&db_pool, max_age, Vec::new()));
 
         let prometheus_handle = scope.spawn(prometheus::periodically_calculate_scaling_metrics(
             &db_pool,

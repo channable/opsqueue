@@ -20,7 +20,7 @@ pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
     ServerState::new(
         database_pool,
         Arc::new(Notify::new()),
-        Arc::new(Notify::new()),
+        tokio::sync::broadcast::channel(10).0,
         max_submissions,
     )
     .serve_for_tests(server_addr)
@@ -31,7 +31,7 @@ pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
 pub struct ServerState {
     pool: DBPools,
     notify_on_insert: Arc<Notify>,
-    notify_on_submission_change: Arc<Notify>,
+    submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
     max_submissions: MaxSubmissions,
 }
 
@@ -39,13 +39,13 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
-        notify_on_submission_change: Arc<Notify>,
+        submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
         max_submissions: MaxSubmissions,
     ) -> Self {
         ServerState {
             pool,
             notify_on_insert,
-            notify_on_submission_change,
+            submission_status_changed,
             max_submissions,
         }
     }
@@ -138,7 +138,7 @@ async fn cancel_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    submission::db::cancel_submission(submission_id, &mut conn)
+    submission::db::cancel_submission(submission_id, &mut conn, &state.submission_status_changed)
         .await
         .map_err(|err| match err {
             L(db_err) => ServerError(db_err.into()).into_response(),
@@ -161,12 +161,17 @@ async fn unpause_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    submission::db::unpause_submission(submission_id, &mut conn)
-        .await
-        .map_err(|err| match err {
-            L(db_err) => ServerError(db_err.into()).into_response(),
-            R(not_found_err) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
-        })
+    submission::db::unpause_submission(
+        submission_id,
+        &mut conn,
+        &state.notify_on_insert,
+        &state.submission_status_changed,
+    )
+    .await
+    .map_err(|err| match err {
+        L(db_err) => ServerError(db_err.into()).into_response(),
+        R(not_found_err) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+    })
 }
 
 async fn submission_status(

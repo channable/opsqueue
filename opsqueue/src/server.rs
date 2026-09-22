@@ -99,12 +99,13 @@ pub fn build_router(
     prometheus_config: crate::prometheus::PrometheusConfig,
 ) -> Router<()> {
     let notify_on_insert = Arc::new(Notify::new());
-    let notify_on_submission_change = Arc::new(Notify::new());
+    let (submission_status_changed_tx, submission_status_changed_rx) =
+        tokio::sync::broadcast::channel(128);
 
     let consumer_routes = crate::consumer::server::ServerState::new(
         pool.clone(),
         notify_on_insert.clone(),
-        notify_on_submission_change.clone(),
+        submission_status_changed_tx.clone(),
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -114,7 +115,7 @@ pub fn build_router(
     let producer_routes = crate::producer::server::ServerState::new(
         pool.clone(),
         notify_on_insert.clone(),
-        notify_on_submission_change.clone(),
+        submission_status_changed_tx.clone(),
         config.max_submissions_returned,
     )
     .build_router();
@@ -123,18 +124,22 @@ pub fn build_router(
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
 
-    if config.delegation_server_url.is_some() {
-        let delegation_routes = crate::delegation::server::ServerState::new(
+    if let Some(delegation_server_url) = &config.delegation_server_url {
+        let core_api = crate::common::extension::CoreApi::new(
             pool,
-            config,
+            notify_on_insert,
+            submission_status_changed_tx,
+            submission_status_changed_rx,
+        );
+        let delegation_routes = crate::delegation::server::ServerState::new(
             cancellation_token.clone(),
-            notify_on_insert.clone(),
-            notify_on_submission_change.clone(),
+            core_api,
+            delegation_server_url.clone(),
         )
         .run_background()
         .build_router();
 
-        routes = routes.nest("/job", delegation_routes);
+        routes = routes.nest("/delegation", delegation_routes);
     }
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()

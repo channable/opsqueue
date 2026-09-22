@@ -4,7 +4,8 @@ use std::num::NonZero;
 
 pub mod chunk;
 pub mod errors;
-pub mod extensions;
+#[cfg(feature = "server-logic")]
+pub mod extension;
 pub mod submission;
 
 /// As values, we support the largest number value `SQLite` supports by itself,
