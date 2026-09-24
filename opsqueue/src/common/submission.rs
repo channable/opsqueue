@@ -1563,9 +1563,9 @@ pub mod db {
         let mut old_submissions = query!(
             r#"
             SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE completed_at < julianday($1)
-            UNION ALL
+            UNION
             SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE failed_at < julianday($1)
-            UNION ALL
+            UNION
             SELECT id AS "id: SubmissionId" FROM submissions_cancelled WHERE cancelled_at < julianday($1)
             "#,
             older_than
@@ -1894,138 +1894,146 @@ pub mod test {
             .unwrap();
         let db = DBPools::from_test_pools(&reader_pool, &writer_pool);
 
-        let mut conn = db.writer_conn().await.unwrap();
+        let (cutoff_timestamp, old_four_unfailed) = {
+            let mut conn = db.writer_conn().await.unwrap();
 
-        let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_two = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_three = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_four_unfailed = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-
-        fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
+            let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
+            let old_one = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
             .await
             .unwrap();
-        fail_submission(old_two, u63::new(0).into(), "Broken two".into(), &mut conn)
+            let old_two = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
             .await
             .unwrap();
-        fail_submission(
-            old_three,
-            u63::new(0).into(),
-            "Broken three".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
+            let old_three = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let old_four_unfailed = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
 
-        // Ensure the clock is advanced ever so slightly.
-        // Not doing this makes the test flaky.
-        tokio::time::sleep(Duration::from_millis(1)).await;
+            fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
+                .await
+                .unwrap();
+            fail_submission(old_two, u63::new(0).into(), "Broken two".into(), &mut conn)
+                .await
+                .unwrap();
+            fail_submission(
+                old_three,
+                u63::new(0).into(),
+                "Broken three".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
 
-        let cutoff_timestamp = Utc::now();
+            // Ensure the clock is advanced ever so slightly.
+            // Not doing this makes the test flaky.
+            tokio::time::sleep(Duration::from_millis(1)).await;
 
-        let too_new_one = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let _too_new_two_unfailed = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let too_new_three = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
+            let cutoff_timestamp = Utc::now();
 
-        fail_submission(
-            too_new_one,
-            u63::new(0).into(),
-            "Broken new one".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        fail_submission(
-            too_new_three,
-            u63::new(0).into(),
-            "Broken new three".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
+            let too_new_one = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let _too_new_two_unfailed = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let too_new_three = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
+            fail_submission(
+                too_new_one,
+                u63::new(0).into(),
+                "Broken new one".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            fail_submission(
+                too_new_three,
+                u63::new(0).into(),
+                "Broken new three".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
+
+            (cutoff_timestamp, old_four_unfailed)
+        };
 
         cleanup_old(&db, cutoff_timestamp, &vec![]).await.unwrap();
 
-        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
+        {
+            let mut conn = db.writer_conn().await.unwrap();
 
-        let _sub1 = submission_status(old_four_unfailed, &mut conn)
-            .await
-            .unwrap();
-        let _sub2 = submission_status(old_four_unfailed, &mut conn)
-            .await
-            .unwrap();
+            assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
+
+            let _sub1 = submission_status(old_four_unfailed, &mut conn)
+                .await
+                .unwrap();
+            let _sub2 = submission_status(old_four_unfailed, &mut conn)
+                .await
+                .unwrap();
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
