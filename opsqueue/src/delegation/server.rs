@@ -53,8 +53,9 @@ impl ServerState {
 
     #[must_use]
     pub fn run_background(self) -> Self {
+        let submission_status_changed_rx = self.core_api.subscribe_submission_status_changes();
         let state = self.clone();
-        tokio::spawn(run_in_background(state));
+        tokio::spawn(run_in_background(state, submission_status_changed_rx));
         self
     }
 
@@ -150,48 +151,56 @@ async fn submit(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    conn.transaction(move |mut tx| {
-        Box::pin(async move {
-            for event in events {
-                match event {
-                    WorkerDelegationEvent::Delegate(delegations) => {
-                        for delegation in delegations {
-                            handle_delegate_event(&state.core_api, &mut tx, &delegation)
-                                .await
-                                .map_err(|e| {
-                                    tracing::error!("Error handling delegate event: {e:?}");
-                                    e
-                                })?;
-                        }
-                    }
-                    WorkerDelegationEvent::Kill(task_ids) => {
-                        for task_id in task_ids {
-                            handle_kill_event(&state.core_api, &mut tx, &task_id)
-                                .await
-                                .map_err(|e| {
-                                    tracing::error!(
-                                            "Error handling kill event for task_id={task_id}: {e:?}"
-                                        );
-                                    e
-                                })?;
-                        }
-                    }
-                    WorkerDelegationEvent::Return(_task_ids) => {
-                        tracing::info!(
-                                "Received 'return' delegation event, which is not yet implemented; ignoring."
-                            );
-                    }
-                }
-            }
-
-            Ok(())
-        })
-    }).await.map_err(|e: sqlx::Error| {
-        tracing::error!("DB error handling events: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    // Note that we don't need a transaction here. Say we fail half-way, JM will just retry. Since
+    // all operations in `handle_worker_events` are idempotent, that would be fine.
+    handle_worker_events(&state.core_api, &mut conn, events)
+        .await
+        .map_err(|e: sqlx::Error| {
+            tracing::error!("DB error handling events: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn handle_worker_events(
+    core_api: &CoreApi,
+    conn: &mut impl WriterConnection,
+    events: Vec<WorkerDelegationEvent>,
+) -> sqlx::Result<()> {
+    for event in events {
+        match event {
+            WorkerDelegationEvent::Delegate(delegations) => {
+                for delegation in delegations {
+                    handle_delegate_event(core_api, &mut *conn, &delegation)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("Error handling delegate event: {e:?}");
+                            e
+                        })?;
+                }
+            }
+            WorkerDelegationEvent::Kill(task_ids) => {
+                for task_id in task_ids {
+                    handle_kill_event(core_api, &mut *conn, &task_id)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(
+                                "Error handling kill event for task_id={task_id}: {e:?}"
+                            );
+                            e
+                        })?;
+                }
+            }
+            WorkerDelegationEvent::Return(_task_ids) => {
+                tracing::info!(
+                    "Received 'return' delegation event, which is not yet implemented; ignoring."
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
@@ -212,7 +221,11 @@ async fn handle_delegate_event(
     match core_api.unpause_submission(submission_id, &mut *conn).await {
         Ok(()) => {}
         Err(E::R(SubmissionNotFound(_))) => {
-            tracing::debug!(%submission_id, "Submission was not in paused state; assuming already active");
+            // Note that this path could be hit when doing resubmitting a task with the same
+            // submission id.
+            tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
+            // Send a notification, s.t. the status is promptly reported to the external system.
+            core_api.notify_submission_status_changed(submission_id);
         }
         Err(E::L(db_err)) => {
             tracing::error!(%submission_id, "DB error unpausing submission: {db_err:?}");
@@ -292,33 +305,39 @@ async fn submission_status_change_batch(
     }
 }
 
-async fn run_in_background(mut state: ServerState) -> Result<(), ()> {
+enum ReportTrigger {
+    FullScan,
+    Timeout,
+    Submissions(Vec<SubmissionId>),
+}
+
+async fn run_in_background(
+    state: ServerState,
+    mut submission_status_changed_rx: tokio::sync::broadcast::Receiver<SubmissionId>,
+) -> Result<(), ()> {
     tracing::info!(
         "Started delegation background loop. Updates will be sent to {}",
         state.delegation_server_url
     );
 
-    let mut triggered_by_timeout: bool = false;
-    let mut update_specific_submissions: Option<Vec<SubmissionId>> = None;
+    let mut trigger = ReportTrigger::FullScan;
 
     loop {
-        match report_submission_status(&state, triggered_by_timeout, update_specific_submissions)
-            .await
-        {
+        match report_submission_status(&state, trigger).await {
             Ok(()) => {}
             Err(e) => tracing::error!("Error in delegation background loop: {e:?}"),
         }
 
-        (triggered_by_timeout, update_specific_submissions) = select! {
+        trigger = select! {
             () = state.cancellation_token.cancelled() => break,
-            res = submission_status_change_batch(&mut state.core_api.submission_status_changed_rx) => {
+            res = submission_status_change_batch(&mut submission_status_changed_rx) => {
                 match res {
-                    Ok(submission_ids) => (false, Some(submission_ids)),
-                    Err(SubmissionStatusChangeBatchError::Lagged) => (false, None),
+                    Ok(submission_ids) => ReportTrigger::Submissions(submission_ids),
+                    Err(SubmissionStatusChangeBatchError::Lagged) => ReportTrigger::FullScan,
                     Err(SubmissionStatusChangeBatchError::Closed) => break,
                 }
             },
-            () = tokio::time::sleep(DELEGATION_BACKGROUND_LOOP_TIMEOUT) => (true, None)
+            () = tokio::time::sleep(DELEGATION_BACKGROUND_LOOP_TIMEOUT) => ReportTrigger::Timeout
         };
     }
 
@@ -327,10 +346,14 @@ async fn run_in_background(mut state: ServerState) -> Result<(), ()> {
 
 async fn report_submission_status(
     state: &ServerState,
-    triggered_by_timeout: bool,
-    update_specific_submission: Option<Vec<SubmissionId>>,
+    trigger: ReportTrigger,
 ) -> anyhow::Result<()> {
     use futures::{StreamExt, TryStreamExt};
+    let triggered_by_timeout = matches!(trigger, ReportTrigger::Timeout);
+    let update_specific_submissions = match trigger {
+        ReportTrigger::Submissions(submission_ids) => Some(submission_ids),
+        ReportTrigger::FullScan | ReportTrigger::Timeout => None,
+    };
     let mut conn_0 = state.core_api.pool.reader_conn().await?;
     let conn_1 = Arc::new(tokio::sync::Mutex::new(
         state.core_api.pool.reader_conn().await?,
@@ -338,61 +361,18 @@ async fn report_submission_status(
     let core_api = Arc::new(state.core_api.clone());
 
     let out_of_date_tasks = {
-        select_external_tasks(&mut conn_0, update_specific_submission)
+        select_external_tasks(&mut conn_0, update_specific_submissions)
             .try_filter_map({
                 move |task| {
                     let conn_1 = conn_1.clone();
                     let core_api = core_api.clone();
                     async move {
                         let mut conn_1 = conn_1.lock().await;
-                        match core_api
+                        let status = core_api
                             .submission_status(task.submission_id, &mut *conn_1)
                             .await
-                        {
-                            Ok(Some(SubmissionStatus::Paused(_)))
-                                if task.last_status_sent != Some(DelegatedJobStatus::Paused) =>
-                            {
-                                Ok(Some(OutOfDateTaskRow {
-                                    task_id: task.task_id,
-                                    current_status: DelegatedJobStatus::Paused,
-                                }))
-                            }
-                            Ok(Some(SubmissionStatus::InProgress(_)))
-                                if task.last_status_sent
-                                    != Some(DelegatedJobStatus::InProgress) =>
-                            {
-                                Ok(Some(OutOfDateTaskRow {
-                                    task_id: task.task_id,
-                                    current_status: DelegatedJobStatus::InProgress,
-                                }))
-                            }
-                            Ok(Some(SubmissionStatus::Cancelled(_)))
-                                if task.last_status_sent != Some(DelegatedJobStatus::Cancelled) =>
-                            {
-                                Ok(Some(OutOfDateTaskRow {
-                                    task_id: task.task_id,
-                                    current_status: DelegatedJobStatus::Cancelled,
-                                }))
-                            }
-                            Ok(Some(SubmissionStatus::Failed(_, _)))
-                                if task.last_status_sent != Some(DelegatedJobStatus::Failed) =>
-                            {
-                                Ok(Some(OutOfDateTaskRow {
-                                    task_id: task.task_id,
-                                    current_status: DelegatedJobStatus::Failed,
-                                }))
-                            }
-                            Ok(Some(SubmissionStatus::Completed(_)))
-                                if task.last_status_sent != Some(DelegatedJobStatus::Completed) =>
-                            {
-                                Ok(Some(OutOfDateTaskRow {
-                                    task_id: task.task_id,
-                                    current_status: DelegatedJobStatus::Completed,
-                                }))
-                            }
-                            Ok(_) => Ok(None), // Not out-of-date, skip.
-                            Err(err) => Err(err.0),
-                        }
+                            .map_err(|err| err.0)?;
+                        Ok(out_of_date_task(task, (&status).into()))
                     }
                 }
             })
@@ -420,7 +400,7 @@ async fn report_submission_status(
         tracing::warn!(
             n_out_of_date_tasks = task_count,
             "Delegation background loop was triggered by timeout with pending tasks; \
-             possibly we are missing a notify_on_submission_change call"
+             possibly we are missing a submission_status_changed.send call"
         );
     }
 
@@ -491,6 +471,29 @@ fn select_external_tasks(
 struct OutOfDateTaskRow {
     task_id: String,
     current_status: DelegatedJobStatus,
+}
+
+fn out_of_date_task(
+    task: ExternalTaskRow,
+    status: Option<&SubmissionStatus>,
+) -> Option<OutOfDateTaskRow> {
+    let current_status = match status {
+        Some(SubmissionStatus::Paused(_)) => DelegatedJobStatus::Paused,
+        Some(SubmissionStatus::InProgress(_)) => DelegatedJobStatus::InProgress,
+        Some(SubmissionStatus::Completed(_)) => DelegatedJobStatus::Completed,
+        Some(SubmissionStatus::Failed(_, _)) => DelegatedJobStatus::Failed,
+        Some(SubmissionStatus::Cancelled(_)) => DelegatedJobStatus::Cancelled,
+        None => {
+            let task_id = &task.task_id;
+            let submission_id = &task.submission_id;
+            tracing::warn!(%submission_id, %task_id, "Got external task but could not find its submission. This could be a resubmitted external task, where we already cleaned up the corresponding submission after failure/completion. Assuming it completed successfully.");
+            DelegatedJobStatus::Completed
+        }
+    };
+    (task.last_status_sent != Some(current_status)).then_some(OutOfDateTaskRow {
+        task_id: task.task_id,
+        current_status,
+    })
 }
 
 fn status_update(
@@ -614,8 +617,8 @@ pub mod test {
     use crate::delegation::server::{
         DelegatedJob, DelegatedJobPayload, app_for_tests, insert_external_task,
     };
-    use axum::body::Body;
     use axum::http::Request;
+    use axum::{Router, body::Body};
     use http::{StatusCode, header};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -657,12 +660,74 @@ pub mod test {
         Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
     }
 
-    fn core_api_for_tests(pool: DBPools) -> (CoreApi, broadcast::Sender<SubmissionId>) {
-        let (sender, receiver) = broadcast::channel(128);
-        (
-            CoreApi::new(pool, Arc::new(Notify::new()), sender.clone(), receiver),
-            sender,
-        )
+    struct TestContext {
+        pool: DBPools,
+        external_server: MockServer,
+        core_api: CoreApi,
+        submission_status_changed: broadcast::Sender<SubmissionId>,
+        app: Router,
+    }
+
+    impl TestContext {
+        async fn new(
+            pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
+            conn_opts: sqlx::sqlite::SqliteConnectOptions,
+        ) -> Self {
+            let reader_pool = pool_opts
+                .clone()
+                .max_connections(16)
+                .connect_with(conn_opts.clone())
+                .await
+                .unwrap();
+            let writer_pool = pool_opts
+                .max_connections(1)
+                .connect_with(conn_opts)
+                .await
+                .unwrap();
+            let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
+            let external_server = MockServer::start().await;
+            let (submission_status_changed, _) = broadcast::channel(128);
+            let core_api = CoreApi::new(
+                pool.clone(),
+                Arc::new(Notify::new()),
+                submission_status_changed.clone(),
+            );
+            let cancellation_token = CancellationToken::new();
+            let app = app_for_tests(
+                &cancellation_token,
+                core_api.clone(),
+                external_server.uri().parse().unwrap(),
+            );
+            Self {
+                pool,
+                external_server,
+                core_api,
+                submission_status_changed,
+                app,
+            }
+        }
+
+        async fn post_worker_events(&self, events: serde_json::Value) {
+            let request = Request::builder()
+                .uri("/delegation/submit")
+                .method("POST")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(events.to_string()))
+                .unwrap();
+            let response = self.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "request failed: {response:?}"
+            );
+        }
+    }
+
+    async fn wait_for_update(rx: oneshot::Receiver<()>) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+            .await
+            .expect("Timed out waiting for HTTP request")
+            .expect("Sender dropped without signaling");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -670,31 +735,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, _) = core_api_for_tests(pool.clone());
-        let app = app_for_tests(
-            &cancellation_token,
-            core_api,
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         let submission = {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             insert_submission_from_chunks(
@@ -711,7 +755,7 @@ pub mod test {
         };
 
         {
-            let mut conn = pool.reader_conn().await.unwrap();
+            let mut conn = test.pool.reader_conn().await.unwrap();
             assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
             assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 0);
         }
@@ -724,42 +768,19 @@ pub mod test {
             ))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/delegation/submit")
-                    .method("POST")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(
-                            &json!([{"type": "delegate", "contents": [DelegatedJob {
-                                task_id: "test".to_string(),
-                                payload: DelegatedJobPayload { submission_id: submission },
-                            }]}]),
-                        )
-                        .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::ACCEPTED,
-            "request failed: {response:?}"
-        );
+        test.post_worker_events(json!([{"type": "delegate", "contents": [DelegatedJob {
+            task_id: "test".to_string(),
+            payload: DelegatedJobPayload { submission_id: submission },
+        }]}]))
+        .await;
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
 
         {
-            let mut conn = pool.reader_conn().await.unwrap();
+            let mut conn = test.pool.reader_conn().await.unwrap();
             assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 1);
             assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
         }
@@ -770,31 +791,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, _) = core_api_for_tests(pool.clone());
-        let app = app_for_tests(
-            &cancellation_token,
-            core_api,
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             let submission = insert_submission_from_chunks(
@@ -820,46 +820,25 @@ pub mod test {
             .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "forced"}}]}])))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/delegation/submit")
-                    .method("POST")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&json!([{"type": "kill", "contents": ["test"]}]))
-                            .unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::ACCEPTED,
-            "request failed: {response:?}"
-        );
+        test.post_worker_events(json!([{"type": "kill", "contents": ["test"]}]))
+            .await;
 
         {
-            let mut conn = pool.reader_conn().await.unwrap();
+            let mut conn = test.pool.reader_conn().await.unwrap();
             assert_eq!(count_submissions_cancelled(&mut conn).await.unwrap(), 1);
             assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
 
         // Wait for background loop to remove external tasks;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         {
-            let mut conn = pool.reader_conn().await.unwrap();
+            let mut conn = test.pool.reader_conn().await.unwrap();
             assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 0);
         }
     }
@@ -869,31 +848,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, _) = core_api_for_tests(pool.clone());
-        let _ = app_for_tests(
-            &cancellation_token,
-            core_api.clone(),
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         let submission = {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             let submission = insert_submission_from_chunks(
@@ -923,21 +881,18 @@ pub mod test {
             ))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
         {
-            let mut conn = pool.writer_conn().await.unwrap();
-            core_api
+            let mut conn = test.pool.writer_conn().await.unwrap();
+            test.core_api
                 .unpause_submission(submission, &mut conn)
                 .await
                 .unwrap();
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -945,31 +900,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, submission_status_changed) = core_api_for_tests(pool.clone());
-        let _ = app_for_tests(
-            &cancellation_token,
-            core_api,
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         let submission = {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             let submission = insert_submission_from_chunks(
@@ -999,25 +933,22 @@ pub mod test {
             ))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
         {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
             complete_chunk(
                 (submission, ChunkIndex::zero()).into(),
                 None,
                 &mut conn,
-                &submission_status_changed,
+                &test.submission_status_changed,
             )
             .await
             .unwrap();
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1025,31 +956,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, submission_status_changed) = core_api_for_tests(pool.clone());
-        let _ = app_for_tests(
-            &cancellation_token,
-            core_api,
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         let submission = {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             let submission = insert_submission_from_chunks(
@@ -1077,26 +987,23 @@ pub mod test {
             .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "unknown"}}]}])))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
         {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
             retry_or_fail_chunk(
                 (submission, ChunkIndex::zero()).into(),
                 "extreme error".to_owned(),
                 &mut conn,
                 0,
-                &submission_status_changed,
+                &test.submission_status_changed,
             )
             .await
             .unwrap();
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1104,31 +1011,10 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-
-        let external_server = MockServer::start().await;
-
-        let cancellation_token = CancellationToken::new();
-        let (core_api, _) = core_api_for_tests(pool.clone());
-        let _ = app_for_tests(
-            &cancellation_token,
-            core_api.clone(),
-            external_server.uri().parse().unwrap(),
-        );
+        let test = TestContext::new(pool_opts, conn_opts).await;
 
         let submission = {
-            let mut conn = pool.writer_conn().await.unwrap();
+            let mut conn = test.pool.writer_conn().await.unwrap();
 
             let chunks_contents = vec![Some("foo".into())];
             let submission = insert_submission_from_chunks(
@@ -1156,20 +1042,17 @@ pub mod test {
             .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "forced"}}]}])))
             .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
             .expect(1)
-            .mount(&external_server)
+            .mount(&test.external_server)
             .await;
 
         {
-            let mut conn = pool.writer_conn().await.unwrap();
-            core_api
+            let mut conn = test.pool.writer_conn().await.unwrap();
+            test.core_api
                 .cancel_submission(submission, &mut conn)
                 .await
                 .unwrap();
         }
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+        wait_for_update(rx).await;
     }
 }

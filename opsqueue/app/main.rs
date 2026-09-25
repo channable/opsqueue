@@ -4,12 +4,15 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_resource_detectors::HostResourceDetector;
 use opentelemetry_resource_detectors::{OsResourceDetector, ProcessResourceDetector};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
+use opsqueue::common::extension::{CoreApi, Extension};
+use opsqueue::delegation::extension::DelegationExtension;
 use opsqueue::tracing::as_dyn_error;
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
@@ -52,6 +55,24 @@ pub async fn async_main() {
     .await
     .expect("Timed out while initiating the database");
 
+    let notify_on_insert = Arc::new(Notify::new());
+    let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(128);
+
+    let core_api = CoreApi::new(
+        db_pool.clone(),
+        notify_on_insert.clone(),
+        submission_status_changed_tx.clone(),
+    );
+
+    let mut extensions: Vec<Box<dyn Extension>> = Vec::new();
+    if let Some(delegation_server_url) = &config.delegation_server_url {
+        extensions.push(Box::new(DelegationExtension::new(
+            cancellation_token.clone(),
+            core_api,
+            delegation_server_url.clone(),
+        )));
+    }
+
     moro_local::async_scope!(|scope| {
         let checkpoint_handle = scope.spawn(db_pool.periodically_checkpoint_wal());
 
@@ -63,10 +84,14 @@ pub async fn async_main() {
             &cancellation_token,
             &app_healthy_flag,
             prometheus_config,
+            notify_on_insert,
+            submission_status_changed_tx,
+            &extensions,
         ));
 
         let max_age = config.max_submission_age.into();
-        let cleanup_handle = scope.spawn(periodically_cleanup_old(&db_pool, max_age, Vec::new()));
+
+        let cleanup_handle = scope.spawn(periodically_cleanup_old(&db_pool, max_age, &extensions));
 
         let prometheus_handle = scope.spawn(prometheus::periodically_calculate_scaling_metrics(
             &db_pool,

@@ -7,40 +7,57 @@ use crate::db::{Connection, DBPools, WriterConnection};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use axum::Router;
 use tokio::sync::Notify;
 
 #[async_trait]
 pub trait Extension: Send + Sync {
     /// Returns whether the extension references the given submission.
     /// Used to e.g. check if old submissions can be deleted safely.
-    async fn references_submission<'t, 'conn>(
+    async fn references_submission(
         &self,
         submission: SubmissionId,
-        conn: &db::conn::Writer<db::conn::NoTransaction>,
+        conn: &mut db::conn::Writer<db::conn::NoTransaction>,
     ) -> sqlx::Result<bool>;
+
+    /// Allows the Extension to register HTTP handlers.
+    /// Defaults to not registering anything.
+    fn bind_router(&self, router: Router) -> Router {
+        router
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreApi {
     pub pool: DBPools,
     notify_on_insert: Arc<Notify>,
     submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
-    pub submission_status_changed_rx: tokio::sync::broadcast::Receiver<SubmissionId>,
 }
 
 impl CoreApi {
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
         submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
-        submission_status_changed_rx: tokio::sync::broadcast::Receiver<SubmissionId>,
     ) -> Self {
         Self {
             pool,
             notify_on_insert,
             submission_status_changed_tx,
-            submission_status_changed_rx,
         }
+    }
+
+    /// Subscribe before starting a task that processes submission status changes.
+    #[must_use]
+    pub fn subscribe_submission_status_changes(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<SubmissionId> {
+        self.submission_status_changed_tx.subscribe()
+    }
+
+    pub(crate) fn notify_submission_status_changed(&self, id: SubmissionId) {
+        let _ = self.submission_status_changed_tx.send(id);
     }
 
     /// Unpauses the given submission.
@@ -88,16 +105,5 @@ impl CoreApi {
         mut conn: impl Connection,
     ) -> Result<Option<SubmissionStatus>, DatabaseError> {
         submission_status(id, &mut conn).await
-    }
-}
-
-impl Clone for CoreApi {
-    fn clone(&self) -> Self {
-        Self {
-            pool: self.pool.clone(),
-            notify_on_insert: self.notify_on_insert.clone(),
-            submission_status_changed_tx: self.submission_status_changed_tx.clone(),
-            submission_status_changed_rx: self.submission_status_changed_rx.resubscribe(),
-        }
     }
 }

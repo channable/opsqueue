@@ -1553,7 +1553,7 @@ pub mod db {
     pub async fn cleanup_old(
         db: &DBPools,
         older_than: DateTime<Utc>,
-        extensions: &Vec<Box<dyn Extension>>,
+        extensions: &[Box<dyn Extension>],
     ) -> sqlx::Result<()> {
         tracing::info!("Cleaning up old completed/failed submissions...");
 
@@ -1578,7 +1578,7 @@ pub mod db {
 
             for extension in extensions {
                 if extension
-                    .references_submission(submission_id, &write_conn)
+                    .references_submission(submission_id, &mut write_conn)
                     .await?
                 {
                     continue 'outer;
@@ -1596,12 +1596,12 @@ pub mod db {
     pub async fn periodically_cleanup_old(
         db: &DBPools,
         max_age: Duration,
-        extensions: Vec<Box<dyn Extension>>,
+        extensions: &[Box<dyn Extension>],
     ) {
         const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_mins(1);
         loop {
             let cutoff = Utc::now() - max_age;
-            let res = cleanup_old(db, cutoff, &extensions).await;
+            let res = cleanup_old(db, cutoff, extensions).await;
             if let Err(e) = res {
                 tracing::error!(error = as_dyn_error(&e), "Error during periodic cleanup");
             }
@@ -2020,12 +2020,13 @@ pub mod test {
             (cutoff_timestamp, old_four_unfailed)
         };
 
-        cleanup_old(&db, cutoff_timestamp, &vec![]).await.unwrap();
+        cleanup_old(&db, cutoff_timestamp, &[]).await.unwrap();
 
         {
             let mut conn = db.writer_conn().await.unwrap();
 
             assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
+            assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 6);
 
             let _sub1 = submission_status(old_four_unfailed, &mut conn)
                 .await
