@@ -1,5 +1,8 @@
 //! Defines the HTTP endpoints that are used by both the `producer` and `consumer` APIs
 use crate::tracing::as_dyn_error;
+use axum::{Router, routing::get};
+use backon::{BackoffBuilder, FibonacciBuilder};
+use http::{Response, StatusCode, header};
 use std::{
     any::Any,
     mem,
@@ -7,13 +10,11 @@ use std::{
     time::Duration,
 };
 
-use axum::{Router, routing::get};
-use backon::{BackoffBuilder, FibonacciBuilder};
-use http::{Response, StatusCode, header};
-
+use crate::common::extension::Extension;
+use crate::common::submission::SubmissionId;
 use crate::db::DBPools;
 use tokio::select;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 
 fn retry_policy() -> impl BackoffBuilder {
@@ -25,6 +26,7 @@ fn retry_policy() -> impl BackoffBuilder {
 }
 
 #[cfg(feature = "server-logic")]
+#[allow(clippy::too_many_arguments)]
 /// Start serving producer and consumer endpoints.
 ///
 /// # Errors
@@ -38,17 +40,27 @@ pub async fn serve_producer_and_consumer(
     cancellation_token: &CancellationToken,
     app_healthy_flag: &Arc<AtomicBool>,
     prometheus_config: crate::prometheus::PrometheusConfig,
+    notify_on_insert: Arc<Notify>,
+    submission_status_changed_tx: broadcast::Sender<SubmissionId>,
+    extensions: &[Box<dyn Extension>],
 ) -> Result<(), std::io::Error> {
     use backon::Retryable;
 
-    (|| async {
+    (|| {
+        let notify_on_insert = notify_on_insert.clone();
+        let submission_status_changed_tx = submission_status_changed_tx.clone();
+        let prometheus_config = prometheus_config.clone();
+        async move {
         let router = build_router(
             config,
             pool.clone(),
             reservation_expiration,
             cancellation_token,
             app_healthy_flag.clone(),
-            prometheus_config.clone(),
+            prometheus_config,
+            notify_on_insert,
+            submission_status_changed_tx,
+            extensions,
         );
         let listener = tokio::net::TcpListener::bind(server_addr).await?;
         match listener.local_addr() {
@@ -73,6 +85,7 @@ pub async fn serve_producer_and_consumer(
             .with_graceful_shutdown(cancellation_token.clone().cancelled_owned())
             .await?;
         Ok(())
+        }
     })
     .retry(retry_policy())
     .notify(|e, d| {
@@ -90,6 +103,7 @@ pub async fn serve_producer_and_consumer(
 }
 
 #[cfg(feature = "server-logic")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_router(
     config: &'static crate::config::Config,
     pool: DBPools,
@@ -97,12 +111,14 @@ pub fn build_router(
     cancellation_token: &CancellationToken,
     app_healthy_flag: Arc<AtomicBool>,
     prometheus_config: crate::prometheus::PrometheusConfig,
+    notify_on_insert: Arc<Notify>,
+    submission_status_changed_tx: broadcast::Sender<SubmissionId>,
+    extensions: &[Box<dyn Extension>],
 ) -> Router<()> {
-    let notify_on_insert = Arc::new(Notify::new());
-
     let consumer_routes = crate::consumer::server::ServerState::new(
         pool.clone(),
         notify_on_insert.clone(),
+        submission_status_changed_tx.clone(),
         cancellation_token.clone(),
         reservation_expiration,
         config,
@@ -112,13 +128,18 @@ pub fn build_router(
     let producer_routes = crate::producer::server::ServerState::new(
         pool,
         notify_on_insert,
+        submission_status_changed_tx,
         config.max_submissions_returned,
     )
     .build_router();
 
-    let routes = Router::new()
+    let mut routes = Router::new()
         .nest("/producer", producer_routes)
         .nest("/consumer", consumer_routes);
+
+    for extension in extensions {
+        routes = extension.bind_router(routes);
+    }
 
     let tracing_middleware = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(|request: &http::Request<_>| {

@@ -303,6 +303,14 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
+    use super::{
+        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, InitialSubmissionStatus, Metadata,
+        Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
+        SubmissionStatus, Utc, chunk,
+    };
+    use crate::common::chunk::db::delete_chunks;
+    use crate::common::extension::Extension;
+    use crate::db::DBPools;
     use crate::tracing::as_dyn_error;
     use crate::{
         common::{
@@ -313,17 +321,14 @@ pub mod db {
             },
             submission::SubmissionPaused,
         },
-        db::{Connection, True, WriterConnection, WriterPool},
+        db::{Connection, True, WriterConnection},
     };
     use axum_prometheus::metrics::{counter, histogram};
     use chunk::ChunkSize;
+    use futures::StreamExt;
     use sqlx::{Database, QueryBuilder, Sqlite, query, query_as, query_scalar};
-
-    use super::{
-        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, InitialSubmissionStatus, Metadata,
-        Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
-        SubmissionStatus, Utc, chunk,
-    };
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
         fn encode_by_ref(
@@ -542,6 +547,8 @@ pub mod db {
     pub async fn unpause_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
+        notify_on_insert: &Arc<Notify>,
+        submission_status_changed: &tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -550,10 +557,16 @@ pub mod db {
                 // NOTE: We need to check whether the submission is completed, because it might
                 // be the case that we are unpausing a 0-chunk submission.
                 maybe_complete_submission(id, &mut tx).await?;
-                Ok(())
+                Ok::<(), E<DatabaseError, SubmissionNotFound>>(())
             })
         })
-        .await
+        .await?;
+
+        // Wake up any waiting consumers now that new chunks are available.
+        notify_on_insert.notify_waiters();
+        let _ = submission_status_changed.send(id);
+
+        Ok(())
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1166,6 +1179,7 @@ pub mod db {
     pub async fn cancel_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
+        submission_status_changed: &tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> Result<(), E![DatabaseError, SubmissionNotFound, SubmissionNotCancellable]> {
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -1173,10 +1187,13 @@ pub mod db {
                     Ok(()) => Ok(()),
                     Err(E::L(db_err)) => Err(E::L(db_err)),
                     Err(E::R(not_found_err)) => {
-                        // Submission was not found in the 'submissions' table,
-                        // but it could still be in one of the other tables.
+                        // Submission was not found in the 'submissions' or 'submissions_paused'
+                        // tables, but it could still be in one of the other tables.
                         match submission_status(id, &mut tx).await {
                             Ok(None) => Err(E::R(E::L(not_found_err))),
+                            Ok(Some(SubmissionStatus::Paused(submission))) => {
+                                panic!("Failed to cancel paused submission {submission:?}")
+                            }
                             Ok(Some(SubmissionStatus::InProgress(submission))) => {
                                 panic!("Failed to cancel in progress submission {submission:?}")
                             }
@@ -1189,22 +1206,17 @@ pub mod db {
                             Ok(Some(SubmissionStatus::Cancelled(submission))) => {
                                 Err(E::R(E::R(SubmissionNotCancellable::Cancelled(submission))))
                             }
-                            Ok(Some(SubmissionStatus::Paused(_))) => {
-                                // Paused submissions are cancellable.
-                                cancel_paused_submission_notx(id, &mut tx).await.map_err(
-                                    |e| match e {
-                                        E::L(db_err) => E::L(db_err),
-                                        E::R(not_found) => E::R(E::L(not_found)),
-                                    },
-                                )
-                            }
                             Err(db_err) => Err(E::L(db_err)),
                         }
                     }
                 }
             })
         })
-        .await
+        .await?;
+
+        let _ = submission_status_changed.send(id);
+
+        Ok(())
     }
 
     /// Do not call directly! Must be called inside a transaction.
@@ -1212,29 +1224,23 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if cancellation or chunk skipping fails.
-    async fn cancel_submission_notx(
+    pub(crate) async fn cancel_submission_notx(
         id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
+        mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_chunks(id, conn).await?;
-        Ok(())
-    }
+        match cancel_submission_raw(id, &mut conn).await {
+            Ok(()) => {
+                super::chunk::db::skip_remaining_chunks(id, conn).await?;
+                Ok(())
+            }
+            Err(E::R(_not_found)) => {
+                cancel_paused_submission_raw(id, &mut conn).await?;
+                super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
 
-    /// Do not call directly! Must be called inside a transaction.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DatabaseError`] if any SQL query fails.
-    ///
-    /// Returns [`SubmissionNotFound`] if the submission is not found in `submissions_paused`.
-    async fn cancel_paused_submission_notx(
-        id: SubmissionId,
-        mut conn: impl WriterConnection<Transaction = True>,
-    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        cancel_paused_submission_raw(id, &mut conn).await?;
-        super::chunk::db::skip_remaining_paused_chunks(id, conn).await?;
-        Ok(())
+                Ok(())
+            }
+            Err(E::L(db_err)) => Err(E::L(db_err)),
+        }
     }
 
     #[tracing::instrument(skip(conn))]
@@ -1411,6 +1417,45 @@ pub mod db {
         Ok(())
     }
 
+    /// Delete the given submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deletion failed.
+    #[tracing::instrument(skip(conn))]
+    pub async fn delete_submission(
+        submission_id: SubmissionId,
+        mut conn: impl WriterConnection,
+    ) -> sqlx::Result<()> {
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                sqlx::query!(
+                    "
+                    DELETE FROM submissions_paused WHERE id = $1;
+                    DELETE FROM submissions WHERE id = $2;
+                    DELETE FROM submissions_cancelled WHERE id = $3;
+                    DELETE FROM submissions_failed WHERE id = $4;
+                    DELETE FROM submissions_completed WHERE id = $5;
+                    DELETE FROM submissions_metadata WHERE submission_id = $6;
+                    ",
+                    submission_id,
+                    submission_id,
+                    submission_id,
+                    submission_id,
+                    submission_id,
+                    submission_id,
+                )
+                .execute(tx.get_inner())
+                .await?;
+
+                delete_chunks(submission_id, tx).await?;
+
+                Ok(())
+            })
+        })
+        .await
+    }
+
     /// Count in-progress submissions.
     ///
     /// # Errors
@@ -1504,95 +1549,59 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if any cleanup statement in the transaction fails.
-    #[tracing::instrument(skip(conn))]
+    #[tracing::instrument(skip(db, extensions))]
     pub async fn cleanup_old(
-        mut conn: impl Connection,
+        db: &DBPools,
         older_than: DateTime<Utc>,
+        extensions: &[Box<dyn Extension>],
     ) -> sqlx::Result<()> {
         tracing::info!("Cleaning up old completed/failed submissions...");
-        conn.transaction(move |mut tx| {
-            Box::pin(async move {
-                // Clean up old submissions_metadata
-                query!(
-                    "DELETE FROM submissions_metadata
-                    WHERE submission_id IN (
-                        SELECT id FROM submissions_completed WHERE completed_at < julianday($1)
-                    );",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?;
-                query!(
-                    "DELETE FROM submissions_metadata
-                    WHERE submission_id IN (
-                        SELECT id FROM submissions_failed WHERE failed_at < julianday($1)
-                    );",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?;
-                query!(
-                    "DELETE FROM submissions_metadata
-                    WHERE submission_id IN (
-                        SELECT id FROM submissions_cancelled WHERE cancelled_at < julianday($1)
-                    );",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?;
 
-                // Clean up old submissions:
-                let n_submissions_completed = query!(
-                    "DELETE FROM submissions_completed WHERE completed_at < julianday($1);",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?.rows_affected();
-                let n_submissions_failed = query!(
-                    "DELETE FROM submissions_failed WHERE failed_at < julianday($1);",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?.rows_affected();
-                let n_submissions_cancelled = query!(
-                    "DELETE FROM submissions_cancelled WHERE cancelled_at < julianday($1);",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?.rows_affected();
+        let mut read_conn = db.reader_conn().await?;
+        let mut write_conn = db.writer_conn().await?;
 
-                let n_chunks_completed = query!(
-                    "DELETE FROM chunks_completed WHERE completed_at < julianday($1);",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?.rows_affected();
-                let n_chunks_failed = query!(
-                    "DELETE FROM chunks_failed WHERE failed_at < julianday($1);",
-                    older_than
-                )
-                    .execute(tx.get_inner())
-                    .await?.rows_affected();
+        let mut old_submissions = query!(
+            r#"
+            SELECT id AS "id: SubmissionId" FROM submissions_completed WHERE completed_at < julianday($1)
+            UNION
+            SELECT id AS "id: SubmissionId" FROM submissions_failed WHERE failed_at < julianday($1)
+            UNION
+            SELECT id AS "id: SubmissionId" FROM submissions_cancelled WHERE cancelled_at < julianday($1)
+            "#,
+            older_than
+        ).fetch(read_conn.get_inner());
 
-                tracing::info!("Deleted {n_submissions_completed} completed submissions (with {n_chunks_completed} chunks completed)");
-                tracing::info!("Deleted {n_submissions_failed} failed submissions (with {n_chunks_failed} chunks failed)");
-                tracing::info!("Deleted {n_submissions_cancelled} cancelled submissions");
-                Ok(())
-            })
-        })
-            .await
+        let mut deleted_count: u64 = 0;
+
+        'outer: while let Some(res) = old_submissions.next().await {
+            let submission_id = res?.id;
+
+            for extension in extensions {
+                if extension
+                    .references_submission(submission_id, &mut write_conn)
+                    .await?
+                {
+                    continue 'outer;
+                }
+            }
+
+            delete_submission(submission_id, &mut write_conn).await?;
+            deleted_count += 1;
+        }
+
+        tracing::debug!("Deleted {deleted_count} old submissions");
+        Ok(())
     }
 
-    pub async fn periodically_cleanup_old(db: &WriterPool, max_age: Duration) {
+    pub async fn periodically_cleanup_old(
+        db: &DBPools,
+        max_age: Duration,
+        extensions: &[Box<dyn Extension>],
+    ) {
         const PERIODIC_CLEANUP_INTERVAL: Duration = Duration::from_mins(1);
         loop {
             let cutoff = Utc::now() - max_age;
-            let res: sqlx::Result<()> = async move {
-                let mut conn = db.writer_conn().await?;
-                cleanup_old(&mut conn, cutoff).await?;
-                Ok(())
-            }
-            .await;
+            let res = cleanup_old(db, cutoff, extensions).await;
             if let Err(e) = res {
                 tracing::error!(error = as_dyn_error(&e), "Error during periodic cleanup");
             }
@@ -1604,16 +1613,17 @@ pub mod db {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
+    use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
+    use crate::db::{Connection as _, DBPools, WriterPool};
     use chrono::Utc;
     use chunk::ChunkSize;
     use itertools::Itertools;
     use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::{Execute, Row, Sqlite};
     use std::assert_matches;
-
-    use crate::common::StrategicMetadataMap;
-    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
-    use crate::db::{Connection as _, WriterPool};
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     use super::db::*;
     use super::*;
@@ -1867,141 +1877,164 @@ pub mod test {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    pub async fn test_cleanup_old(db: sqlx::SqlitePool) {
-        let db = WriterPool::new(db);
-        let mut conn = db.writer_conn().await.unwrap();
-
-        let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
-        let old_one = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_two = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_three = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let old_four_unfailed = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-
-        fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
+    pub async fn test_cleanup_old(
+        pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
+        conn_opts: sqlx::sqlite::SqliteConnectOptions,
+    ) {
+        let reader_pool = pool_opts
+            .clone()
+            .max_connections(16)
+            .connect_with(conn_opts.clone())
             .await
             .unwrap();
-        fail_submission(old_two, u63::new(0).into(), "Broken two".into(), &mut conn)
+        let writer_pool = pool_opts
+            .max_connections(1)
+            .connect_with(conn_opts)
             .await
             .unwrap();
-        fail_submission(
-            old_three,
-            u63::new(0).into(),
-            "Broken three".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
+        let db = DBPools::from_test_pools(&reader_pool, &writer_pool);
 
-        // Ensure the clock is advanced ever so slightly.
-        // Not doing this makes the test flaky.
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        let (cutoff_timestamp, old_four_unfailed) = {
+            let mut conn = db.writer_conn().await.unwrap();
 
-        let cutoff_timestamp = Utc::now();
-
-        let too_new_one = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let _too_new_two_unfailed = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let too_new_three = insert_submission_from_chunks(
-            None,
-            chunks_contents.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-
-        fail_submission(
-            too_new_one,
-            u63::new(0).into(),
-            "Broken new one".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        fail_submission(
-            too_new_three,
-            u63::new(0).into(),
-            "Broken new three".into(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
-
-        let mut conn2 = db.writer_conn().await.unwrap();
-        cleanup_old(&mut conn2, cutoff_timestamp).await.unwrap();
-
-        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
-
-        let _sub1 = submission_status(old_four_unfailed, &mut conn)
+            let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
+            let old_one = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
             .await
             .unwrap();
-        let _sub2 = submission_status(old_four_unfailed, &mut conn)
+            let old_two = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
             .await
             .unwrap();
+            let old_three = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let old_four_unfailed = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+
+            fail_submission(old_one, u63::new(0).into(), "Broken one".into(), &mut conn)
+                .await
+                .unwrap();
+            fail_submission(old_two, u63::new(0).into(), "Broken two".into(), &mut conn)
+                .await
+                .unwrap();
+            fail_submission(
+                old_three,
+                u63::new(0).into(),
+                "Broken three".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+
+            // Ensure the clock is advanced ever so slightly.
+            // Not doing this makes the test flaky.
+            tokio::time::sleep(Duration::from_millis(1)).await;
+
+            let cutoff_timestamp = Utc::now();
+
+            let too_new_one = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let _too_new_two_unfailed = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            let too_new_three = insert_submission_from_chunks(
+                None,
+                chunks_contents.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+
+            fail_submission(
+                too_new_one,
+                u63::new(0).into(),
+                "Broken new one".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+            fail_submission(
+                too_new_three,
+                u63::new(0).into(),
+                "Broken new three".into(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 5);
+
+            (cutoff_timestamp, old_four_unfailed)
+        };
+
+        cleanup_old(&db, cutoff_timestamp, &[]).await.unwrap();
+
+        {
+            let mut conn = db.writer_conn().await.unwrap();
+
+            assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 2);
+            assert_eq!(count_chunks_failed(&mut conn).await.unwrap(), 6);
+
+            let _sub1 = submission_status(old_four_unfailed, &mut conn)
+                .await
+                .unwrap();
+            let _sub2 = submission_status(old_four_unfailed, &mut conn)
+                .await
+                .unwrap();
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -2144,6 +2177,9 @@ pub mod test {
     pub async fn test_unpause_submission(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
+        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+        let notify_on_insert = Arc::new(Notify::new());
+
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
@@ -2159,7 +2195,14 @@ pub mod test {
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
 
-        unpause_submission(submission.id, &mut conn).await.unwrap();
+        unpause_submission(
+            submission.id,
+            &mut conn,
+            &notify_on_insert,
+            &submission_status_changed_tx,
+        )
+        .await
+        .unwrap();
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
         assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 3);
@@ -2170,6 +2213,9 @@ pub mod test {
     pub async fn test_unpausing_a_zero_chunk_submission_completes_it(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
+        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+        let notify_on_insert = Arc::new(Notify::new());
+
         let (submission, chunks) =
             Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
         insert_paused_submission(submission.clone(), chunks, &mut conn)
@@ -2182,7 +2228,14 @@ pub mod test {
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
 
-        unpause_submission(submission.id, &mut conn).await.unwrap();
+        unpause_submission(
+            submission.id,
+            &mut conn,
+            &notify_on_insert,
+            &submission_status_changed_tx,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
         assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
@@ -2195,6 +2248,8 @@ pub mod test {
     pub async fn test_cancel_paused_submission(db: sqlx::SqlitePool) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
+        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
             None,
@@ -2208,7 +2263,9 @@ pub mod test {
         assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
 
-        cancel_submission(submission.id, &mut conn).await.unwrap();
+        cancel_submission(submission.id, &mut conn, &submission_status_changed_tx)
+            .await
+            .unwrap();
 
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
         assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
