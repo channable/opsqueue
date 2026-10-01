@@ -7,12 +7,12 @@ repository = "https://github.com/channable/opsqueue"
 license = "MIT"
 
 [lib]
-name="opsqueue"
-path="src/lib.rs"
+name = "opsqueue"
+path = "src/lib.rs"
 
 [[bin]]
-name="opsqueue"
-path="app/main.rs"
+name = "opsqueue"
+path = "app/main.rs"
 required-features = ["server-logic"]
 
 [dependencies]
@@ -72,6 +72,7 @@ humantime.workspace = true
 dashmap.workspace = true
 sqlformat.workspace = true
 workspace-hack.workspace = true
+async-trait = "0.1.91"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -80,6 +81,8 @@ workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+wiremock = "0.6.5"
+tower = "0.5.3"
 
 [[bench]]
 name = "chunks_select"
@@ -98,8 +101,9 @@ server-logic = [
     "dep:tower-http",
     "dep:axum-prometheus",
     "dep:sentry",
-    "dep:sentry-tracing"
-    ]
+    "dep:sentry-tracing",
+    "dep:reqwest",
+]
 # Dependencies only in use by the client libraries:
 client-logic = [
     "dep:reqwest",
