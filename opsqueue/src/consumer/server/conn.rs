@@ -227,6 +227,7 @@ impl ConsumerConn {
                         }
                     }
                     Ok(vals) if !vals.is_empty() => Some(ChunksReserved(Ok(vals))),
+                    // 0 chunks were reserved.
                     Ok(_) => {
                         // No work to do right now. Retry when new work is inserted.
                         tracing::debug!(
