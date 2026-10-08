@@ -31,9 +31,13 @@ impl Drop for ConsumerState {
 
         // We're not tracking chunk durations that are unreserved during consumer shutdown,
         // as those will be by definition unfinished
+        let had_reservations = !reservations.is_empty();
         self.server_state
             .dispatcher
             .finish_reservations_sync(reservations.iter());
+        if had_reservations {
+            self.server_state.notify_on_insert.notify_waiters();
+        }
     }
 }
 
@@ -114,27 +118,83 @@ impl ConsumerState {
 
     #[tracing::instrument(skip(self, output_content))]
     pub async fn complete_chunk(&mut self, id: ChunkId, output_content: chunk::Content) {
-        // Only possible error indicates sender is closed, which means we're shutting down
-        let _ = self
-            .server_state
-            .completer_tx
-            .send(CompleterMessage::Complete {
-                id,
-                output_content,
-                reservations: self.reservations.clone(),
-            })
+        self.enqueue_chunk_outcome(id, CompleterMessage::Complete { id, output_content })
             .await;
     }
 
     pub async fn fail_chunk(&mut self, id: ChunkId, failure: String) {
-        let _ = self
-            .server_state
-            .completer_tx
-            .send(CompleterMessage::Fail {
-                id,
-                failure,
-                reservations: self.reservations.clone(),
-            })
+        self.enqueue_chunk_outcome(id, CompleterMessage::Fail { id, failure })
             .await;
+    }
+
+    async fn enqueue_chunk_outcome(&mut self, id: ChunkId, outcome: CompleterMessage) {
+        // Once queued, the completer owns the reservation even if this connection closes.
+        if let Ok(()) = self.server_state.completer_tx.send(outcome).await {
+            self.reservations.lock().expect("No poison").remove(&id);
+        } else {
+            tracing::debug!(?id, "Chunk completer unavailable while shutting down");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::sync::{Notify, broadcast, mpsc};
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::ChunkSize;
+    use crate::common::submission::InitialSubmissionStatus;
+    use crate::db::DBPools;
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn queued_completion_stays_reserved_when_consumer_disconnects(pool: sqlx::SqlitePool) {
+        let db_pools = DBPools::from_test_pool(&pool);
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            vec![Some("work".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let notify_on_insert = Arc::new(Notify::new());
+        let server_state = Arc::new(ServerState::new(
+            db_pools,
+            notify_on_insert.clone(),
+            broadcast::channel(10).0,
+            CancellationToken::new(),
+            Duration::from_mins(1),
+            Box::leak(Box::default()),
+        ));
+        let mut consumer = ConsumerState::new(&server_state);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let chunks = consumer
+            .fetch_and_reserve_chunks(strategy::Strategy::Oldest, 1, &tx)
+            .await
+            .unwrap();
+        let chunk_id = ChunkId::from((chunks[0].0.submission_id, chunks[0].0.chunk_index));
+
+        let mut notification = Box::pin(notify_on_insert.notified_owned());
+        notification.as_mut().enable();
+        consumer.complete_chunk(chunk_id, None).await;
+        drop(consumer);
+
+        assert!(server_state.dispatcher.reserver().is_reserved(&chunk_id));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), notification)
+                .await
+                .is_err(),
+            "A queued completion should not wake waiting consumers on disconnect"
+        );
     }
 }
