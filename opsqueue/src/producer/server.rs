@@ -17,15 +17,21 @@ use super::common::{ChunkContents, InsertSubmission};
 
 pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
     let max_submissions = crate::config::Config::default().max_submissions_returned;
-    ServerState::new(database_pool, Arc::new(Notify::new()), max_submissions)
-        .serve_for_tests(server_addr)
-        .await;
+    ServerState::new(
+        database_pool,
+        Arc::new(Notify::new()),
+        tokio::sync::broadcast::channel(10).0,
+        max_submissions,
+    )
+    .serve_for_tests(server_addr)
+    .await;
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: DBPools,
     notify_on_insert: Arc<Notify>,
+    submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
     max_submissions: MaxSubmissions,
 }
 
@@ -33,11 +39,13 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
+        submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
         max_submissions: MaxSubmissions,
     ) -> Self {
         ServerState {
             pool,
             notify_on_insert,
+            submission_status_changed,
             max_submissions,
         }
     }
@@ -130,16 +138,15 @@ async fn cancel_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::cancel_submission(submission_id, &mut conn).await {
-        Ok(()) => Ok(()),
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(L(not_found_err))) => {
-            Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
-        }
-        Err(R(R(not_cancellable_err))) => {
-            Err((StatusCode::CONFLICT, Json(not_cancellable_err)).into_response())
-        }
-    }
+    submission::db::cancel_submission(submission_id, &mut conn, &state.submission_status_changed)
+        .await
+        .map_err(|err| match err {
+            L(db_err) => ServerError(db_err.into()).into_response(),
+            R(L(not_found_err)) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+            R(R(not_cancellable_err)) => {
+                (StatusCode::CONFLICT, Json(not_cancellable_err)).into_response()
+            }
+        })
 }
 
 /// 200 if the submission was successfully unpaused.
@@ -154,15 +161,17 @@ async fn unpause_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::unpause_submission(submission_id, &mut conn).await {
-        Ok(()) => {
-            // Wake up any waiting consumers now that new chunks are available.
-            state.notify_on_insert.notify_waiters();
-            Ok(())
-        }
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(not_found_err)) => Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response()),
-    }
+    submission::db::unpause_submission(
+        submission_id,
+        &mut conn,
+        &state.notify_on_insert,
+        &state.submission_status_changed,
+    )
+    .await
+    .map_err(|err| match err {
+        L(db_err) => ServerError(db_err.into()).into_response(),
+        R(not_found_err) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+    })
 }
 
 async fn submission_status(
