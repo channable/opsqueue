@@ -59,7 +59,7 @@ use std::{marker::PhantomData, num::NonZero, time::Duration};
 use futures::future::BoxFuture;
 use magic::Bool;
 use sqlx::{
-    Connection as _, Sqlite, SqliteConnection, SqlitePool,
+    ConnectOptions, Connection as _, Sqlite, SqliteConnection, SqlitePool,
     migrate::MigrateDatabase,
     sqlite::SqlitePoolOptions,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -69,6 +69,7 @@ use conn::{Conn, NoTransaction, Reader, Tx, Writer};
 
 pub use magic::{False, True};
 use tokio::time::MissedTickBehavior;
+use tracing::log::LevelFilter;
 
 /// A [`Pool`] that can produce [`Writer`]s.
 pub type WriterPool = Pool<True>;
@@ -347,10 +348,9 @@ impl WriterPool {
 ///
 /// Returns an error if the checkpoint query fails.
 pub async fn perform_explicit_wal_checkpoint(mut conn: impl WriterConnection) -> sqlx::Result<()> {
-    let res: (i32, i32, i32) = sqlx::query_as("PRAGMA wal_checkpoint(RESTART);")
+    sqlx::query("PRAGMA wal_checkpoint(RESTART);")
         .fetch_one(conn.get_inner())
         .await?;
-    tracing::debug!("WAL checkpoint completed {res:?}");
     Ok(())
 }
 
@@ -450,6 +450,8 @@ fn db_options(database_filename: &str) -> SqliteConnectOptions {
         .busy_timeout(Duration::from_secs(5)) // Matches the SQLx default (*not* the sqlite-on-its-own default, which is 'error immediately'), but made explicit as it is subject to change
         .pragma("wal_autocheckpoint", "0") // Turn the passive autocheckpointing _off_, as we do our own explicit active checkpointing
         .pragma("journal_size_limit", format!("{}", 4 * 1024 * 1024)) // Truncate WAL file down to 4 MiB after checkpointing
+        .log_statements(LevelFilter::Trace) // Do not spam log at DEBUG level.
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1)) // Warn for slow queries.
 }
 
 async fn ensure_db_exists(database_filename: &str) {
