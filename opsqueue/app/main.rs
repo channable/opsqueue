@@ -133,14 +133,15 @@ pub async fn async_main() {
 /// are expected to be set as environment variables
 /// (and if unset, Sentry support is turned off)
 fn init_sentry() -> sentry::ClientInitGuard {
-    let options = sentry::ClientOptions {
-        // We want to send traces to whatever is configured for OpenTelemetry, *not* sentry:
-        traces_sample_rate: 0.0,
-        send_default_pii: true,
-        release: sentry::release_name!(),
-        in_app_include: vec!["opsqueue::"],
-        ..Default::default()
-    };
+    let mut options = sentry::ClientOptions::new()
+        // We want to send traces to whatever is configured for OpenTelemetry,
+        // *not* sentry.
+        .traces_sample_rate(0.0)
+        .send_default_pii(true)
+        .in_app_include(vec!["opsqueue::"]);
+    if let Some(release_name) = sentry::release_name!() {
+        options = options.release(release_name);
+    }
     sentry::init(options)
 }
 
