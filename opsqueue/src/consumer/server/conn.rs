@@ -211,6 +211,10 @@ impl ConsumerConn {
         use SyncServerToClientResponse::ChunksReserved;
         let maybe_response = match msg.contents {
             WantToReserveChunks { max, strategy } => {
+                // Register before querying so a chunk becoming available during the query
+                // cannot leave this request waiting for a second notification.
+                let mut notification = Box::pin(self.notify_on_insert.clone().notified_owned());
+                notification.as_mut().enable();
                 let chunks_or_err = self
                     .consumer_state
                     .fetch_and_reserve_chunks(strategy.clone(), max, &self.tx)
@@ -228,15 +232,14 @@ impl ConsumerConn {
                     }
                     Ok(vals) if !vals.is_empty() => Some(ChunksReserved(Ok(vals))),
                     Ok(_) => {
-                        // No work to do right now. Retry when new work is inserted.
+                        // No work to do right now. Retry when work becomes available.
                         tracing::debug!(
                             "No work to do for {} / {max} / {strategy:?}, retrying later",
                             msg.nonce
                         );
-                        let notifier = self.notify_on_insert.clone();
                         let tx2 = self.tx2.clone();
                         tokio::spawn(async move {
-                            notifier.notified().await;
+                            notification.await;
                             let _ = tx2.send(RetryReservation {
                                 nonce: msg.nonce,
                                 max,

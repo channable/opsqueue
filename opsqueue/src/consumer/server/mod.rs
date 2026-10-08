@@ -1,9 +1,5 @@
 use crate::tracing::{anyhow_as_dyn_error, as_dyn_error};
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -85,6 +81,7 @@ impl ServerState {
             pool.writer_pool(),
             &dispatcher,
             config.max_chunk_retries,
+            notify_on_insert.clone(),
             submission_status_changed,
         );
         Self {
@@ -152,32 +149,22 @@ pub enum CompleterMessage {
     Complete {
         id: ChunkId,
         output_content: crate::common::chunk::Content,
-        reservations: Arc<Mutex<HashSet<ChunkId>>>,
     },
     Fail {
         id: ChunkId,
         failure: String,
-        reservations: Arc<Mutex<HashSet<ChunkId>>>,
     },
 }
 
 impl std::fmt::Debug for CompleterMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Complete {
-                id,
-                output_content,
-                reservations: _,
-            } => f
+            Self::Complete { id, output_content } => f
                 .debug_struct("Complete")
                 .field("id", id)
                 .field("output_content", output_content)
                 .finish_non_exhaustive(),
-            Self::Fail {
-                id,
-                failure,
-                reservations: _,
-            } => f
+            Self::Fail { id, failure } => f
                 .debug_struct("Fail")
                 .field("id", id)
                 .field("failure", failure)
@@ -193,6 +180,7 @@ pub struct Completer {
     dispatcher: Dispatcher,
     count: usize,
     max_chunk_retries: u32,
+    notify_on_insert: Arc<Notify>,
     submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
 }
 
@@ -202,6 +190,7 @@ impl Completer {
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
         max_chunk_retries: u32,
+        notify_on_insert: Arc<Notify>,
         submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
@@ -212,6 +201,7 @@ impl Completer {
             dispatcher: dispatcher.clone(),
             count: 0,
             max_chunk_retries,
+            notify_on_insert,
             submission_status_changed,
         };
         (me, tx)
@@ -240,11 +230,7 @@ impl Completer {
             let mut conn = self.pool.writer_conn().await?;
 
             match msg {
-                CompleterMessage::Complete {
-                    id,
-                    output_content,
-                    reservations,
-                } => {
+                CompleterMessage::Complete { id, output_content } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
                     let db_res = crate::common::chunk::db::complete_chunk(
@@ -255,10 +241,11 @@ impl Completer {
                     )
                     .await;
 
-                    reservations.lock().expect("No poison").remove(&id);
+                    // Only delay release after a successful write, to avoid re-reserving
+                    // a completed chunk from a stale SQLite read cursor.
                     if let Some(started_at) = self
                         .dispatcher
-                        .finish_reservation(&mut conn, id, true)
+                        .finish_reservation(&mut conn, id, db_res.is_ok())
                         .await
                     {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
@@ -266,6 +253,10 @@ impl Completer {
                     }
                     histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION)
                         .record(start.elapsed());
+
+                    if db_res.is_err() {
+                        self.notify_on_insert.notify_waiters();
+                    }
 
                     // And while we have the connection already,
                     // let's make an extra WAL checkpoint every so often
@@ -276,11 +267,7 @@ impl Completer {
                     db_res?;
                     Ok(())
                 }
-                CompleterMessage::Fail {
-                    id,
-                    failure,
-                    reservations,
-                } => {
+                CompleterMessage::Fail { id, failure } => {
                     // Even in the unlikely event that the DB write fails,
                     // we still want to unreserve the chunk
                     let failed_permanently = crate::common::chunk::db::retry_or_fail_chunk(
@@ -291,7 +278,6 @@ impl Completer {
                         &self.submission_status_changed,
                     )
                     .await;
-                    reservations.lock().expect("No poison").remove(&id);
                     let maybe_started_at = self
                         .dispatcher
                         .finish_reservation(
@@ -308,6 +294,9 @@ impl Completer {
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
 
+                    if !matches!(failed_permanently.as_ref(), Ok(true)) {
+                        self.notify_on_insert.notify_waiters();
+                    }
                     failed_permanently?;
                     Ok(())
                 }
