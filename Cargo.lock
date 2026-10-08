@@ -3055,8 +3055,9 @@ dependencies = [
 
 [[package]]
 name = "snowflaked"
-version = "1.0.3"
-source = "git+https://github.com/channable/snowflaked-rs.git#3c2eb5ae4d1c1996288e307db16c008bb58a30e0"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e4a0075010bb8087dfb23a28f56f72c786f1c2354424c593af6c4c97de1611a"
 dependencies = [
  "loom",
 ]
