@@ -570,8 +570,51 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::common::submission::InitialSubmissionStatus;
+    use crate::common::submission::{InitialSubmissionStatus, SubmissionId};
     use crate::{common::StrategicMetadataMap, db};
+
+    async fn insert_one_chunk(db_pools: &db::DBPools) -> SubmissionId {
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            vec![Some("retry me".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut conn,
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn start_test_server(
+        db_pools: db::DBPools,
+    ) -> (String, CancellationToken, tokio::task::JoinHandle<()>) {
+        let cancellation_token = CancellationToken::new();
+        let notify_on_insert = Arc::new(tokio::sync::Notify::new());
+        let submission_status_changed = tokio::sync::broadcast::channel(10).0;
+        let config = Box::leak(Box::default());
+        let app = axum::Router::new().nest(
+            "/consumer",
+            crate::consumer::server::ServerState::new(
+                db_pools,
+                notify_on_insert,
+                submission_status_changed,
+                cancellation_token.clone(),
+                Duration::from_mins(1),
+                config,
+            )
+            .run_background()
+            .build_router(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (addr.to_string(), cancellation_token, server)
+    }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
@@ -637,5 +680,130 @@ mod tests {
 
         let _three = three.await;
         let _two = two.await;
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn retry_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let submission_id = insert_one_chunk(&db_pools).await;
+        let (addr, cancellation_token, server) = start_test_server(db_pools).await;
+        let client = Client::new(&addr).await.unwrap();
+        let (chunk, _) = client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let next_reservation = client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "The only chunk is still reserved"
+        );
+
+        client.fail_chunk(chunk_id, "retry".into()).await.unwrap();
+        let chunks = tokio::time::timeout(Duration::from_secs(5), next_reservation)
+            .await
+            .expect("Retrying a failed chunk should wake the waiting consumer")
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            ChunkId::from((chunks[0].0.submission_id, chunks[0].0.chunk_index)),
+            chunk_id
+        );
+
+        cancellation_token.cancel();
+        server.abort();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn disconnect_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let submission_id = insert_one_chunk(&db_pools).await;
+        let (addr, cancellation_token, server) = start_test_server(db_pools).await;
+        let first_client = Client::new(&addr).await.unwrap();
+        let waiting_client = Client::new(&addr).await.unwrap();
+        let (chunk, _) = first_client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let next_reservation = waiting_client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "The only chunk is still reserved"
+        );
+
+        drop(first_client);
+        let chunks = tokio::time::timeout(Duration::from_secs(5), next_reservation)
+            .await
+            .expect("Disconnecting the reserving consumer should wake the waiting consumer")
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            ChunkId::from((chunks[0].0.submission_id, chunks[0].0.chunk_index)),
+            chunk_id
+        );
+
+        cancellation_token.cancel();
+        server.abort();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn failed_completion_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let submission_id = insert_one_chunk(&db_pools).await;
+        sqlx::query(
+            "CREATE TRIGGER reject_completion BEFORE INSERT ON chunks_completed
+             BEGIN SELECT RAISE(ABORT, 'completion rejected'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (addr, cancellation_token, server) = start_test_server(db_pools).await;
+        let client = Client::new(&addr).await.unwrap();
+        let (chunk, _) = client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let next_reservation = client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "The only chunk is still reserved"
+        );
+
+        client.complete_chunk(chunk_id, None).await.unwrap();
+        let chunks = tokio::time::timeout(Duration::from_secs(5), next_reservation)
+            .await
+            .expect("A failed DB completion should wake the waiting consumer")
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            ChunkId::from((chunks[0].0.submission_id, chunks[0].0.chunk_index)),
+            chunk_id
+        );
+
+        cancellation_token.cancel();
+        server.abort();
     }
 }
