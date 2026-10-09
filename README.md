@@ -348,14 +348,14 @@ definitions of each of the states follows below:
 
 ```mermaid
 stateDiagram
-    [*]       --> Paused: Inserted paused
-    [*]       --> Available: Inserted active
+    [*]       --> Available: Submission created
+    [*]       --> Paused: Submission created paused
     Paused    --> Available: Submission unpaused
-    Available --> Reserved: Consumer reserves
-    Reserved  --> Completed: Completion saved
-    Reserved  --> Available: Failed attempt, retries remain
+    Available --> Reserved: Consumer reserves chunk
+    Reserved  --> Completed: Consumer reports completed chunk
+    Reserved  --> Available: Consumer reports failed chunk, retries remain
     Reserved  --> Available: Consumer disconnects
-    Reserved  --> Available: Completion write fails (delayed release)
+    Reserved  --> Available: Recording completion fails
     Reserved  --> Failed: Retry limit reached
     Paused    --> Skipped: Submission cancelled
     Available --> Skipped: Submission cancelled or failed
