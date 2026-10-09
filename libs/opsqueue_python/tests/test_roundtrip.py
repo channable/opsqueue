@@ -929,12 +929,8 @@ def test_streams_chunks_in_order_when_consumers_complete_out_of_order(
     first_consumer = ConsumerClient(f"localhost:{opsqueue.port}", url)
     second_consumer = ConsumerClient(f"localhost:{opsqueue.port}", url)
 
-    [first_chunk] = first_consumer.reserve_chunks(
-        max=1, strategy=Strategy.Oldest()
-    )
-    [second_chunk] = second_consumer.reserve_chunks(
-        max=1, strategy=Strategy.Oldest()
-    )
+    [first_chunk] = first_consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
+    [second_chunk] = second_consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
     assert (first_chunk.chunk_index, second_chunk.chunk_index) == (0, 1)
 
     second_consumer.complete_chunk(
