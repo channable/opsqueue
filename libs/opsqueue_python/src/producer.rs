@@ -425,7 +425,10 @@ impl ProducerClient {
     ///
     /// `strategy` must be `Oldest`, and consumers processing this submission must
     /// also reserve chunks using `Oldest`.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValueError` if `strategy` is not `Oldest`.
     pub fn stream_submission_chunks(
         &self,
         submission_id: SubmissionId,
