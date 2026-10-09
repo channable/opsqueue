@@ -235,12 +235,11 @@ impl Completer {
                     output_content,
                     reservations,
                 } => {
-                    // Even in the unlikely event that the DB write fails,
-                    // we still want to unreserve the chunk
                     let db_res =
                         crate::common::chunk::db::complete_chunk(id, output_content, &mut conn)
                             .await;
-
+                    // Even in the unlikely event that the DB write fails,
+                    // we still want to unreserve the chunk
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self
                         .dispatcher
@@ -267,8 +266,6 @@ impl Completer {
                     failure,
                     reservations,
                 } => {
-                    // Even in the unlikely event that the DB write fails,
-                    // we still want to unreserve the chunk
                     let failed_permanently = crate::common::chunk::db::retry_or_fail_chunk(
                         id,
                         failure,
@@ -276,6 +273,8 @@ impl Completer {
                         self.max_chunk_retries,
                     )
                     .await;
+                    // Even in the unlikely event that the DB write fails,
+                    // we still want to unreserve the chunk
                     reservations.lock().expect("No poison").remove(&id);
                     let maybe_started_at = self
                         .dispatcher
