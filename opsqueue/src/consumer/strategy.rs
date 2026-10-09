@@ -214,7 +214,7 @@ impl Strategy {
         qb: &'a mut QueryBuilder<Sqlite>,
         columns: &'static str,
         table_name: &'static str,
-        condition: Option<&str>,
+        condition: Option<&'static str>,
     ) -> &'a mut QueryBuilder<Sqlite> {
         let random_offset: u16 = rand::random();
         let push_select = |qb: &mut QueryBuilder<Sqlite>, operator: &str| {
@@ -409,11 +409,38 @@ pub mod test {
 
         let qb = Strategy::Random.build_query(&mut qb);
 
-        assert!(qb.sql().as_str().contains("random_order >= ?"));
-        assert!(qb.sql().as_str().contains("random_order < ?"));
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          *
+        FROM
+          chunks
+        WHERE
+          random_order >= ?
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+        UNION ALL
+        SELECT
+          *
+        FROM
+          chunks
+        WHERE
+          random_order < ?
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+        ");
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
+        insta::assert_snapshot!(explained, @r"
+        1, 0, COMPOUND QUERY
+        2, 1, LEFT-MOST SUBQUERY
+        5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        26, 1, UNION ALL
+        29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -798,7 +825,9 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     /// Tests whether the 'cutting the deck' technique is working
     ///
-    /// Repeated selects should eventually return a different ordering.
+    /// We do this by checking whether two selects in a huge amount of available chunks
+    /// give a different result.
+    /// (There is a super tiny chance of this test flaking).
     pub async fn test_random_strategy_is_random(pool: sqlx::SqlitePool) {
         let db_pools = crate::db::DBPools::from_test_pool(&pool);
 
@@ -818,32 +847,24 @@ pub mod test {
 
         let mut conn = db_pools.reader_conn().await.unwrap();
         register_lookup_noops(conn.get_inner()).await;
-        let mut first_query = QueryBuilder::default();
-        let first_result: Vec<Chunk> = Strategy::Random
-            .build_query(&mut first_query)
+        let mut query_builder = QueryBuilder::default();
+        let vals1: Vec<Chunk> = Strategy::Random
+            .build_query(&mut query_builder)
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()
             .await
             .unwrap();
 
-        let mut observed_different_order = false;
-        for _ in 0..32 {
-            let mut query_builder = QueryBuilder::default();
-            let result: Vec<Chunk> = Strategy::Random
-                .build_query(&mut query_builder)
-                .build_query_as()
-                .fetch(conn.get_inner())
-                .try_collect()
-                .await
-                .unwrap();
+        let mut query_builder = QueryBuilder::default();
+        let vals2: Vec<Chunk> = Strategy::Random
+            .build_query(&mut query_builder)
+            .build_query_as()
+            .fetch(conn.get_inner())
+            .try_collect()
+            .await
+            .unwrap();
 
-            if result != first_result {
-                observed_different_order = true;
-                break;
-            }
-        }
-
-        assert!(observed_different_order);
+        assert_ne!(vals1, vals2);
     }
 }
