@@ -3,8 +3,8 @@
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
 import logging
+import time
 from collections.abc import Iterator, Sequence
-import asyncio
 
 import pytest
 from conftest import (
@@ -29,6 +29,7 @@ from opsqueue.producer import (
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
     TooManyMatchingSubmissionsError,
+    InitialSubmissionStatus,
 )
 
 SUBMISSION_COMPLETED_TIMEOUT = 10.0
@@ -337,6 +338,7 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
     """
     A simple sanity check to ensure the async API does its basic job
     """
+    import asyncio
 
     def run_consumer() -> None:
         def increment_list(ints: Sequence[int], _chunk: Chunk) -> Sequence[int]:
@@ -866,6 +868,10 @@ def test_streams_completed_chunks_before_submission_finishes(
     ):
         results = producer_client.stream_submission_chunks(submission_id)
         assert next(results) == b"[1]"
+        assert isinstance(
+            producer_client.get_submission_status(submission_id),
+            SubmissionStatus.InProgress,
+        )
         assert next(results) == b"[2]"
 
 
@@ -873,6 +879,8 @@ def test_async_streams_completed_chunks_before_submission_finishes(
     opsqueue: OpsqueueProcess,
     any_consumer_strategy: StrategyDescription,
 ) -> None:
+    import asyncio
+
     url = "file:///tmp/opsqueue/test_async_streaming_results"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission_chunks(

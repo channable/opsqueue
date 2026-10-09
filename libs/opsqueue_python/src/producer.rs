@@ -536,6 +536,7 @@ impl ProducerClient {
                                 ),
                             ));
                         }
+                        submission::SubmissionStatus::Paused(_) => {}
                         submission::SubmissionStatus::Cancelled(_) => {
                             return Some((
                                 Err(StreamingChunkError::Cancelled),
