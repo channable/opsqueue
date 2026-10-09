@@ -98,7 +98,7 @@ impl Strategy {
             "opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE";
         match self {
             Oldest => qb.push(format!(
-                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC"
+                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC, chunk_index ASC"
             )),
             Newest => qb.push(format!(
                 "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id DESC"
@@ -379,7 +379,8 @@ pub mod test {
         WHERE
           opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
-          submission_id ASC
+          submission_id ASC,
+          chunk_index ASC
         ");
         let explained = explain(qb, &mut conn).await;
 

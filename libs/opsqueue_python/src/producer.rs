@@ -1,6 +1,6 @@
 use pyo3::{
     create_exception,
-    exceptions::{PyException, PyStopAsyncIteration},
+    exceptions::{PyException, PyStopAsyncIteration, PyValueError},
     prelude::*,
     types::PyIterator,
 };
@@ -10,7 +10,7 @@ use std::{future::IntoFuture, sync::Arc, time::Duration};
 use crate::{
     async_util,
     common::{
-        InitialSubmissionStatus, SubmissionId, SubmissionStatus, run_unless_interrupted,
+        InitialSubmissionStatus, Strategy, SubmissionId, SubmissionStatus, run_unless_interrupted,
         start_runtime,
     },
     errors::{self, CError, CPyResult, FatalPythonException},
@@ -21,6 +21,7 @@ use opsqueue::{
     common::errors::E::{self, L, R},
     common::errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
     common::{StrategicMetadataMap, chunk, submission},
+    consumer::strategy::Strategy as ConsumerStrategy,
     object_store::{ChunkRetrievalError, ChunkType, ChunksStorageError, NewObjectStoreClientError},
     producer::ChunkContents,
     producer::client::{Client as ActualClient, InternalProducerClientError},
@@ -32,6 +33,7 @@ use ux::u63;
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
 const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(5);
+const INITIAL_SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(10);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass(from_py_object, module = "opsqueue")]
@@ -421,6 +423,133 @@ impl ProducerClient {
         })
     }
 
+    /// Stream output chunks as soon as each consumer has completed them.
+    ///
+    /// `strategy` must be `Oldest` or `PreferDistinct` with an underlying strategy
+    /// that eventually resolves to `Oldest`. Consumers processing this submission
+    /// must also reserve chunks using the same strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValueError` if the strategy does not resolve to `Oldest`.
+    pub fn stream_submission_chunks(
+        &self,
+        submission_id: SubmissionId,
+        strategy: &Strategy,
+    ) -> PyResult<PyChunksIter> {
+        self.streaming_submission_chunks(submission_id, strategy)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn streaming_submission_chunks(
+        &self,
+        submission_id: SubmissionId,
+        strategy: &Strategy,
+    ) -> PyResult<PyChunksIter> {
+        let internal_strategy = ConsumerStrategy::from(strategy);
+        let mut meta_keys = internal_strategy.meta_keys();
+        meta_keys.by_ref().for_each(drop);
+        if !matches!(meta_keys.take(), ConsumerStrategy::Oldest) {
+            return Err(PyValueError::new_err(
+                "streaming submission chunks requires Strategy.Oldest or Strategy.PreferDistinct ending in Strategy.Oldest; consumers must use the same strategy",
+            ));
+        }
+
+        let client = self.client.clone();
+        let object_store_client = self.object_store_client.clone();
+        let stream = futures::stream::unfold(
+            StreamingChunkState {
+                client,
+                object_store_client,
+                submission_id,
+                index: u63::new(0),
+                prefix: None,
+                ready_until: u63::new(0),
+                finished: false,
+                interval: INITIAL_SUBMISSION_POLLING_INTERVAL,
+            },
+            |mut state| async move {
+                loop {
+                    if state.index < state.ready_until {
+                        let prefix = state
+                            .prefix
+                            .as_deref()
+                            .expect("ready submissions have an object-store prefix");
+                        let result = state
+                            .object_store_client
+                            .retrieve_chunk(prefix, state.index.into(), ChunkType::Output)
+                            .await
+                            .map_err(StreamingChunkError::Retrieval);
+                        state.index = state.index + u63::new(1);
+                        state.interval = INITIAL_SUBMISSION_POLLING_INTERVAL;
+                        return Some((result, state));
+                    }
+
+                    if state.finished {
+                        return None;
+                    }
+
+                    let status = match state
+                        .client
+                        .get_submission(state.submission_id.into())
+                        .await
+                    {
+                        Ok(Some(status)) => status,
+                        Ok(None) => {
+                            return Some((
+                                Err(StreamingChunkError::SubmissionNotFound(SubmissionNotFound(
+                                    state.submission_id.into(),
+                                ))),
+                                state,
+                            ));
+                        }
+                        Err(error) => {
+                            return Some((Err(StreamingChunkError::Internal(error)), state));
+                        }
+                    };
+
+                    match status {
+                        submission::SubmissionStatus::InProgress(submission) => {
+                            state.prefix = state.prefix.take().or(submission.prefix);
+                            state.ready_until = submission.chunks_ready.into();
+                        }
+                        submission::SubmissionStatus::Completed(submission) => {
+                            state.prefix = state.prefix.take().or(submission.prefix);
+                            state.ready_until = submission.chunks_total.into();
+                            state.finished = true;
+                        }
+                        submission::SubmissionStatus::Failed(submission, chunk) => {
+                            let failure =
+                                crate::common::ChunkFailed::from_internal(chunk, &submission);
+                            state.finished = true;
+                            return Some((
+                                Err(StreamingChunkError::Failed(Box::new(
+                                    crate::errors::SubmissionFailed(submission.into(), failure),
+                                ))),
+                                state,
+                            ));
+                        }
+                        submission::SubmissionStatus::Paused(_) => {}
+                        submission::SubmissionStatus::Cancelled(_) => {
+                            return Some((Err(StreamingChunkError::Cancelled), state));
+                        }
+                    }
+
+                    if state.index < state.ready_until || state.finished {
+                        continue;
+                    }
+                    tokio::time::sleep(state.interval).await;
+                    if state.interval < SUBMISSION_POLLING_INTERVAL {
+                        state.interval = (state.interval * 2).min(SUBMISSION_POLLING_INTERVAL);
+                    }
+                }
+            },
+        )
+        .map(|item| item.map_err(CError))
+        .boxed();
+        Ok(PyChunksIter::from_stream(self, stream))
+    }
+
     /// Blocks (and short-polls) until the submission is completed.
     ///
     /// We start with a small short-polling interval
@@ -472,6 +601,28 @@ impl ProducerClient {
                 }
             })
         })
+    }
+
+    /// Return an awaitable that resolves immediately to an async iterator of output chunks.
+    ///
+    /// The iterator polls submission progress and yields each output chunk as soon as it is ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Python error if creating the awaitable fails.
+    pub fn async_stream_submission_chunks<'p>(
+        &self,
+        py: Python<'p>,
+        submission_id: SubmissionId,
+        strategy: &Strategy,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let me = self.clone();
+        let stream = me.streaming_submission_chunks(submission_id, strategy)?;
+        let _tokio_active_runtime_guard = me.runtime.enter();
+        async_util::future_into_py(
+            py,
+            async_util::async_detach(Box::pin(async move { Ok(PyChunksAsyncIter::from(stream)) })),
+        )
     }
 
     /// Return an awaitable that resolves to an async iterator of output chunks.
@@ -583,7 +734,53 @@ impl ProducerClient {
     }
 }
 
-pub type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, ChunkRetrievalError>>;
+struct StreamingChunkState {
+    client: ActualClient,
+    object_store_client: opsqueue::object_store::ObjectStoreClient,
+    submission_id: SubmissionId,
+    index: u63,
+    prefix: Option<String>,
+    ready_until: u63,
+    finished: bool,
+    interval: Duration,
+}
+
+#[derive(Debug)]
+enum StreamingChunkError {
+    Retrieval(ChunkRetrievalError),
+    Internal(InternalProducerClientError),
+    Failed(Box<crate::errors::SubmissionFailed>),
+    SubmissionNotFound(SubmissionNotFound),
+    Cancelled,
+}
+
+impl std::fmt::Display for StreamingChunkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Retrieval(error) => error.fmt(f),
+            Self::Internal(error) => error.fmt(f),
+            Self::Failed(_) => write!(f, "Submission failed"),
+            Self::SubmissionNotFound(error) => error.fmt(f),
+            Self::Cancelled => write!(f, "Submission cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for StreamingChunkError {}
+
+impl From<CError<StreamingChunkError>> for PyErr {
+    fn from(value: CError<StreamingChunkError>) -> Self {
+        match value.0 {
+            StreamingChunkError::Retrieval(error) => CError(error).into(),
+            StreamingChunkError::Internal(error) => CError(error).into(),
+            StreamingChunkError::Failed(error) => CError(*error).into(),
+            StreamingChunkError::SubmissionNotFound(error) => CError(error).into(),
+            error @ StreamingChunkError::Cancelled => PyException::new_err(error.to_string()),
+        }
+    }
+}
+
+type ChunksStream = BoxStream<'static, CPyResult<Vec<u8>, StreamingChunkError>>;
 
 #[pyclass(module = "opsqueue")]
 pub struct PyChunksIter {
@@ -592,16 +789,20 @@ pub struct PyChunksIter {
 }
 
 impl PyChunksIter {
-    pub(crate) fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
-        let stream = client
-            .object_store_client
-            .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
-            .map_err(CError)
-            .boxed();
+    fn from_stream(client: &ProducerClient, stream: ChunksStream) -> Self {
         Self {
             stream: Arc::new(tokio::sync::Mutex::new(stream)),
             runtime: client.runtime.clone(),
         }
+    }
+
+    pub(crate) fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
+        let stream = client
+            .object_store_client
+            .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
+            .map_err(|error| CError(StreamingChunkError::Retrieval(error)))
+            .boxed();
+        Self::from_stream(client, stream)
     }
 }
 
@@ -611,7 +812,7 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(&self, py: Python<'_>) -> Option<CPyResult<Vec<u8>, ChunkRetrievalError>> {
+    fn __next__(&self, py: Python<'_>) -> Option<CPyResult<Vec<u8>, StreamingChunkError>> {
         // The only time we need the GIL is when turning the result back.
         // By unlocking here, we reduce the chance of deadlocks.
         py.detach(move || {
