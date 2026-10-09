@@ -28,6 +28,7 @@ from .opsqueue_internal import (  # type: ignore[import-not-found]
     SubmissionNotCancellable,
     SubmissionPaused,
     InitialSubmissionStatus,
+    Strategy,
 )
 
 __all__ = [
@@ -240,13 +241,21 @@ class ProducerClient:
         )
         return self.blocking_stream_completed_submission_chunks(submission_id, timeout)
 
-    def stream_submission_chunks(self, submission_id: SubmissionId) -> Iterator[bytes]:
-        return self.inner.stream_submission_chunks(submission_id)  # type: ignore[no-any-return]
+    def stream_submission_chunks(
+        self, submission_id: SubmissionId, strategy: Strategy
+    ) -> Iterator[bytes]:
+        """Stream chunks progressively; strategy must be Oldest for this submission."""
+        return self.inner.stream_submission_chunks(  # type: ignore[no-any-return]
+            submission_id, strategy
+        )
 
     async def async_stream_submission_chunks(
-        self, submission_id: SubmissionId
+        self, submission_id: SubmissionId, strategy: Strategy
     ) -> AsyncIterator[bytes]:
-        return await self.inner.async_stream_submission_chunks(submission_id)  # type: ignore[no-any-return]
+        """Stream chunks progressively; strategy must be Oldest for this submission."""
+        return await self.inner.async_stream_submission_chunks(  # type: ignore[no-any-return]
+            submission_id, strategy
+        )
 
     async def async_run_submission_chunks(
         self,

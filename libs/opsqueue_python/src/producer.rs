@@ -1,6 +1,6 @@
 use pyo3::{
     create_exception,
-    exceptions::{PyException, PyStopAsyncIteration},
+    exceptions::{PyException, PyStopAsyncIteration, PyValueError},
     prelude::*,
     types::PyIterator,
 };
@@ -10,7 +10,7 @@ use std::{future::IntoFuture, sync::Arc, time::Duration};
 use crate::{
     async_util,
     common::{
-        InitialSubmissionStatus, SubmissionId, SubmissionStatus, run_unless_interrupted,
+        InitialSubmissionStatus, Strategy, SubmissionId, SubmissionStatus, run_unless_interrupted,
         start_runtime,
     },
     errors::{self, CError, CPyResult, FatalPythonException},
@@ -422,13 +422,30 @@ impl ProducerClient {
     }
 
     /// Stream output chunks as soon as each consumer has completed them.
+    ///
+    /// `strategy` must be `Oldest`, and consumers processing this submission must
+    /// also reserve chunks using `Oldest`.
     #[must_use]
-    pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
-        self.streaming_submission_chunks(submission_id)
+    pub fn stream_submission_chunks(
+        &self,
+        submission_id: SubmissionId,
+        strategy: &Strategy,
+    ) -> PyResult<PyChunksIter> {
+        self.streaming_submission_chunks(submission_id, strategy)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
+    fn streaming_submission_chunks(
+        &self,
+        submission_id: SubmissionId,
+        strategy: &Strategy,
+    ) -> PyResult<PyChunksIter> {
+        if !matches!(strategy, Strategy::Oldest()) {
+            return Err(PyValueError::new_err(
+                "streaming submission chunks requires Strategy.Oldest; consumers must also use Strategy.Oldest",
+            ));
+        }
+
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
@@ -476,7 +493,7 @@ impl ProducerClient {
                     match status {
                         submission::SubmissionStatus::InProgress(submission) => {
                             let prefix = prefix.clone().or(submission.prefix);
-                            if index < submission.chunks_done.into() {
+                            if index < submission.chunks_ready.into() {
                                 let prefix = prefix
                                     .expect("in-progress submissions have an object-store prefix");
                                 let result = object_store_client
@@ -561,7 +578,7 @@ impl ProducerClient {
         )
         .map(|item| item.map_err(CError))
         .boxed();
-        PyChunksIter::from_stream(self, stream)
+        Ok(PyChunksIter::from_stream(self, stream))
     }
 
     /// Blocks (and short-polls) until the submission is completed.
@@ -628,16 +645,14 @@ impl ProducerClient {
         &self,
         py: Python<'p>,
         submission_id: SubmissionId,
+        strategy: &Strategy,
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
+        let stream = me.streaming_submission_chunks(submission_id, strategy)?;
         let _tokio_active_runtime_guard = me.runtime.enter();
         async_util::future_into_py(
             py,
-            async_util::async_detach(Box::pin(async move {
-                Ok(PyChunksAsyncIter::from(
-                    me.streaming_submission_chunks(submission_id),
-                ))
-            })),
+            async_util::async_detach(Box::pin(async move { Ok(PyChunksAsyncIter::from(stream)) })),
         )
     }
 

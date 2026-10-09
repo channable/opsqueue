@@ -5,7 +5,7 @@
 import logging
 import time
 from collections.abc import Iterator, Sequence
-
+import asyncio
 import pytest
 from conftest import (
     background_process,
@@ -16,7 +16,7 @@ from conftest import (
     strategy_from_description,
 )
 from opsqueue.common import SerializationFormat
-from opsqueue.consumer import ConsumerClient, Chunk
+from opsqueue.consumer import ConsumerClient, Chunk, Strategy
 from opsqueue.producer import (
     SubmissionId,
     ProducerClient,
@@ -828,7 +828,6 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
 
 def test_streams_completed_chunks_before_submission_finishes(
     opsqueue: OpsqueueProcess,
-    any_consumer_strategy: StrategyDescription,
 ) -> None:
     url = "file:///tmp/opsqueue/test_streaming_results"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
@@ -836,37 +835,36 @@ def test_streams_completed_chunks_before_submission_finishes(
         [b"[1]", b"[2]"], chunk_size=1
     )
 
-    def complete_chunks(
-        _submission_id_value: int,
-        strategy: StrategyDescription,
-    ) -> None:
+    def complete_chunks(_submission_id_value: int) -> None:
         consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
         chunks = sorted(
             consumer_client.reserve_chunks(
                 max=2,
-                strategy=strategy_from_description(strategy),
+                strategy=Strategy.Oldest(),
             ),
             key=lambda chunk: chunk.chunk_index,
         )
-        consumer_client.complete_chunk(
-            chunks[0].submission_id,
-            chunks[0].submission_prefix,
-            chunks[0].chunk_index,
-            chunks[0].input_content,
-        )
-        time.sleep(0.25)
         consumer_client.complete_chunk(
             chunks[1].submission_id,
             chunks[1].submission_prefix,
             chunks[1].chunk_index,
             chunks[1].input_content,
         )
+        time.sleep(0.25)
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
 
     with background_process(
         complete_chunks,
-        args=(submission_id.id, any_consumer_strategy),
+        args=(submission_id.id,),
     ):
-        results = producer_client.stream_submission_chunks(submission_id)
+        results = producer_client.stream_submission_chunks(
+            submission_id, Strategy.Oldest()
+        )
         assert next(results) == b"[1]"
         assert isinstance(
             producer_client.get_submission_status(submission_id),
@@ -877,7 +875,6 @@ def test_streams_completed_chunks_before_submission_finishes(
 
 def test_async_streams_completed_chunks_before_submission_finishes(
     opsqueue: OpsqueueProcess,
-    any_consumer_strategy: StrategyDescription,
 ) -> None:
     url = "file:///tmp/opsqueue/test_async_streaming_results"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
@@ -885,38 +882,56 @@ def test_async_streams_completed_chunks_before_submission_finishes(
         [b"[1]", b"[2]"], chunk_size=1
     )
 
-    def complete_chunks(
-        _submission_id_value: int,
-        strategy: StrategyDescription,
-    ) -> None:
+    def complete_chunks(_submission_id_value: int) -> None:
         consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
         chunks = sorted(
             consumer_client.reserve_chunks(
                 max=2,
-                strategy=strategy_from_description(strategy),
+                strategy=Strategy.Oldest(),
             ),
             key=lambda chunk: chunk.chunk_index,
         )
-        consumer_client.complete_chunk(
-            chunks[0].submission_id,
-            chunks[0].submission_prefix,
-            chunks[0].chunk_index,
-            chunks[0].input_content,
-        )
-        time.sleep(0.25)
         consumer_client.complete_chunk(
             chunks[1].submission_id,
             chunks[1].submission_prefix,
             chunks[1].chunk_index,
             chunks[1].input_content,
         )
+        time.sleep(0.25)
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
 
     async def collect() -> list[bytes]:
-        results = await producer_client.async_stream_submission_chunks(submission_id)
+        results = await producer_client.async_stream_submission_chunks(
+            submission_id, Strategy.Oldest()
+        )
         return [chunk async for chunk in results]
 
     with background_process(
         complete_chunks,
-        args=(submission_id.id, any_consumer_strategy),
+        args=(submission_id.id,),
     ):
         assert asyncio.run(collect()) == [b"[1]", b"[2]"]
+
+
+def test_stream_submission_chunks_requires_oldest_strategy(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_requires_oldest"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+
+    with pytest.raises(ValueError, match="requires Strategy.Oldest"):
+        producer_client.stream_submission_chunks(submission_id, Strategy.Random())
+
+    async def collect_with_newest() -> None:
+        await producer_client.async_stream_submission_chunks(
+            submission_id, Strategy.Newest()
+        )
+
+    with pytest.raises(ValueError, match="requires Strategy.Oldest"):
+        asyncio.run(collect_with_newest())

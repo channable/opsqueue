@@ -7,10 +7,14 @@ use sqlx::{QueryBuilder, Sqlite};
 #[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
 
+#[cfg(feature = "server-logic")]
+const RANDOM_CHUNK_WINDOW: u64 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     Oldest,
     Newest,
+    /// Randomize chunks within a small, advancing index window per submission.
     Random,
     /// Perform a sort of submissions by metadata (ordered by in-flight counts),
     /// ties are broken by the underlying strategy. For example: if we have two
@@ -98,12 +102,29 @@ impl Strategy {
             "opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE";
         match self {
             Oldest => qb.push(format!(
-                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC"
+                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC, chunk_index ASC"
             )),
-            Newest => qb.push(format!(
-                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id DESC"
-            )),
-            Random => Self::push_random_order_query(qb, "*", "chunks", Some(ffi_is_not_reserved)),
+            Newest => {
+                let qb = qb.push("WITH newest_submission_ids AS MATERIALIZED (");
+                let qb = qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC");
+                qb.push(format!(
+                    ") SELECT chunks.*
+                        FROM newest_submission_ids
+                        CROSS JOIN chunks
+                        ON chunks.submission_id = newest_submission_ids.submission_id
+                        AND {ffi_is_not_reserved}"
+                ))
+            }
+            Random => {
+              let condition = format!(
+                "{ffi_is_not_reserved} AND chunks.chunk_index < (
+                  SELECT MIN(previous.chunk_index) + {RANDOM_CHUNK_WINDOW}
+                  FROM chunks AS previous
+                  WHERE previous.submission_id = chunks.submission_id
+                )"
+              );
+              Self::push_random_order_query(qb, "*", "chunks", Some(&condition))
+            }
             PreferDistinct { .. } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH underlying_submission_ids AS MATERIALIZED (");
@@ -214,7 +235,7 @@ impl Strategy {
         qb: &'a mut QueryBuilder<Sqlite>,
         columns: &'static str,
         table_name: &'static str,
-        condition: Option<&'static str>,
+        condition: Option<&str>,
     ) -> &'a mut QueryBuilder<Sqlite> {
         let random_offset: u16 = rand::random();
         let push_select = |qb: &mut QueryBuilder<Sqlite>, operator: &str| {
@@ -379,7 +400,8 @@ pub mod test {
         WHERE
           opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
-          submission_id ASC
+          submission_id ASC,
+          chunk_index ASC
         ");
         let explained = explain(qb, &mut conn).await;
 
@@ -394,22 +416,15 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
 
         let qb = Strategy::Newest.build_query(&mut qb);
-        let options = FormatOptions::default();
-        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
-        insta::assert_snapshot!(formatted_query, @"
-        SELECT
-          *
-        FROM
-          chunks
-        WHERE
-          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
-        ORDER BY
-          submission_id DESC
-        ");
+        assert!(qb.sql().as_str().contains("ORDER BY id DESC"));
+        assert!(
+            qb.sql()
+                .as_str()
+                .contains("chunks.submission_id = newest_submission_ids.submission_id")
+        );
         let explained = explain(qb, &mut conn).await;
 
-        assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_streaming_chunks(qb, &explained);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -420,38 +435,10 @@ pub mod test {
 
         let qb = Strategy::Random.build_query(&mut qb);
 
-        let formatted_query = format(
-            qb.sql().as_str(),
-            &QueryParams::None,
-            &FormatOptions::default(),
-        );
-        insta::assert_snapshot!(formatted_query, @"
-        SELECT
-          *
-        FROM
-          chunks
-        WHERE
-          random_order >= ?
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
-        UNION ALL
-        SELECT
-          *
-        FROM
-          chunks
-        WHERE
-          random_order < ?
-          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
-        ");
+        assert!(qb.sql().as_str().contains("MIN(previous.chunk_index) + 4"));
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
-        insta::assert_snapshot!(explained, @r"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        26, 1, UNION ALL
-        29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

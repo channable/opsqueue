@@ -156,6 +156,7 @@ pub struct Submission {
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
+    pub chunks_ready: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     #[serde(default)]
@@ -262,6 +263,7 @@ impl Submission {
             prefix: None,
             chunks_total: ChunkCount::zero(),
             chunks_done: ChunkCount::zero(),
+            chunks_ready: ChunkCount::zero(),
             chunk_size: ChunkSize::default(),
             metadata: None,
             strategic_metadata: StrategicMetadataMap::default(),
@@ -283,6 +285,7 @@ impl Submission {
             prefix: None,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
+            chunks_ready: ChunkCount::zero(),
             chunk_size,
             metadata,
             strategic_metadata: StrategicMetadataMap::default(),
@@ -617,6 +620,7 @@ pub mod db {
             prefix,
             chunks_total: len,
             chunks_done: ChunkCount::zero(),
+            chunks_ready: ChunkCount::zero(),
             chunk_size,
             metadata,
             strategic_metadata,
@@ -659,6 +663,7 @@ pub mod db {
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
+            , COALESCE((SELECT MIN(chunk_index) FROM chunks WHERE submission_id = submissions.id), chunks_total) AS "chunks_ready: ChunkCount"
             , chunk_size AS "chunk_size!: ChunkSize"
             , metadata
             , ( SELECT json_group_object(metadata_key, metadata_value)
@@ -679,6 +684,7 @@ pub mod db {
                 prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 chunks_done: row.chunks_done,
+                chunks_ready: row.chunks_ready,
                 chunk_size: row.chunk_size,
                 metadata: row.metadata,
                 strategic_metadata: row.strategic_metadata.0,
@@ -843,6 +849,7 @@ pub mod db {
                 prefix: row.prefix,
                 chunks_total: row.chunks_total,
                 chunks_done: row.chunks_done,
+                chunks_ready: row.chunks_ready,
                 chunk_size: row.chunk_size,
                 metadata: row.metadata,
                 strategic_metadata: row.strategic_metadata.0,
@@ -916,6 +923,7 @@ pub mod db {
         prefix: Option<String>,
         chunks_total: ChunkCount,
         chunks_done: ChunkCount,
+        chunks_ready: ChunkCount,
         chunk_size: ChunkSize,
         metadata: Option<Metadata>,
         strategic_metadata: sqlx::types::Json<StrategicMetadataMap>,
@@ -939,6 +947,7 @@ pub mod db {
             , prefix
             , chunks_total AS "chunks_total: ChunkCount"
             , chunks_done AS "chunks_done: ChunkCount"
+            , COALESCE((SELECT MIN(chunk_index) FROM chunks WHERE submission_id = submissions.id), chunks_total) AS "chunks_ready: ChunkCount"
             , chunk_size AS "chunk_size!: ChunkSize"
             , metadata
             , ( SELECT json_group_object(metadata_key, metadata_value)
