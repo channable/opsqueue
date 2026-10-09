@@ -242,7 +242,9 @@ class ProducerClient:
         return self.blocking_stream_completed_submission_chunks(submission_id, timeout)
 
     def stream_submission_chunks(
-        self, submission_id: SubmissionId, strategy: Strategy
+        self, 
+        submission_id: SubmissionId, 
+        strategy: Strategy,
     ) -> Iterator[bytes]:
         """Stream chunks progressively; strategy must be Oldest for this submission."""
         return self.inner.stream_submission_chunks(  # type: ignore[no-any-return]
@@ -250,7 +252,9 @@ class ProducerClient:
         )
 
     async def async_stream_submission_chunks(
-        self, submission_id: SubmissionId, strategy: Strategy
+        self, 
+        submission_id: SubmissionId, 
+        strategy: Strategy,
     ) -> AsyncIterator[bytes]:
         """Stream chunks progressively; strategy must be Oldest for this submission."""
         return await self.inner.async_stream_submission_chunks(  # type: ignore[no-any-return]
