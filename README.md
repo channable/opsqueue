@@ -343,8 +343,8 @@ In the event of a consumer crash or (ephemeral) network problems, we do not want
 
 ## Chunks
 
-It may be helpful in understanding OpsQueue to see a state machine of a chunk,
-definitions of each of the states follows below:
+It may be helpful in understanding OpsQueue to see a state machine of a chunk.
+Definitions of each of the states follows below:
 
 ```mermaid
 stateDiagram
@@ -355,7 +355,7 @@ stateDiagram
     Reserved  --> Completed: Consumer reports completed chunk
     Reserved  --> Available: Consumer reports failed chunk, retries remain
     Reserved  --> Available: Consumer disconnects
-    Reserved  --> Available: Recording completion fails
+    Reserved  --> Available: Recording completion/failures fails
     Reserved  --> Failed: Retry limit reached
     Paused    --> Skipped: Submission cancelled
     Available --> Skipped: Submission cancelled or failed
