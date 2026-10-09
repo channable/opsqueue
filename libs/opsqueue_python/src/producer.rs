@@ -21,6 +21,7 @@ use opsqueue::{
     common::errors::E::{self, L, R},
     common::errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
     common::{StrategicMetadataMap, chunk, submission},
+    consumer::strategy::Strategy as ConsumerStrategy,
     object_store::{ChunkRetrievalError, ChunkType, ChunksStorageError, NewObjectStoreClientError},
     producer::ChunkContents,
     producer::client::{Client as ActualClient, InternalProducerClientError},
@@ -423,12 +424,13 @@ impl ProducerClient {
 
     /// Stream output chunks as soon as each consumer has completed them.
     ///
-    /// `strategy` must be `Oldest`, and consumers processing this submission must
-    /// also reserve chunks using `Oldest`.
+    /// `strategy` must be `Oldest` or `PreferDistinct` with an underlying strategy
+    /// that eventually resolves to `Oldest`. Consumers processing this submission
+    /// must also reserve chunks using the same strategy.
     ///
     /// # Errors
     ///
-    /// Returns `ValueError` if `strategy` is not `Oldest`.
+    /// Returns `ValueError` if the strategy does not resolve to `Oldest`.
     pub fn stream_submission_chunks(
         &self,
         submission_id: SubmissionId,
@@ -443,9 +445,12 @@ impl ProducerClient {
         submission_id: SubmissionId,
         strategy: &Strategy,
     ) -> PyResult<PyChunksIter> {
-        if !matches!(strategy, Strategy::Oldest()) {
+        let internal_strategy = ConsumerStrategy::from(strategy);
+        let mut meta_keys = internal_strategy.meta_keys();
+        meta_keys.by_ref().for_each(drop);
+        if !matches!(meta_keys.take(), ConsumerStrategy::Oldest) {
             return Err(PyValueError::new_err(
-                "streaming submission chunks requires Strategy.Oldest; consumers must also use Strategy.Oldest",
+                "streaming submission chunks requires Strategy.Oldest or Strategy.PreferDistinct ending in Strategy.Oldest; consumers must use the same strategy",
             ));
         }
 
