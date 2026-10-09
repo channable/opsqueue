@@ -931,7 +931,7 @@ def test_streams_chunks_in_order_when_consumers_complete_out_of_order(
 
     [first_chunk] = first_consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
     [second_chunk] = second_consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
-    assert (first_chunk.chunk_index, second_chunk.chunk_index) == (0, 1)
+    assert (first_chunk.chunk_index.id, second_chunk.chunk_index.id) == (0, 1)
 
     second_consumer.complete_chunk(
         second_chunk.submission_id,
