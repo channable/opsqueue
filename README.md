@@ -363,9 +363,9 @@ stateDiagram
     Reserved  --> Skipped: Submission cancelled or failed
 ```
 
-Note that due to late (after reservation expired) completion/failure of a chunk
-is also possible, so we would have additional transitions `Available -> Completed`
-and `Available -> Failed`, but kept out of the diagram for simplicity.
+Note that late (after reservation expired) completion/failure of a chunk is also
+possible, so we would have additional transitions `Available -> Completed` and
+`Available -> Failed`, but kept out of the diagram for simplicity.
 
 | State         | Pseudo-SQL definition                                                                 |
 |---------------|---------------------------------------------------------------------------------------|
