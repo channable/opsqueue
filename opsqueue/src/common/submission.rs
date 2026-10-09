@@ -156,6 +156,7 @@ pub struct Submission {
     pub prefix: Option<String>,
     pub chunks_total: ChunkCount,
     pub chunks_done: ChunkCount,
+    #[serde(default = "ChunkCount::zero")]
     pub chunks_ready: ChunkCount,
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
