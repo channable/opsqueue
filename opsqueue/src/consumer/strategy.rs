@@ -7,14 +7,10 @@ use sqlx::{QueryBuilder, Sqlite};
 #[cfg(feature = "server-logic")]
 use crate::common::chunk::Chunk;
 
-#[cfg(feature = "server-logic")]
-const RANDOM_CHUNK_WINDOW: u64 = 4;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     Oldest,
     Newest,
-    /// Randomize chunks within a small, advancing index window per submission.
     Random,
     /// Perform a sort of submissions by metadata (ordered by in-flight counts),
     /// ties are broken by the underlying strategy. For example: if we have two
@@ -104,27 +100,10 @@ impl Strategy {
             Oldest => qb.push(format!(
                 "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC, chunk_index ASC"
             )),
-            Newest => {
-                let qb = qb.push("WITH newest_submission_ids AS MATERIALIZED (");
-                let qb = qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC");
-                qb.push(format!(
-                    ") SELECT chunks.*
-                        FROM newest_submission_ids
-                        CROSS JOIN chunks
-                        ON chunks.submission_id = newest_submission_ids.submission_id
-                        AND {ffi_is_not_reserved}"
-                ))
-            }
-            Random => {
-              let condition = format!(
-                "{ffi_is_not_reserved} AND chunks.chunk_index < (
-                  SELECT MIN(previous.chunk_index) + {RANDOM_CHUNK_WINDOW}
-                  FROM chunks AS previous
-                  WHERE previous.submission_id = chunks.submission_id
-                )"
-              );
-              Self::push_random_order_query(qb, "*", "chunks", Some(&condition))
-            }
+            Newest => qb.push(format!(
+                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id DESC"
+            )),
+            Random => Self::push_random_order_query(qb, "*", "chunks", Some(ffi_is_not_reserved)),
             PreferDistinct { .. } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH underlying_submission_ids AS MATERIALIZED (");
@@ -416,15 +395,10 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
 
         let qb = Strategy::Newest.build_query(&mut qb);
-        assert!(qb.sql().as_str().contains("ORDER BY id DESC"));
-        assert!(
-            qb.sql()
-                .as_str()
-                .contains("chunks.submission_id = newest_submission_ids.submission_id")
-        );
+        assert!(qb.sql().as_str().contains("ORDER BY submission_id DESC"));
         let explained = explain(qb, &mut conn).await;
 
-        assert_streaming_chunks(qb, &explained);
+        assert_streaming_query(qb, &explained);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -435,7 +409,8 @@ pub mod test {
 
         let qb = Strategy::Random.build_query(&mut qb);
 
-        assert!(qb.sql().as_str().contains("MIN(previous.chunk_index) + 4"));
+        assert!(qb.sql().as_str().contains("random_order >= ?"));
+        assert!(qb.sql().as_str().contains("random_order < ?"));
 
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
@@ -823,9 +798,7 @@ pub mod test {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     /// Tests whether the 'cutting the deck' technique is working
     ///
-    /// We do this by checking whether two selects in a huge amount of available chunks
-    /// give a different result.
-    /// (There is a super tiny chance of this test flaking).
+    /// Repeated selects should eventually return a different ordering.
     pub async fn test_random_strategy_is_random(pool: sqlx::SqlitePool) {
         let db_pools = crate::db::DBPools::from_test_pool(&pool);
 
@@ -845,24 +818,32 @@ pub mod test {
 
         let mut conn = db_pools.reader_conn().await.unwrap();
         register_lookup_noops(conn.get_inner()).await;
-        let mut query_builder = QueryBuilder::default();
-        let vals1: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder)
+        let mut first_query = QueryBuilder::default();
+        let first_result: Vec<Chunk> = Strategy::Random
+            .build_query(&mut first_query)
             .build_query_as()
             .fetch(conn.get_inner())
             .try_collect()
             .await
             .unwrap();
 
-        let mut query_builder = QueryBuilder::default();
-        let vals2: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder)
-            .build_query_as()
-            .fetch(conn.get_inner())
-            .try_collect()
-            .await
-            .unwrap();
+        let mut observed_different_order = false;
+        for _ in 0..32 {
+            let mut query_builder = QueryBuilder::default();
+            let result: Vec<Chunk> = Strategy::Random
+                .build_query(&mut query_builder)
+                .build_query_as()
+                .fetch(conn.get_inner())
+                .try_collect()
+                .await
+                .unwrap();
 
-        assert_ne!(vals1, vals2);
+            if result != first_result {
+                observed_different_order = true;
+                break;
+            }
+        }
+
+        assert!(observed_different_order);
     }
 }
