@@ -33,6 +33,7 @@ use ux::u63;
 create_exception!(opsqueue_internal, ProducerClientError, PyException);
 
 const SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_secs(5);
+const INITIAL_SUBMISSION_POLLING_INTERVAL: Duration = Duration::from_millis(10);
 
 // NOTE: ProducerClient is reasonably cheap to clone, as most of its fields are behind Arcs.
 #[pyclass(from_py_object, module = "opsqueue")]
@@ -457,129 +458,89 @@ impl ProducerClient {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
-            (
+            StreamingChunkState {
                 client,
                 object_store_client,
                 submission_id,
-                u63::new(0),
-                None,
-                Duration::from_millis(10),
-            ),
-            |(client, object_store_client, submission_id, index, prefix, interval)| async move {
-                let mut interval = interval;
+                index: u63::new(0),
+                prefix: None,
+                ready_until: u63::new(0),
+                finished: false,
+                interval: INITIAL_SUBMISSION_POLLING_INTERVAL,
+            },
+            |mut state| async move {
                 loop {
-                    let status = match client.get_submission(submission_id.into()).await {
+                    if state.index < state.ready_until {
+                        let prefix = state
+                            .prefix
+                            .as_deref()
+                            .expect("ready submissions have an object-store prefix");
+                        let result = state
+                            .object_store_client
+                            .retrieve_chunk(prefix, state.index.into(), ChunkType::Output)
+                            .await
+                            .map_err(StreamingChunkError::Retrieval);
+                        state.index = state.index + u63::new(1);
+                        state.interval = INITIAL_SUBMISSION_POLLING_INTERVAL;
+                        return Some((result, state));
+                    }
+
+                    if state.finished {
+                        return None;
+                    }
+
+                    let status = match state
+                        .client
+                        .get_submission(state.submission_id.into())
+                        .await
+                    {
                         Ok(Some(status)) => status,
                         Ok(None) => {
                             return Some((
-                                Err(StreamingChunkError::SubmissionNotFound),
-                                (
-                                    client,
-                                    object_store_client,
-                                    submission_id,
-                                    index,
-                                    prefix,
-                                    interval,
-                                ),
+                                Err(StreamingChunkError::SubmissionNotFound(SubmissionNotFound(
+                                    state.submission_id.into(),
+                                ))),
+                                state,
                             ));
                         }
                         Err(error) => {
-                            return Some((
-                                Err(StreamingChunkError::Internal(error)),
-                                (
-                                    client,
-                                    object_store_client,
-                                    submission_id,
-                                    index,
-                                    prefix,
-                                    interval,
-                                ),
-                            ));
+                            return Some((Err(StreamingChunkError::Internal(error)), state));
                         }
                     };
 
                     match status {
                         submission::SubmissionStatus::InProgress(submission) => {
-                            let prefix = prefix.clone().or(submission.prefix);
-                            if index < submission.chunks_ready.into() {
-                                let prefix = prefix
-                                    .expect("in-progress submissions have an object-store prefix");
-                                let result = object_store_client
-                                    .retrieve_chunk(&prefix, index.into(), ChunkType::Output)
-                                    .await
-                                    .map_err(StreamingChunkError::Retrieval);
-                                return Some((
-                                    result,
-                                    (
-                                        client,
-                                        object_store_client,
-                                        submission_id,
-                                        index + u63::new(1),
-                                        Some(prefix),
-                                        interval,
-                                    ),
-                                ));
-                            }
+                            state.prefix = state.prefix.take().or(submission.prefix);
+                            state.ready_until = submission.chunks_ready.into();
                         }
                         submission::SubmissionStatus::Completed(submission) => {
-                            let prefix = prefix.clone().or(submission.prefix);
-                            if index < submission.chunks_total.into() {
-                                let prefix = prefix
-                                    .expect("completed submissions have an object-store prefix");
-                                let result = object_store_client
-                                    .retrieve_chunk(&prefix, index.into(), ChunkType::Output)
-                                    .await
-                                    .map_err(StreamingChunkError::Retrieval);
-                                return Some((
-                                    result,
-                                    (
-                                        client,
-                                        object_store_client,
-                                        submission_id,
-                                        index + u63::new(1),
-                                        Some(prefix),
-                                        interval,
-                                    ),
-                                ));
-                            }
-                            return None;
+                            state.prefix = state.prefix.take().or(submission.prefix);
+                            state.ready_until = submission.chunks_total.into();
+                            state.finished = true;
                         }
                         submission::SubmissionStatus::Failed(submission, chunk) => {
                             let failure =
                                 crate::common::ChunkFailed::from_internal(chunk, &submission);
+                            state.finished = true;
                             return Some((
                                 Err(StreamingChunkError::Failed(Box::new(
                                     crate::errors::SubmissionFailed(submission.into(), failure),
                                 ))),
-                                (
-                                    client,
-                                    object_store_client,
-                                    submission_id,
-                                    index,
-                                    prefix,
-                                    interval,
-                                ),
+                                state,
                             ));
                         }
                         submission::SubmissionStatus::Paused(_) => {}
                         submission::SubmissionStatus::Cancelled(_) => {
-                            return Some((
-                                Err(StreamingChunkError::Cancelled),
-                                (
-                                    client,
-                                    object_store_client,
-                                    submission_id,
-                                    index,
-                                    prefix,
-                                    interval,
-                                ),
-                            ));
+                            return Some((Err(StreamingChunkError::Cancelled), state));
                         }
                     }
 
-                    tokio::time::sleep(interval).await;
-                    if interval < SUBMISSION_POLLING_INTERVAL {
-                        interval = (interval * 2).min(SUBMISSION_POLLING_INTERVAL);
+                    if state.index < state.ready_until || state.finished {
+                        continue;
+                    }
+                    tokio::time::sleep(state.interval).await;
+                    if state.interval < SUBMISSION_POLLING_INTERVAL {
+                        state.interval = (state.interval * 2).min(SUBMISSION_POLLING_INTERVAL);
                     }
                 }
             },
@@ -773,12 +734,23 @@ impl ProducerClient {
     }
 }
 
+struct StreamingChunkState {
+    client: ActualClient,
+    object_store_client: opsqueue::object_store::ObjectStoreClient,
+    submission_id: SubmissionId,
+    index: u63,
+    prefix: Option<String>,
+    ready_until: u63,
+    finished: bool,
+    interval: Duration,
+}
+
 #[derive(Debug)]
 enum StreamingChunkError {
     Retrieval(ChunkRetrievalError),
     Internal(InternalProducerClientError),
     Failed(Box<crate::errors::SubmissionFailed>),
-    SubmissionNotFound,
+    SubmissionNotFound(SubmissionNotFound),
     Cancelled,
 }
 
@@ -788,7 +760,7 @@ impl std::fmt::Display for StreamingChunkError {
             Self::Retrieval(error) => error.fmt(f),
             Self::Internal(error) => error.fmt(f),
             Self::Failed(_) => write!(f, "Submission failed"),
-            Self::SubmissionNotFound => write!(f, "Submission not found"),
+            Self::SubmissionNotFound(error) => error.fmt(f),
             Self::Cancelled => write!(f, "Submission cancelled"),
         }
     }
@@ -802,6 +774,7 @@ impl From<CError<StreamingChunkError>> for PyErr {
             StreamingChunkError::Retrieval(error) => CError(error).into(),
             StreamingChunkError::Internal(error) => CError(error).into(),
             StreamingChunkError::Failed(error) => CError(*error).into(),
+            StreamingChunkError::SubmissionNotFound(error) => CError(error).into(),
             error => PyException::new_err(error.to_string()),
         }
     }
