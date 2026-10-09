@@ -845,17 +845,17 @@ def test_streams_completed_chunks_before_submission_finishes(
             key=lambda chunk: chunk.chunk_index,
         )
         consumer_client.complete_chunk(
-            chunks[1].submission_id,
-            chunks[1].submission_prefix,
-            chunks[1].chunk_index,
-            chunks[1].input_content,
-        )
-        time.sleep(0.25)
-        consumer_client.complete_chunk(
             chunks[0].submission_id,
             chunks[0].submission_prefix,
             chunks[0].chunk_index,
             chunks[0].input_content,
+        )
+        time.sleep(0.25)
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
         )
 
     with background_process(
