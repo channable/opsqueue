@@ -343,8 +343,8 @@ In the event of a consumer crash or (ephemeral) network problems, we do not want
 
 ## Chunks
 
-It may be helpful in understanding OpsQueue to see a state machine of a chunk:
-diagram, definitions of each of the states follows below:
+It may be helpful in understanding OpsQueue to see a state machine of a chunk,
+definitions of each of the states follows below:
 
 ```mermaid
 stateDiagram
