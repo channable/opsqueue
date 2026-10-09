@@ -879,8 +879,6 @@ def test_async_streams_completed_chunks_before_submission_finishes(
     opsqueue: OpsqueueProcess,
     any_consumer_strategy: StrategyDescription,
 ) -> None:
-    import asyncio
-
     url = "file:///tmp/opsqueue/test_async_streaming_results"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission_chunks(
