@@ -1009,10 +1009,10 @@ def test_stream_submission_chunks_fails_if_submission_failed_before_read() -> No
             second_chunk.chunk_index,
             "Simulated failure",
         )
-        assert isinstance(
-            producer_client.get_submission_status(submission_id),
-            SubmissionStatus.Failed,
-        )
+        with pytest.raises(SubmissionFailedError):
+            producer_client.blocking_stream_completed_submission_chunks(
+                submission_id, timeout=SUBMISSION_COMPLETED_TIMEOUT
+            )
         with pytest.raises(SubmissionFailedError):
             next(results)
         with pytest.raises(StopIteration):

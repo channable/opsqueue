@@ -775,7 +775,7 @@ impl From<CError<StreamingChunkError>> for PyErr {
             StreamingChunkError::Internal(error) => CError(error).into(),
             StreamingChunkError::Failed(error) => CError(*error).into(),
             StreamingChunkError::SubmissionNotFound(error) => CError(error).into(),
-            error => PyException::new_err(error.to_string()),
+            error @ StreamingChunkError::Cancelled => PyException::new_err(error.to_string()),
         }
     }
 }
