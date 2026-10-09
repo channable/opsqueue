@@ -1707,8 +1707,10 @@ pub mod test {
         assert_no_temporary_b_trees(explained.as_str());
         insta::assert_snapshot!(explained, @"
         3, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
-        17, 0, CORRELATED SCALAR SUBQUERY 1
-        22, 17, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        15, 0, CORRELATED SCALAR SUBQUERY 1
+        20, 15, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        40, 0, CORRELATED SCALAR SUBQUERY 2
+        45, 40, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
