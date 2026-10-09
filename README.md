@@ -352,15 +352,20 @@ stateDiagram
     [*]       --> Paused: Submission created paused
     Paused    --> Available: Submission unpaused
     Available --> Reserved: Consumer reserves chunk
-    Reserved  --> Completed: Consumer reports completed chunk
-    Reserved  --> Available: Consumer reports failed chunk, retries remain
-    Reserved  --> Available: Consumer disconnects
-    Reserved  --> Available: Recording completion/failures fails
+    Reserved  --> Completed: Consumer reports success, completion recorded
+    Reserved  --> Available: Consumer reports failure, retries remain
+    Reserved  --> Available: Consumer disconnects, reservation released
+    Reserved  --> Available: Reservation expires
+    Reserved  --> Available: Completion/failure transaction fails, reservation released
     Reserved  --> Failed: Retry limit reached
     Paused    --> Skipped: Submission cancelled
     Available --> Skipped: Submission cancelled or failed
     Reserved  --> Skipped: Submission cancelled or failed
 ```
+
+Note that due to late (after reservation expired) completion/failure of a chunk
+is also possible, so we would have additional transitions `Available -> Completed`
+and `Available -> Failed`, but kept out of the diagram for simplicity.
 
 | State         | Pseudo-SQL definition                                                                 |
 |---------------|---------------------------------------------------------------------------------------|
