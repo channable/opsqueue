@@ -958,42 +958,41 @@ def test_streams_chunks_in_order_when_consumers_complete_out_of_order(
         assert next(results) == b"[2]"
 
 
-def test_stream_submission_chunks_yields_completed_results_before_failure(
-    opsqueue: OpsqueueProcess,
-) -> None:
+def test_stream_submission_chunks_yields_completed_results_before_failure() -> None:
     url = "file:///tmp/opsqueue/test_streaming_results_before_failure"
-    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
-    submission_id = producer_client.insert_submission_chunks(
-        [b"[1]", b"[2]"], chunk_size=1
-    )
-
-    def complete_then_fail(_submission_id_value: int) -> None:
-        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
-        first_chunk, second_chunk = sorted(
-            consumer_client.reserve_chunks(max=2, strategy=Strategy.Oldest()),
-            key=lambda chunk: chunk.chunk_index,
-        )
-        consumer_client.complete_chunk(
-            first_chunk.submission_id,
-            first_chunk.submission_prefix,
-            first_chunk.chunk_index,
-            first_chunk.input_content,
-        )
-        time.sleep(0.25)
-        consumer_client.fail_chunk(
-            second_chunk.submission_id,
-            second_chunk.submission_prefix,
-            second_chunk.chunk_index,
-            "Simulated failure",
+    with opsqueue_service(command_args=("--max-chunk-retries", "1")) as opsqueue:
+        producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+        submission_id = producer_client.insert_submission_chunks(
+            [b"[1]", b"[2]"], chunk_size=1
         )
 
-    with background_process(complete_then_fail, args=(submission_id.id,)):
-        results = producer_client.stream_submission_chunks(
-            submission_id, Strategy.Oldest()
-        )
-        assert next(results) == b"[1]"
-        with pytest.raises(SubmissionFailedError):
-            next(results)
+        def complete_then_fail(_submission_id_value: int) -> None:
+            consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+            first_chunk, second_chunk = sorted(
+                consumer_client.reserve_chunks(max=2, strategy=Strategy.Oldest()),
+                key=lambda chunk: chunk.chunk_index,
+            )
+            consumer_client.complete_chunk(
+                first_chunk.submission_id,
+                first_chunk.submission_prefix,
+                first_chunk.chunk_index,
+                first_chunk.input_content,
+            )
+            time.sleep(0.25)
+            consumer_client.fail_chunk(
+                second_chunk.submission_id,
+                second_chunk.submission_prefix,
+                second_chunk.chunk_index,
+                "Simulated failure",
+            )
+
+        with background_process(complete_then_fail, args=(submission_id.id,)):
+            results = producer_client.stream_submission_chunks(
+                submission_id, Strategy.Oldest()
+            )
+            assert next(results) == b"[1]"
+            with pytest.raises(SubmissionFailedError):
+                next(results)
 
 
 def test_stream_submission_chunks_requires_oldest_strategy(
