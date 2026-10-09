@@ -395,10 +395,22 @@ pub mod test {
         let mut qb = QueryBuilder::new("");
 
         let qb = Strategy::Newest.build_query(&mut qb);
-        assert!(qb.sql().as_str().contains("ORDER BY submission_id DESC"));
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          *
+        FROM
+          chunks
+        WHERE
+          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+        ORDER BY
+          submission_id DESC
+        ");
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
+        assert_eq!(explained, "3, 0, SCAN chunks");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
