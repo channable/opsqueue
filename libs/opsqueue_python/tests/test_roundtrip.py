@@ -16,7 +16,7 @@ from conftest import (
     strategy_from_description,
 )
 from opsqueue.common import SerializationFormat
-from opsqueue.consumer import ConsumerClient, Chunk, Strategy
+from opsqueue.consumer import ConsumerClient, Chunk, Strategy, opsqueue_internal
 from opsqueue.producer import (
     SubmissionId,
     ProducerClient,
@@ -940,17 +940,34 @@ def test_streams_chunks_in_order_when_consumers_complete_out_of_order(
         second_chunk.input_content,
     )
 
-    def complete_first_chunk(_submission_id_value: int) -> None:
+    opsqueue_address = f"localhost:{opsqueue.port}"
+
+    def complete_first_chunk(
+        _submission_id_value: int,
+        chunk_submission_id: int,
+        submission_prefix: str,
+        chunk_index: int,
+        input_content: bytes,
+    ) -> None:
         time.sleep(0.25)
-        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        consumer_client = ConsumerClient(opsqueue_address, url)
         consumer_client.complete_chunk(
-            first_chunk.submission_id,
-            first_chunk.submission_prefix,
-            first_chunk.chunk_index,
-            first_chunk.input_content,
+            SubmissionId(chunk_submission_id),
+            submission_prefix,
+            opsqueue_internal.ChunkIndex(chunk_index),
+            input_content,
         )
 
-    with background_process(complete_first_chunk, args=(submission_id.id,)):
+    with background_process(
+        complete_first_chunk,
+        args=(
+            submission_id.id,
+            first_chunk.submission_id.id,
+            first_chunk.submission_prefix,
+            first_chunk.chunk_index.id,
+            first_chunk.input_content,
+        ),
+    ):
         results = producer_client.stream_submission_chunks(
             submission_id, Strategy.Oldest()
         )
