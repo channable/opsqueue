@@ -17,11 +17,11 @@ from conftest import (
     strategy_from_description,
 )
 from opsqueue.common import SerializationFormat
-from opsqueue.consumer import (
+from opsqueue.consumer import (  # type: ignore[attr-defined]
     Chunk,
     ConsumerClient,
     Strategy,
-    opsqueue_internal,  # type: ignore[attr-defined]
+    opsqueue_internal,
 )
 from opsqueue.producer import (
     ChunkFailed,
