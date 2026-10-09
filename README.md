@@ -341,6 +341,41 @@ Were a consumer to _raise an exception_ or _outright crash_ or _have network pro
 
 In the event of a consumer crash or (ephemeral) network problems, we do not want work to get lost. The opsqueue system takes the 'at least once' approach (rather than the 'at most once' approach). This means that your consumers **must be idempotent**. They have to handle the possibility of (part of a) chunk being re-executed multiple times.
 
+## Chunks
+
+It may be helpful in understanding OpsQueue to see a state machine of a chunk.
+Definitions of each of the states follows below:
+
+```mermaid
+stateDiagram
+    [*]       --> Available: Submission created
+    [*]       --> Paused: Submission created paused
+    Paused    --> Available: Submission unpaused
+    Available --> Reserved: Consumer reserves chunk
+    Reserved  --> Completed: Consumer reports success, completion recorded
+    Reserved  --> Available: Consumer reports failure, retries remain
+    Reserved  --> Available: Consumer disconnects, reservation released
+    Reserved  --> Available: Reservation expires
+    Reserved  --> Available: Completion/failure transaction fails, reservation released
+    Reserved  --> Failed: Retry limit reached
+    Paused    --> Skipped: Submission cancelled
+    Available --> Skipped: Submission cancelled or failed
+    Reserved  --> Skipped: Submission cancelled or failed
+```
+
+Note that late (after reservation expired) completion/failure of a chunk is also
+possible, so we would have additional transitions `Available -> Completed` and
+`Available -> Failed`, but kept out of the diagram for simplicity.
+
+| State         | Pseudo-SQL definition                                                                 |
+|---------------|---------------------------------------------------------------------------------------|
+| **Paused**    | `SELECT * FROM chunks_paused`                                                         |
+| **Available** | `SELECT * FROM chunks WHERE opsqueue_is_reserved(submission_id, chunk_index) = FALSE` |
+| **Reserved**  | `SELECT * FROM chunks WHERE opsqueue_is_reserved(submission_id, chunk_index) = TRUE`  |
+| **Completed** | `SELECT * FROM chunks_completed`                                                      |
+| **Failed**    | `SELECT * FROM chunks_failed WHERE skipped = FALSE`                                   |
+| **Skipped**   | `SELECT * FROM chunks_failed WHERE skipped = TRUE`                                    |
+
 ## API connections
 
 Under the hood, the producer and the queue talk with each other using a JSON-REST API over HTTP. Users of opsqueue don't need to think about this, as this is abstracted behind the client library.
