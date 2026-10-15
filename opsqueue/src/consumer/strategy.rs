@@ -100,11 +100,27 @@ impl Strategy {
             Oldest => qb.push(format!(
                 "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id ASC, chunk_index ASC"
             )),
-            Newest => qb.push(format!(
-                "SELECT * FROM chunks WHERE {ffi_is_not_reserved} ORDER BY submission_id DESC"
+          Newest => qb.push(format!(
+              "SELECT chunks.* FROM submissions CROSS JOIN chunks
+               ON chunks.submission_id = submissions.id AND {ffi_is_not_reserved}
+               ORDER BY submissions.id DESC, chunks.chunk_index ASC"
             )),
-            Random => Self::push_random_order_query(qb, "*", "chunks", Some(ffi_is_not_reserved)),
-            PreferDistinct { .. } => {
+          Random => {
+            let random_offset: u16 = rand::random();
+            let push_select = |qb: &mut QueryBuilder<Sqlite>, operator: &str| {
+              qb.push(format!(
+                "SELECT chunks.* FROM submissions CROSS JOIN chunks
+                 ON chunks.submission_id = submissions.id AND {ffi_is_not_reserved}
+                 WHERE submissions.random_order {operator} "
+              ))
+              .push_bind(random_offset);
+            };
+            push_select(qb, ">=");
+            qb.push(" UNION ALL ");
+            push_select(qb, "<");
+            qb
+          }
+          PreferDistinct { .. } => {
                 // Unique submission IDs from the underlying strategy.
                 let qb = qb.push("WITH underlying_submission_ids AS MATERIALIZED (");
                 let qb = self.build_query_snippet_returning_submission_ids(qb);
@@ -241,7 +257,7 @@ pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, sqlx::Error>>;
 pub mod test {
     use super::*;
     use crate::common::StrategicMetadataMap;
-    use crate::common::chunk::ChunkSize;
+    use crate::common::chunk::{ChunkIndex, ChunkSize};
     use itertools::Itertools;
     use libsqlite3_sys as ffi;
     use sqlformat::{FormatOptions, QueryParams, format};
@@ -341,14 +357,14 @@ pub mod test {
         );
     }
 
-    /// A weaker version of `assert_streaming_query`, for `PreferDistinct`.
+    /// A weaker version of `assert_streaming_query`, for submission-first strategies.
     ///
     /// `PreferDistinct` cannot stream: to rank submissions by how many of their
     /// chunks are already in flight, it has to sort the `submissions` table. We
     /// accept that cost, because there are fewer submissions than chunks.
     ///
-    /// What we do not accept is doing the same to `chunks`, so we only require
-    /// that `chunks` is reached by an index seek.
+    /// Chunks must be reached through the primary key so each submission's
+    /// chunks are visited in `chunk_index` order without sorting the backlog.
     fn assert_streaming_chunks(qb: &sqlx::QueryBuilder<Sqlite>, explained: &str) {
         let query_binding = qb.sql();
         let query = query_binding.as_str();
@@ -357,8 +373,8 @@ pub mod test {
             "Query should never scan the whole `chunks` backlog, but it did.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
         );
         assert!(
-            explained.contains("SEARCH chunks"),
-            "Query should reach `chunks` via an index seek, but it did not.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
+            explained.contains("SEARCH chunks USING PRIMARY KEY (submission_id=?)"),
+            "Query should reach `chunks` via its primary key, but it did not.\n\nQuery: {query}\n\nPlan: \n\n{explained}"
         );
     }
 
@@ -399,18 +415,19 @@ pub mod test {
         let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
         insta::assert_snapshot!(formatted_query, @"
         SELECT
-          *
+          chunks.*
         FROM
-          chunks
-        WHERE
-          opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          submissions
+          CROSS JOIN chunks ON chunks.submission_id = submissions.id
+          AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
-          submission_id DESC
+          submissions.id DESC,
+          chunks.chunk_index ASC
         ");
         let explained = explain(qb, &mut conn).await;
 
-        assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_streaming_chunks(qb, &explained);
+        assert!(!explained.contains("USE TEMP B-TREE"));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -428,31 +445,27 @@ pub mod test {
         );
         insta::assert_snapshot!(formatted_query, @"
         SELECT
-          *
+          chunks.*
         FROM
-          chunks
-        WHERE
-          random_order >= ?
+          submissions
+          CROSS JOIN chunks ON chunks.submission_id = submissions.id
           AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+        WHERE
+          submissions.random_order >= ?
         UNION ALL
         SELECT
-          *
+          chunks.*
         FROM
-          chunks
-        WHERE
-          random_order < ?
+          submissions
+          CROSS JOIN chunks ON chunks.submission_id = submissions.id
           AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+        WHERE
+          submissions.random_order < ?
         ");
 
         let explained = explain(qb, &mut conn).await;
-        assert_streaming_query(qb, &explained);
-        insta::assert_snapshot!(explained, @r"
-        1, 0, COMPOUND QUERY
-        2, 1, LEFT-MOST SUBQUERY
-        5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
-        26, 1, UNION ALL
-        29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
-        ");
+        assert_streaming_chunks(qb, &explained);
+        assert!(!explained.contains("USE TEMP B-TREE"));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -835,48 +848,59 @@ pub mod test {
     use futures::stream::TryStreamExt as _;
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    /// Tests whether the 'cutting the deck' technique is working
-    ///
-    /// We do this by checking whether two selects in a huge amount of available chunks
-    /// give a different result.
-    /// (There is a super tiny chance of this test flaking).
+    /// Random selects submissions in different orders, but their chunks stay ordered.
     pub async fn test_random_strategy_is_random(pool: sqlx::SqlitePool) {
         let db_pools = crate::db::DBPools::from_test_pool(&pool);
 
         let mut conn = db_pools.writer_conn().await.unwrap();
-        let input_chunks: Vec<_> = (0..10_000).map(|x| Some(format!("{x}").into())).collect();
-        crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            input_chunks.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
+        for _ in 0..100 {
+            crate::common::submission::db::insert_submission_from_chunks(
+                None,
+                vec![Some(b"0".to_vec()), Some(b"1".to_vec())],
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
+            .await
+            .unwrap();
+        }
 
         let mut conn = db_pools.reader_conn().await.unwrap();
         register_lookup_noops(conn.get_inner()).await;
-        let mut query_builder = QueryBuilder::default();
-        let vals1: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder)
-            .build_query_as()
-            .fetch(conn.get_inner())
-            .try_collect()
-            .await
-            .unwrap();
-
-        let mut query_builder = QueryBuilder::default();
-        let vals2: Vec<Chunk> = Strategy::Random
-            .build_query(&mut query_builder)
-            .build_query_as()
-            .fetch(conn.get_inner())
-            .try_collect()
-            .await
-            .unwrap();
-
-        assert_ne!(vals1, vals2);
+        let mut first_submission_ids = Vec::new();
+        for strategy in [
+            Strategy::Oldest,
+            Strategy::Newest,
+            Strategy::Random,
+            Strategy::Random,
+            Strategy::Random,
+            Strategy::Random,
+            Strategy::Random,
+        ] {
+            let mut query_builder = QueryBuilder::default();
+            let chunks: Vec<Chunk> = strategy
+                .build_query(&mut query_builder)
+                .build_query_as()
+                .fetch(conn.get_inner())
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(chunks.len(), 200);
+            for pair in chunks.chunks_exact(2) {
+                assert_eq!(pair[0].submission_id, pair[1].submission_id);
+                assert_eq!(pair[0].chunk_index, ChunkIndex::zero());
+                assert_eq!(pair[1].chunk_index, ChunkIndex::new(1_u64).unwrap());
+            }
+            if strategy == Strategy::Random {
+                first_submission_ids.push(chunks[0].submission_id);
+            }
+        }
+        assert!(
+            first_submission_ids
+                .iter()
+                .any(|id| *id != first_submission_ids[0])
+        );
     }
 }
