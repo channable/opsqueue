@@ -1,6 +1,6 @@
 use pyo3::{
     create_exception,
-    exceptions::{PyException, PyStopAsyncIteration, PyValueError},
+    exceptions::{PyException, PyStopAsyncIteration},
     prelude::*,
     types::PyIterator,
 };
@@ -10,7 +10,7 @@ use std::{future::IntoFuture, sync::Arc, time::Duration};
 use crate::{
     async_util,
     common::{
-        InitialSubmissionStatus, Strategy, SubmissionId, SubmissionStatus, run_unless_interrupted,
+        InitialSubmissionStatus, SubmissionId, SubmissionStatus, run_unless_interrupted,
         start_runtime,
     },
     errors::{self, CError, CPyResult, FatalPythonException},
@@ -21,7 +21,6 @@ use opsqueue::{
     common::errors::E::{self, L, R},
     common::errors::{SubmissionNotCancellable, SubmissionNotFound, TooManyMatchingSubmissions},
     common::{StrategicMetadataMap, chunk, submission},
-    consumer::strategy::Strategy as ConsumerStrategy,
     object_store::{ChunkRetrievalError, ChunkType, ChunksStorageError, NewObjectStoreClientError},
     producer::ChunkContents,
     producer::client::{Client as ActualClient, InternalProducerClientError},
@@ -425,36 +424,15 @@ impl ProducerClient {
 
     /// Stream output chunks as soon as each consumer has completed them.
     ///
-    /// `strategy` must be `Oldest` or `PreferDistinct` with an underlying strategy
-    /// that eventually resolves to `Oldest`. Consumers processing this submission
-    /// must also reserve chunks using the same strategy.
-    ///
     /// # Errors
     ///
-    /// Returns `ValueError` if the strategy does not resolve to `Oldest`.
-    pub fn stream_submission_chunks(
-        &self,
-        submission_id: SubmissionId,
-        strategy: &Strategy,
-    ) -> PyResult<PyChunksIter> {
-        self.streaming_submission_chunks(submission_id, strategy)
+    /// Returns a Python error if creating the iterator fails.
+    pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyResult<PyChunksIter> {
+        self.streaming_submission_chunks(submission_id)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn streaming_submission_chunks(
-        &self,
-        submission_id: SubmissionId,
-        strategy: &Strategy,
-    ) -> PyResult<PyChunksIter> {
-        let internal_strategy = ConsumerStrategy::from(strategy);
-        let mut meta_keys = internal_strategy.meta_keys();
-        meta_keys.by_ref().for_each(drop);
-        if !matches!(meta_keys.take(), ConsumerStrategy::Oldest) {
-            return Err(PyValueError::new_err(
-                "streaming submission chunks requires Strategy.Oldest or Strategy.PreferDistinct ending in Strategy.Oldest; consumers must use the same strategy",
-            ));
-        }
-
+    fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyResult<PyChunksIter> {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
@@ -614,10 +592,9 @@ impl ProducerClient {
         &self,
         py: Python<'p>,
         submission_id: SubmissionId,
-        strategy: &Strategy,
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
-        let stream = me.streaming_submission_chunks(submission_id, strategy)?;
+        let stream = me.streaming_submission_chunks(submission_id)?;
         let _tokio_active_runtime_guard = me.runtime.enter();
         async_util::future_into_py(
             py,
