@@ -37,7 +37,7 @@ impl Extension for DelegationExtension {
     ) -> sqlx::Result<bool> {
         query_scalar!(
             r#"
-            SELECT EXISTS(SELECT 1 FROM submissions_external_task WHERE submission_id = $1) AS "exists: bool"
+            SELECT EXISTS(SELECT 1 FROM delegated_submissions WHERE submission_id = $1) AS "exists: bool"
             "#,
             submission
         )
@@ -117,7 +117,7 @@ mod tests {
             .unwrap();
 
             sqlx::query!(
-                "INSERT INTO submissions_external_task (submission_id, task_id) VALUES ($1, 'task')",
+                "INSERT INTO delegated_submissions (submission_id, external_task_id) VALUES ($1, 'task')",
                 referenced,
             )
             .execute(conn.get_inner())

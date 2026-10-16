@@ -1,7 +1,16 @@
+/// An extension for Opsqueue to interact with an external orchestrator. See the top-level README.md
+/// for a high-level overview.
+///
+/// ## Requirements for implementing the `/delegation/submit` endpoint of the external orchestrator
+///
+/// The external orchestrator should record all events in a request before responding successfully;
+/// if the request fails, none of the events should be acted upon, and an error status code should
+/// be returned. Opsqueue will resubmit the events at a later point in time.
 use crate::common::errors::{E, SubmissionNotFound};
 use crate::common::extension::CoreApi;
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 use crate::db::{Connection, DBPools, WriterConnection};
+use crate::tracing::as_dyn_error;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -14,7 +23,6 @@ use tokio::select;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
-// use tower::ServiceExt;
 
 #[cfg(test)]
 pub(crate) fn app_for_tests(
@@ -67,9 +75,11 @@ impl ServerState {
     }
 }
 
+/// The status of a delegated Submission.
+/// Similar to `SubmissionStatus`, but without the extra fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
-enum DelegatedJobStatus {
+enum DelegatedSubmissionStatus {
     Paused,
     InProgress,
     Completed,
@@ -77,16 +87,22 @@ enum DelegatedJobStatus {
     Cancelled,
 }
 
+/// Delegation events sent from the external orchestrator to Opsqueue.
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "type", content = "contents")]
-enum WorkerDelegationEvent {
+enum IncomingDelegationEvent {
+    /// Unpauses the submission.
     #[serde(rename = "delegate")]
     Delegate(Vec<DelegatedJob>),
+    /// Cancels the submission.
     #[serde(rename = "kill")]
     Kill(Vec<String>),
+    /// Currently not implemented. Could be used to implement pausing in the future.
     #[serde(rename = "return")]
     Return(Vec<String>),
 }
+
+/// A delegated job (pointing to a submission) as submitted by the external orchestrator.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct DelegatedJob {
     task_id: String,
@@ -98,11 +114,14 @@ struct DelegatedJobPayload {
     submission_id: SubmissionId,
 }
 
+/// Delegation events sent from Opsqueue to the external orchestrator.
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "type", content = "contents")]
-enum MasterDelegationEvent<'a> {
+enum OutgoingDelegationEvent<'a> {
+    /// The job/submission's status was changed to a non-terminal state.
     #[serde(rename = "updated")]
     Updated(Vec<DelegatedJobUpdate<'a>>),
+    /// The job/submission's status was changed to a terminal state.
     #[serde(rename = "completed")]
     Completed(Vec<DelegatedJobCompletion<'a>>),
 }
@@ -113,10 +132,13 @@ struct DelegatedJobUpdate<'a> {
     status: DelegatedJobUpdateStatus,
 }
 
+/// The non-terminal statuses as received by the external orchestrator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 enum DelegatedJobUpdateStatus {
+    /// Corresponds to `DelegatedSubmissionStatus::Paused`.
     Queued,
+    /// Corresponds to `DelegatedSubmissionStatus::InProgress`.
     Running,
 }
 
@@ -129,8 +151,11 @@ struct DelegatedJobCompletion<'a> {
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "status")]
 enum DelegatedJobCompletionStatus {
+    /// Corresponds to `DelegatedSubmissionStatus::Completed`.
     #[serde(rename = "success")]
     Success,
+    /// Corresponds to `DelegatedSubmissionStatus::Failed`
+    /// and `DelegatedSubmissionStatus::Cancelled`.
     #[serde(rename = "failure")]
     Failure { failure_reason: FailureReason },
 }
@@ -138,22 +163,27 @@ enum DelegatedJobCompletionStatus {
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 enum FailureReason {
+    /// Corresponds to `DelegatedSubmissionStatus::Failed`.
     Unknown,
+    /// Corresponds to `DelegatedSubmissionStatus::Cancelled`.
     Forced,
 }
 
 #[tracing::instrument(level = "debug", skip(state))]
 async fn submit(
     State(state): State<ServerState>,
-    Json(events): Json<Vec<WorkerDelegationEvent>>,
+    Json(events): Json<Vec<IncomingDelegationEvent>>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut conn = state.core_api.pool.writer_conn().await.map_err(|e| {
-        tracing::error!("DB error acquiring writer connection: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let mut conn = state
+        .core_api
+        .get_db_pools()
+        .writer_conn()
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error acquiring writer connection: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    // Note that we don't need a transaction here. Say we fail half-way, JM will just retry. Since
-    // all operations in `handle_worker_events` are idempotent, that would be fine.
     handle_worker_events(&state.core_api, &mut conn, events)
         .await
         .map_err(|e: sqlx::Error| {
@@ -167,41 +197,48 @@ async fn submit(
 async fn handle_worker_events(
     core_api: &CoreApi,
     conn: &mut impl WriterConnection,
-    events: Vec<WorkerDelegationEvent>,
+    events: Vec<IncomingDelegationEvent>,
 ) -> sqlx::Result<()> {
-    for event in events {
-        match event {
-            WorkerDelegationEvent::Delegate(delegations) => {
-                for delegation in delegations {
-                    handle_delegate_event(core_api, &mut *conn, &delegation)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!("Error handling delegate event: {e:?}");
-                            e
-                        })?;
-                }
-            }
-            WorkerDelegationEvent::Kill(task_ids) => {
-                for task_id in task_ids {
-                    handle_kill_event(core_api, &mut *conn, &task_id)
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "Error handling kill event for task_id={task_id}: {e:?}"
-                            );
-                            e
-                        })?;
-                }
-            }
-            WorkerDelegationEvent::Return(_task_ids) => {
-                tracing::info!(
-                    "Received 'return' delegation event, which is not yet implemented; ignoring."
-                );
-            }
-        }
-    }
+    let core_api = core_api.clone();
 
-    Ok(())
+    conn.transaction(move |mut tx| {
+        Box::pin(async move {
+            for event in events {
+                match event {
+                    IncomingDelegationEvent::Delegate(delegations) => {
+                        for delegation in delegations {
+                            handle_delegate_event(&core_api, &mut tx, &delegation)
+                                .await
+                                .inspect_err(|e| {
+                                    tracing::error!(
+                                        error = as_dyn_error(e),
+                                        "Error handling delegate event"
+                                    );
+                                })?;
+                        }
+                    }
+                    IncomingDelegationEvent::Kill(external_task_ids) => {
+                        for external_task_id in external_task_ids {
+                            handle_kill_event(&core_api, &mut tx, &external_task_id)
+                                .await
+                                .map_err(|e| {
+                                    tracing::error!(
+                                        "Error handling kill event for external_task_id={external_task_id}: {e:?}"
+                                    );
+                                    e
+                                })?;
+                        }
+                    }
+                    IncomingDelegationEvent::Return(_external_task_ids) => {
+                        tracing::info!(
+                            "Received 'return' delegation event, which is not yet implemented; ignoring."
+                        );
+                    }
+                }
+            }
+
+            Ok(())
+        })}).await
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
@@ -210,19 +247,19 @@ async fn handle_delegate_event(
     conn: &mut impl WriterConnection,
     job: &DelegatedJob,
 ) -> sqlx::Result<()> {
-    let task_id = &job.task_id;
+    let external_task_id = &job.task_id;
     let submission_id = job.payload.submission_id;
 
-    let rows_affected = insert_external_task(&mut *conn, submission_id, task_id).await?;
+    let rows_affected = insert_external_task(conn, submission_id, external_task_id).await?;
 
     if rows_affected == 0 {
-        tracing::debug!(%submission_id, %task_id, "External task was already registered");
+        tracing::debug!(%submission_id, %external_task_id, "External task was already registered");
     }
 
-    match core_api.unpause_submission(submission_id, &mut *conn).await {
+    match core_api.unpause_submission(submission_id, conn).await {
         Ok(()) => {}
         Err(E::R(SubmissionNotFound(_))) => {
-            // Note that this path could be hit when doing resubmitting a task with the same
+            // Note that this path could be hit when resubmitting a task with the same
             // submission id.
             tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
             // Send a notification, s.t. the status is promptly reported to the external system.
@@ -241,19 +278,19 @@ async fn handle_delegate_event(
 async fn handle_kill_event(
     core_api: &CoreApi,
     conn: &mut impl WriterConnection,
-    task_id: &str,
+    external_task_id: &str,
 ) -> sqlx::Result<()> {
     let submission_id = sqlx::query_scalar!(
         r#"SELECT submission_id AS "submission_id: SubmissionId"
-           FROM submissions_external_task
-           WHERE task_id = $1"#,
-        task_id,
+           FROM delegated_submissions
+           WHERE external_task_id = $1"#,
+        external_task_id,
     )
     .fetch_optional(conn.get_inner())
     .await?;
 
     let Some(submission_id) = submission_id else {
-        tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
+        tracing::warn!(%external_task_id, "Kill event for unknown external_task_id; ignoring");
         return Ok(());
     };
 
@@ -276,10 +313,19 @@ async fn handle_kill_event(
 
 const DELEGATION_BACKGROUND_LOOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// An error that occurred while listening for submission changes.
 enum SubmissionStatusChangeBatchError {
+    /// The notification channel was closed, this happens when the server is shutting down.
     Closed,
+    /// The notification channel has overflown, and we missed some notifications because of that.
     Lagged,
 }
+
+/// Listen for submission status changes.
+///
+/// Returns the ids of the submissions that changed.
+///
+/// There are two error cases that should be dealt with, see `SubmissionStatusChangeBatchError`.
 async fn submission_status_change_batch(
     submission_status_changed: &mut tokio::sync::broadcast::Receiver<SubmissionId>,
 ) -> Result<Vec<SubmissionId>, SubmissionStatusChangeBatchError> {
@@ -306,9 +352,20 @@ async fn submission_status_change_batch(
     }
 }
 
+/// What submissions should we check for updates?
 enum ReportTrigger {
+    /// Check all submissions for updates.
+    ///
+    /// Used during start-up and when the notification channel has overflown.
     FullScan,
-    Timeout,
+    /// Check all submissions for updates.
+    ///
+    /// Triggered periodically. We don't expect there to be work here, but we have this in-place
+    /// as a backup against missing `submission_status_changed.send` calls.
+    PeriodicFullScan,
+    /// Check specific submissions for updates.
+    ///
+    /// The happy path. Checks the submissions as sent via `submission_status_changed`.
     Submissions(Vec<SubmissionId>),
 }
 
@@ -343,31 +400,42 @@ async fn run_in_background(
                     Err(SubmissionStatusChangeBatchError::Closed) => break,
                 }
             },
-            _ = full_scan_interval.tick() => ReportTrigger::Timeout
+            _ = full_scan_interval.tick() => ReportTrigger::PeriodicFullScan
         };
     }
 
     Ok(())
 }
 
+/// Check for and report submission status updates to the external orchestrator.
 async fn report_submission_status(
     state: &ServerState,
     trigger: ReportTrigger,
 ) -> Result<(), E<sqlx::Error, reqwest::Error>> {
     use futures::{StreamExt, TryStreamExt};
-    let triggered_by_timeout = matches!(trigger, ReportTrigger::Timeout);
+    let triggered_by_timeout = matches!(trigger, ReportTrigger::PeriodicFullScan);
     let update_specific_submissions = match trigger {
         ReportTrigger::Submissions(submission_ids) => Some(submission_ids),
-        ReportTrigger::FullScan | ReportTrigger::Timeout => None,
+        ReportTrigger::FullScan | ReportTrigger::PeriodicFullScan => None,
     };
-    let mut conn_0 = state.core_api.pool.reader_conn().await.map_err(E::L)?;
+    let mut conn_0 = state
+        .core_api
+        .get_db_pools()
+        .reader_conn()
+        .await
+        .map_err(E::L)?;
     let conn_1 = Arc::new(tokio::sync::Mutex::new(
-        state.core_api.pool.reader_conn().await.map_err(E::L)?,
+        state
+            .core_api
+            .get_db_pools()
+            .reader_conn()
+            .await
+            .map_err(E::L)?,
     ));
     let core_api = Arc::new(state.core_api.clone());
 
     let out_of_date_tasks = {
-        select_external_tasks(&mut conn_0, update_specific_submissions)
+        select_delegated_submissions(&mut conn_0, update_specific_submissions)
             .try_filter_map({
                 move |task| {
                     let conn_1 = conn_1.clone();
@@ -378,7 +446,7 @@ async fn report_submission_status(
                             .submission_status(task.submission_id, &mut *conn_1)
                             .await
                             .map_err(|err| err.0)?;
-                        Ok(out_of_date_task(task, (&status).into()))
+                        Ok(out_of_date_delegated_submission(task, (&status).into()))
                     }
                 }
             })
@@ -392,25 +460,26 @@ async fn report_submission_status(
     while let Some(batch_or_error) = out_of_date_tasks.next().await {
         let batch = batch_or_error.map_err(|err| E::L(err.1))?;
 
+        let batch_len = batch.len();
+
         send_status_updates(state, batch.iter())
             .await
             .map_err(E::R)?;
-        // Note that we don't need a transaction here. If `update_statuses_in_db` fails half-way,
-        // we will resend the update next iteration. Which is no big deal because
-        // `send_status_updates` is idempotent.
 
-        update_statuses_in_db(&state.core_api.pool, batch.iter())
+        update_statuses_in_db(state.core_api.get_db_pools(), batch)
             .await
             .map_err(E::L)?;
 
-        task_count += batch.len();
+        task_count += batch_len;
     }
 
     if task_count > 0 && triggered_by_timeout {
         tracing::warn!(
             n_out_of_date_tasks = task_count,
-            "Delegation background loop was triggered by timeout with pending tasks; \
-             possibly we are missing a submission_status_changed.send call"
+            "Delegation background loop was triggered by a periodic full scan. Barring race \
+             conditions we don't expect status changes. However, there were some status changes.\
+             Elevated levels of this warning could indicate a missing\
+             `submission_status_changed.send` call."
         );
     }
 
@@ -420,18 +489,18 @@ async fn report_submission_status(
 async fn insert_external_task(
     conn: &mut impl Connection,
     submission_id: SubmissionId,
-    task_id: &str,
+    external_task_id: &str,
 ) -> sqlx::Result<u64> {
     let rows_affected = sqlx::query!(
-        r#"INSERT INTO submissions_external_task (submission_id, task_id, last_status_sent)
-           SELECT $1 AS submission_id, $2 AS task_id, NULL AS last_status_sent
+        r#"INSERT INTO delegated_submissions (submission_id, external_task_id, last_status_sent)
+           SELECT $1 AS submission_id, $2 AS external_task_id, NULL AS last_status_sent
            WHERE NOT EXISTS (
             SELECT TRUE
-            FROM submissions_external_task
-            WHERE submission_id = $1 AND task_id = $2
+            FROM delegated_submissions
+            WHERE submission_id = $1 AND external_task_id = $2
            )"#,
         submission_id,
-        task_id,
+        external_task_id,
     )
     .execute(conn.get_inner())
     .await?
@@ -441,24 +510,24 @@ async fn insert_external_task(
 }
 
 #[derive(Debug)]
-struct ExternalTaskRow {
+struct DelegatedSubmission {
     submission_id: SubmissionId,
-    task_id: String,
-    last_status_sent: Option<DelegatedJobStatus>,
+    external_task_id: String,
+    last_status_sent: Option<DelegatedSubmissionStatus>,
 }
 
-fn select_external_tasks(
+fn select_delegated_submissions(
     conn: &mut impl Connection,
     submission_ids: Option<Vec<SubmissionId>>,
-) -> BoxStream<'_, sqlx::Result<ExternalTaskRow>> {
+) -> BoxStream<'_, sqlx::Result<DelegatedSubmission>> {
     if let Some(submission_ids) = submission_ids {
         sqlx::query_as!(
-            ExternalTaskRow,
+            DelegatedSubmission,
             r#"SELECT
                     submission_id as "submission_id!: SubmissionId",
-                    task_id,
-                    last_status_sent as "last_status_sent: DelegatedJobStatus"
-                FROM submissions_external_task as t
+                    external_task_id,
+                    last_status_sent as "last_status_sent: DelegatedSubmissionStatus"
+                FROM delegated_submissions as t
                 WHERE t.submission_id IN (SELECT value FROM json_each($1))
             "#,
             serde_json::to_string(&submission_ids).expect("Failed to serialize ids")
@@ -466,75 +535,78 @@ fn select_external_tasks(
         .fetch(conn.get_inner())
     } else {
         sqlx::query_as!(
-            ExternalTaskRow,
+            DelegatedSubmission,
             r#"SELECT
                     submission_id as "submission_id!: SubmissionId",
-                    task_id,
-                    last_status_sent as "last_status_sent: DelegatedJobStatus"
-                FROM submissions_external_task as t
+                    external_task_id,
+                    last_status_sent as "last_status_sent: DelegatedSubmissionStatus"
+                FROM delegated_submissions as t
             "#
         )
         .fetch(conn.get_inner())
     }
 }
 
-struct OutOfDateTaskRow {
-    task_id: String,
-    current_status: DelegatedJobStatus,
+struct OutOfDateDelegatedSubmission {
+    external_task_id: String,
+    current_status: DelegatedSubmissionStatus,
 }
 
-fn out_of_date_task(
-    task: ExternalTaskRow,
+fn out_of_date_delegated_submission(
+    task: DelegatedSubmission,
     status: Option<&SubmissionStatus>,
-) -> Option<OutOfDateTaskRow> {
+) -> Option<OutOfDateDelegatedSubmission> {
     let current_status = match status {
-        Some(SubmissionStatus::Paused(_)) => DelegatedJobStatus::Paused,
-        Some(SubmissionStatus::InProgress(_)) => DelegatedJobStatus::InProgress,
-        Some(SubmissionStatus::Completed(_)) => DelegatedJobStatus::Completed,
-        Some(SubmissionStatus::Failed(_, _)) => DelegatedJobStatus::Failed,
-        Some(SubmissionStatus::Cancelled(_)) => DelegatedJobStatus::Cancelled,
+        Some(SubmissionStatus::Paused(_)) => DelegatedSubmissionStatus::Paused,
+        Some(SubmissionStatus::InProgress(_)) => DelegatedSubmissionStatus::InProgress,
+        Some(SubmissionStatus::Completed(_)) => DelegatedSubmissionStatus::Completed,
+        Some(SubmissionStatus::Failed(_, _)) => DelegatedSubmissionStatus::Failed,
+        Some(SubmissionStatus::Cancelled(_)) => DelegatedSubmissionStatus::Cancelled,
         None => {
-            let task_id = &task.task_id;
+            let external_task_id = &task.external_task_id;
             let submission_id = &task.submission_id;
             // Log to Sentry, for visibility.
-            tracing::error!(%submission_id, %task_id,
-                "Got external task but could not find its submission. This could be a resubmitted \
-                external task, where we already cleaned up the corresponding submission after \
-                failure/completion. Assuming it completed successfully. If this delegated task \
-                was manually resubmitted, consider regenerating the submission instead.");
-            DelegatedJobStatus::Completed
+            tracing::error!(%submission_id, %external_task_id,
+                "A submission was delegated, but we could not find its submission. This could be a\
+                resubmitted task, where we already cleaned up the corresponding submission after \
+                failure/completion. Assuming it completed successfully. If this submission was\
+                manually resubmitted/redelegated, consider regenerating the full submission\
+                instead.");
+            DelegatedSubmissionStatus::Completed
         }
     };
-    (task.last_status_sent != Some(current_status)).then_some(OutOfDateTaskRow {
-        task_id: task.task_id,
+    (task.last_status_sent != Some(current_status)).then_some(OutOfDateDelegatedSubmission {
+        external_task_id: task.external_task_id,
         current_status,
     })
 }
 
+/// Convert an `OutOfDateDelegatedSubmission` into a `DelegatedJobUpdate` or
+/// `DelegatedJobCompletion` we can send to the external orchestrator.
 fn status_update(
-    task: &OutOfDateTaskRow,
+    task: &OutOfDateDelegatedSubmission,
 ) -> Either<DelegatedJobUpdate<'_>, DelegatedJobCompletion<'_>> {
     match task.current_status {
-        DelegatedJobStatus::Paused => Either::Left(DelegatedJobUpdate {
-            task_id: &task.task_id,
+        DelegatedSubmissionStatus::Paused => Either::Left(DelegatedJobUpdate {
+            task_id: &task.external_task_id,
             status: DelegatedJobUpdateStatus::Queued,
         }),
-        DelegatedJobStatus::InProgress => Either::Left(DelegatedJobUpdate {
-            task_id: &task.task_id,
+        DelegatedSubmissionStatus::InProgress => Either::Left(DelegatedJobUpdate {
+            task_id: &task.external_task_id,
             status: DelegatedJobUpdateStatus::Running,
         }),
-        DelegatedJobStatus::Completed => Either::Right(DelegatedJobCompletion {
-            task_id: &task.task_id,
+        DelegatedSubmissionStatus::Completed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.external_task_id,
             completion: DelegatedJobCompletionStatus::Success,
         }),
-        DelegatedJobStatus::Failed => Either::Right(DelegatedJobCompletion {
-            task_id: &task.task_id,
+        DelegatedSubmissionStatus::Failed => Either::Right(DelegatedJobCompletion {
+            task_id: &task.external_task_id,
             completion: DelegatedJobCompletionStatus::Failure {
                 failure_reason: FailureReason::Unknown,
             },
         }),
-        DelegatedJobStatus::Cancelled => Either::Right(DelegatedJobCompletion {
-            task_id: &task.task_id,
+        DelegatedSubmissionStatus::Cancelled => Either::Right(DelegatedJobCompletion {
+            task_id: &task.external_task_id,
             completion: DelegatedJobCompletionStatus::Failure {
                 failure_reason: FailureReason::Forced,
             },
@@ -544,32 +616,39 @@ fn status_update(
 
 async fn update_statuses_in_db(
     pool: &DBPools,
-    tasks: impl Iterator<Item = &OutOfDateTaskRow>,
+    tasks: Vec<OutOfDateDelegatedSubmission>,
 ) -> sqlx::Result<()> {
-    let mut conn = pool.writer_conn().await?;
-    for task in tasks {
-        match task.current_status {
-            DelegatedJobStatus::Paused | DelegatedJobStatus::InProgress => {
-                update_last_status_sent(&mut conn, task).await?;
-            }
-            DelegatedJobStatus::Completed
-            | DelegatedJobStatus::Failed
-            | DelegatedJobStatus::Cancelled => {
-                delete_external_task(&mut conn, task).await?;
-            }
-        }
-    }
-    Ok(())
+    pool.writer_conn()
+        .await?
+        .transaction(move |mut tx| {
+            Box::pin(async move {
+                for task in tasks {
+                    match task.current_status {
+                        DelegatedSubmissionStatus::Paused
+                        | DelegatedSubmissionStatus::InProgress => {
+                            update_last_status_sent(&mut tx, &task).await?;
+                        }
+                        DelegatedSubmissionStatus::Completed
+                        | DelegatedSubmissionStatus::Failed
+                        | DelegatedSubmissionStatus::Cancelled => {
+                            delete_external_task(&mut tx, &task).await?;
+                        }
+                    }
+                }
+                Ok(())
+            })
+        })
+        .await
 }
 
 async fn update_last_status_sent(
     mut conn: impl WriterConnection,
-    task: &OutOfDateTaskRow,
+    task: &OutOfDateDelegatedSubmission,
 ) -> sqlx::Result<()> {
     sqlx::query!(
-        "UPDATE submissions_external_task SET last_status_sent = $1 WHERE task_id = $2",
+        "UPDATE delegated_submissions SET last_status_sent = $1 WHERE external_task_id = $2",
         task.current_status,
-        task.task_id,
+        task.external_task_id,
     )
     .execute(conn.get_inner())
     .await?;
@@ -579,11 +658,11 @@ async fn update_last_status_sent(
 
 async fn delete_external_task(
     mut conn: impl WriterConnection,
-    task: &OutOfDateTaskRow,
+    task: &OutOfDateDelegatedSubmission,
 ) -> sqlx::Result<()> {
     sqlx::query!(
-        "DELETE FROM submissions_external_task WHERE task_id = $1",
-        task.task_id,
+        "DELETE FROM delegated_submissions WHERE external_task_id = $1",
+        task.external_task_id,
     )
     .execute(conn.get_inner())
     .await?;
@@ -593,12 +672,12 @@ async fn delete_external_task(
 
 async fn send_status_updates(
     state: &ServerState,
-    events: impl Iterator<Item = &OutOfDateTaskRow>,
+    events: impl Iterator<Item = &OutOfDateDelegatedSubmission>,
 ) -> reqwest::Result<()> {
     let (updates, completions): (Vec<_>, Vec<_>) = events.partition_map(status_update);
     let events = vec![
-        MasterDelegationEvent::Updated(updates),
-        MasterDelegationEvent::Completed(completions),
+        OutgoingDelegationEvent::Updated(updates),
+        OutgoingDelegationEvent::Completed(completions),
     ];
     state
         .http_client
@@ -669,7 +748,7 @@ pub mod test {
     }
 
     async fn count_external_tasks(mut db: impl Connection) -> sqlx::Result<u64> {
-        let count = sqlx::query_scalar!("SELECT COUNT(*) as count FROM submissions_external_task;")
+        let count = sqlx::query_scalar!("SELECT COUNT(*) as count FROM delegated_submissions;")
             .fetch_one(db.get_inner())
             .await?;
         Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
