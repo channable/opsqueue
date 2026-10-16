@@ -6,7 +6,9 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterator, Sequence
+from typing import Any
 
+import multiprocess
 import pytest
 from conftest import (
     OpsqueueProcess,
@@ -840,7 +842,9 @@ def test_streams_completed_chunks_before_submission_finishes(
         [b"[1]", b"[2]"], chunk_size=1
     )
 
-    def complete_chunks(_submission_id_value: int) -> None:
+    allow_second_chunk = multiprocess.Event()
+
+    def complete_chunks(_submission_id_value: int, allow_second_chunk: Any) -> None:
         consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
         chunks = sorted(
             consumer_client.reserve_chunks(
@@ -855,7 +859,8 @@ def test_streams_completed_chunks_before_submission_finishes(
             chunks[0].chunk_index,
             chunks[0].input_content,
         )
-        time.sleep(0.25)
+        if not allow_second_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the second chunk to finish")
         consumer_client.complete_chunk(
             chunks[1].submission_id,
             chunks[1].submission_prefix,
@@ -865,7 +870,7 @@ def test_streams_completed_chunks_before_submission_finishes(
 
     with background_process(
         complete_chunks,
-        args=(submission_id.id,),
+        args=(submission_id.id, allow_second_chunk),
     ):
         results = producer_client.stream_submission_chunks(submission_id)
         assert next(results) == b"[1]"
@@ -886,7 +891,14 @@ def test_async_streams_completed_chunks_before_submission_finishes(
         [b"[1]", b"[2]"], chunk_size=1
     )
 
-    def complete_chunks(_submission_id_value: int) -> None:
+    allow_first_chunk = multiprocess.Event()
+    allow_second_chunk = multiprocess.Event()
+
+    def complete_chunks(
+        _submission_id_value: int,
+        allow_first_chunk: Any,
+        allow_second_chunk: Any,
+    ) -> None:
         consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
         chunks = sorted(
             consumer_client.reserve_chunks(
@@ -895,27 +907,43 @@ def test_async_streams_completed_chunks_before_submission_finishes(
             ),
             key=lambda chunk: chunk.chunk_index,
         )
-        consumer_client.complete_chunk(
-            chunks[1].submission_id,
-            chunks[1].submission_prefix,
-            chunks[1].chunk_index,
-            chunks[1].input_content,
-        )
-        time.sleep(0.25)
+        if not allow_first_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the first chunk to finish")
         consumer_client.complete_chunk(
             chunks[0].submission_id,
             chunks[0].submission_prefix,
             chunks[0].chunk_index,
             chunks[0].input_content,
         )
+        if not allow_second_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the second chunk to finish")
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
+        )
 
     async def collect() -> list[bytes]:
         results = await producer_client.async_stream_submission_chunks(submission_id)
-        return [chunk async for chunk in results]
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(anext(results), timeout=0.05)
+
+        allow_first_chunk.set()
+        first = await asyncio.wait_for(anext(results), timeout=5)
+        assert first == b"[1]"
+        assert isinstance(
+            producer_client.get_submission_status(submission_id),
+            SubmissionStatus.InProgress,
+        )
+
+        allow_second_chunk.set()
+        second = await asyncio.wait_for(anext(results), timeout=5)
+        return [first, second]
 
     with background_process(
         complete_chunks,
-        args=(submission_id.id,),
+        args=(submission_id.id, allow_first_chunk, allow_second_chunk),
     ):
         assert asyncio.run(collect()) == [b"[1]", b"[2]"]
 

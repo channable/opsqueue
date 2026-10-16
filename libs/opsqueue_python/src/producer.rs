@@ -446,10 +446,14 @@ impl ProducerClient {
             |mut state| async move {
                 loop {
                     if state.index < state.ready_until {
-                        let prefix = state
-                            .prefix
-                            .as_deref()
-                            .expect("ready submissions have an object-store prefix");
+                        let Some(prefix) = state.prefix.as_deref() else {
+                            state.finished = true;
+                            state.ready_until = state.index;
+                            return Some((
+                                Err(StreamingChunkError::InlineOutputStorageUnsupported),
+                                state,
+                            ));
+                        };
                         let result = state
                             .object_store_client
                             .retrieve_chunk(prefix, state.index.into(), ChunkType::Output)
@@ -689,9 +693,8 @@ impl ProducerClient {
                     "Submission {} completed! Streaming result-chunks from object store",
                     id.id
                 );
-                let prefix = submission.prefix.unwrap_or_default();
                 let py_chunks_iter =
-                    PyChunksIter::new(self, prefix, submission.chunks_total.into());
+                    PyChunksIter::new(self, submission.prefix, submission.chunks_total.into());
 
                 Ok(Some(py_chunks_iter))
             }
@@ -726,6 +729,7 @@ enum StreamingChunkError {
     Failed(Box<crate::errors::SubmissionFailed>),
     SubmissionNotFound(SubmissionNotFound),
     Cancelled,
+    InlineOutputStorageUnsupported,
 }
 
 impl std::fmt::Display for StreamingChunkError {
@@ -736,6 +740,9 @@ impl std::fmt::Display for StreamingChunkError {
             Self::Failed(_) => write!(f, "Submission failed"),
             Self::SubmissionNotFound(error) => error.fmt(f),
             Self::Cancelled => write!(f, "Submission cancelled"),
+            Self::InlineOutputStorageUnsupported => {
+                write!(f, "Streaming inline submission outputs is not supported")
+            }
         }
     }
 }
@@ -750,6 +757,9 @@ impl From<CError<StreamingChunkError>> for PyErr {
             StreamingChunkError::Failed(error) => CError(*error).into(),
             StreamingChunkError::SubmissionNotFound(error) => CError(error).into(),
             error @ StreamingChunkError::Cancelled => PyException::new_err(error.to_string()),
+            error @ StreamingChunkError::InlineOutputStorageUnsupported => {
+                PyException::new_err(error.to_string())
+            }
         }
     }
 }
@@ -770,12 +780,19 @@ impl PyChunksIter {
         }
     }
 
-    pub(crate) fn new(client: &ProducerClient, prefix: String, chunks_total: u63) -> Self {
-        let stream = client
-            .object_store_client
-            .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
-            .map_err(|error| CError(StreamingChunkError::Retrieval(error)))
-            .boxed();
+    pub(crate) fn new(client: &ProducerClient, prefix: Option<String>, chunks_total: u63) -> Self {
+        let stream = match prefix {
+            Some(prefix) => client
+                .object_store_client
+                .retrieve_chunks(prefix, chunks_total, ChunkType::Output)
+                .map_err(|error| CError(StreamingChunkError::Retrieval(error)))
+                .boxed(),
+            None if chunks_total == u63::new(0) => futures::stream::empty().boxed(),
+            None => futures::stream::once(async {
+                Err(CError(StreamingChunkError::InlineOutputStorageUnsupported))
+            })
+            .boxed(),
+        };
         Self::from_stream(client, stream)
     }
 }
@@ -786,20 +803,18 @@ impl PyChunksIter {
         slf
     }
 
-    fn __next__(&self, py: Python<'_>) -> Option<CPyResult<Vec<u8>, StreamingChunkError>> {
-        // The only time we need the GIL is when turning the result back.
-        // By unlocking here, we reduce the chance of deadlocks.
+    fn __next__(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Option<CPyResult<Vec<u8>, StreamingChunkError>>> {
         py.detach(move || {
             let runtime = self.runtime.clone();
             let stream = self.stream.clone();
-            runtime.block_on(async {
-                // We lock the stream in a separate Tokio task
-                // that explicitly runs on the runtime thread rather than on the main Python thread.
-                // This reduces the possibility for deadlocks even further.
-                tokio::task::spawn(async move { stream.lock().await.next().await })
-                    .await
-                    .expect("Top-level spawn to succeed")
-            })
+            runtime
+                .block_on(run_unless_interrupted(async move {
+                    Ok::<_, FatalPythonException>(stream.lock().await.next().await)
+                }))
+                .map_err(|error: FatalPythonException| error.0)
         })
     }
 
@@ -838,12 +853,7 @@ impl PyChunksAsyncIter {
             // The only time we need the GIL is when turning the result into Python datatypes.
             // By unlocking here, we reduce the chance of deadlocks.
             async_util::async_detach(Box::pin(async move {
-                // We lock the stream in a separate Tokio task
-                // that explicitly runs on the runtime thread rather than on the main Python thread.
-                // This reduces the possibility for deadlocks even further.
-                let res = tokio::task::spawn(async move { stream.lock().await.next().await })
-                    .await
-                    .expect("Top-level spawn to succeed");
+                let res = stream.lock().await.next().await;
                 match res {
                     None => Err(PyStopAsyncIteration::new_err(())),
                     Some(Ok(val)) => Ok(Some(val)),
