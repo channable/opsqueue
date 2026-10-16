@@ -712,13 +712,23 @@ impl ProducerClient {
 }
 
 struct StreamingChunkState {
+    /// Polls the submission and reports how many leading chunks are ready.
     client: ActualClient,
+    /// Fetches completed output chunks from object storage.
     object_store_client: opsqueue::object_store::ObjectStoreClient,
+    /// Submission that owns the output chunks being streamed.
     submission_id: SubmissionId,
+    /// Next output index to retrieve and yield.
     index: u63,
+    /// Object-store prefix for fetching outputs, populated from submission status.
+    /// Remains `None` for inline storage, which this iterator rejects.
     prefix: Option<String>,
+    /// Exclusive end of the contiguous ready range. Drain `[index, ready_until)` before polling again.
     ready_until: u63,
+    /// Stops further polling after completion, failure, or rejecting inline output.
+    /// Completed submissions still drain their cached ready range before ending.
     finished: bool,
+    /// Delay before the next status poll. It backs off while waiting and resets after retrieval.
     interval: Duration,
 }
 
