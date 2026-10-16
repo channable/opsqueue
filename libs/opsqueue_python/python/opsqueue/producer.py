@@ -244,7 +244,24 @@ class ProducerClient:
         self,
         submission_id: SubmissionId,
     ) -> Iterator[bytes]:
-        """Stream completed chunks progressively in chunk-index order."""
+        """
+        Yield completed output chunks progressively in chunk-index order.
+
+        While the submission is in progress, this yields each contiguous prefix
+        of ready chunks. A paused submission waits until it is resumed. A
+        completed submission ends iteration after all outputs are yielded; a
+        failed submission raises `SubmissionFailedError`.
+
+        Non-empty submissions inserted with `insert_submission_direct` use
+        inline output storage and cannot be streamed by this method.
+
+        Raises:
+        - `SubmissionNotFoundError` if the submission does not exist.
+        - `SubmissionFailedError` if the submission fails.
+        - `InternalProducerClientError` if polling the submission fails.
+        - `ChunkRetrievalError` if an output chunk cannot be retrieved.
+        - `Exception` if the submission is cancelled or uses inline output storage.
+        """
         return self.inner.stream_submission_chunks(  # type: ignore[no-any-return]
             submission_id
         )
@@ -253,7 +270,24 @@ class ProducerClient:
         self,
         submission_id: SubmissionId,
     ) -> AsyncIterator[bytes]:
-        """Stream completed chunks progressively in chunk-index order."""
+        """
+        Yield completed output chunks progressively in chunk-index order.
+
+        While the submission is in progress, this yields each contiguous prefix
+        of ready chunks. A paused submission waits until it is resumed. A
+        completed submission ends iteration after all outputs are yielded; a
+        failed submission raises `SubmissionFailedError`.
+
+        Non-empty submissions inserted with `insert_submission_direct` use
+        inline output storage and cannot be streamed by this method.
+
+        Raises:
+        - `SubmissionNotFoundError` if the submission does not exist.
+        - `SubmissionFailedError` if the submission fails.
+        - `InternalProducerClientError` if polling the submission fails.
+        - `ChunkRetrievalError` if an output chunk cannot be retrieved.
+        - `Exception` if the submission is cancelled or uses inline output storage.
+        """
         return await self.inner.async_stream_submission_chunks(  # type: ignore[no-any-return]
             submission_id
         )
