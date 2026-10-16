@@ -80,11 +80,44 @@ impl Strategy {
 
 #[cfg(feature = "server-logic")]
 impl Strategy {
+
+    /// Build a query to return chunks using for the current 'Strategy'.
     pub fn build_query<'a>(
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
     ) -> &'a mut QueryBuilder<Sqlite> {
         let qb = self.build_query_snippet_returning_chunks(qb);
+        tracing::trace!("sql: {:?}", qb.sql());
+        qb
+    }
+
+    /// Like 'build_query' but the query returns chunks joined with submissions.
+    pub fn build_query_with_submission_info<'a>(
+        &'a self,
+        qb: &'a mut QueryBuilder<Sqlite>,
+    ) -> &'a mut QueryBuilder<Sqlite> {
+        qb.push(r#"
+            SELECT chunks.*
+            , submissions.id
+            , submissions.prefix
+            , submissions.chunks_total
+            , submissions.chunks_done
+            , submissions.chunk_size
+            , submissions.metadata
+            , ( SELECT json_group_object(metadata_key, metadata_value)
+                FROM submissions_metadata
+                WHERE submission_id = submissions.id
+              ) AS strategic_metadata
+            , submissions.otel_trace_carrier
+            FROM (
+            "#
+        );
+        self.build_query_snippet_returning_chunks(qb);
+        // The 'CROSS JOIN' here keeps the chunks as the outer loop.
+        qb.push(
+            ") AS chunks CROSS JOIN submissions
+            ON submissions.id = chunks.submission_id"
+        );
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
