@@ -202,7 +202,10 @@ impl DBPools {
         }
     }
 
-    /// Create a `DBPools` instance from a single test pool. Only usable in tests.
+    /// Create a `DBPools` instance from a read and write pool. Only usable in tests.
+    ///
+    /// Useful to closely mimic the pool that is used in production (multiple reader connections,
+    /// a single writer connections).
     #[cfg(test)]
     pub(crate) fn from_test_pools(
         read_pool: &sqlx::SqlitePool,

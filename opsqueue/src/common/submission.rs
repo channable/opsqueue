@@ -308,7 +308,7 @@ pub mod db {
         Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
         SubmissionStatus, Utc, chunk,
     };
-    use crate::common::chunk::db::delete_chunks;
+    use crate::common::chunk::db::delete_chunks_notx;
     use crate::common::extension::Extension;
     use crate::db::DBPools;
     use crate::tracing::as_dyn_error;
@@ -556,8 +556,9 @@ pub mod db {
                 super::chunk::db::restore_paused_chunks(id, &mut tx).await?;
                 // NOTE: We need to check whether the submission is completed, because it might
                 // be the case that we are unpausing a 0-chunk submission.
-                maybe_complete_submission(id, &mut tx).await?;
-                Ok::<(), E<DatabaseError, SubmissionNotFound>>(())
+                maybe_complete_submission(id, &mut tx)
+                    .await
+                    .map(|_was_completed| ())
             })
         })
         .await?;
@@ -1228,7 +1229,7 @@ pub mod db {
         id: SubmissionId,
         mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        match cancel_submission_raw(id, &mut conn).await {
+        match cancel_in_progress_submission_raw(id, &mut conn).await {
             Ok(()) => {
                 super::chunk::db::skip_remaining_chunks(id, conn).await?;
                 Ok(())
@@ -1244,7 +1245,7 @@ pub mod db {
     }
 
     #[tracing::instrument(skip(conn))]
-    pub(super) async fn cancel_submission_raw(
+    pub(super) async fn cancel_in_progress_submission_raw(
         id: SubmissionId,
         mut conn: impl WriterConnection,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
@@ -1453,7 +1454,7 @@ pub mod db {
                 .execute(tx.get_inner())
                 .await?;
 
-                delete_chunks(submission_id, tx).await?;
+                delete_chunks_notx(submission_id, tx).await?;
 
                 Ok(())
             })
@@ -1577,20 +1578,25 @@ pub mod db {
         let mut deleted_count: u64 = 0;
 
         while let Some(batch_res) = old_submissions.next().await {
+            // We acquire the writer connection per-batch, to avoid holding the
+            // resource for too long.
             let mut write_conn = db.writer_conn().await?;
 
             let batch = batch_res.map_err(|err| err.1)?;
 
             'outer: for submission in batch {
+                // Check if any extension still needs the submission around.
                 for extension in extensions {
                     if extension
                         .references_submission(submission.id, &mut write_conn)
                         .await?
                     {
+                        // Still referenced; leave the submission in place.
                         continue 'outer;
                     }
                 }
 
+                // Not referenced; delete the submission.
                 delete_submission(submission.id, &mut write_conn).await?;
                 deleted_count += 1;
             }
@@ -1870,19 +1876,21 @@ pub mod test {
             .await
             .expect("insertion failed");
 
-        let (submission_status_changed, _) = tokio::sync::broadcast::channel(10);
+        let (submission_status_changed_tx, mut submission_status_changed_rx) =
+            tokio::sync::broadcast::channel(10);
         fail_submission(
             submission.id,
             u63::new(1).into(),
             "Boom!".to_string(),
             &mut conn,
-            &submission_status_changed,
+            &submission_status_changed_tx,
         )
         .await
         .unwrap();
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
         assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 0);
         assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 1);
+        assert_eq!(submission_status_changed_rx.try_recv(), Ok(submission.id));
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
