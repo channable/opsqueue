@@ -423,16 +423,13 @@ impl ProducerClient {
     }
 
     /// Stream output chunks as soon as each consumer has completed them.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Python error if creating the iterator fails.
-    pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyResult<PyChunksIter> {
+    #[must_use]
+    pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
         self.streaming_submission_chunks(submission_id)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyResult<PyChunksIter> {
+    fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
@@ -525,7 +522,7 @@ impl ProducerClient {
         )
         .map(|item| item.map_err(CError))
         .boxed();
-        Ok(PyChunksIter::from_stream(self, stream))
+        PyChunksIter::from_stream(self, stream)
     }
 
     /// Blocks (and short-polls) until the submission is completed.
@@ -594,7 +591,7 @@ impl ProducerClient {
         submission_id: SubmissionId,
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
-        let stream = me.streaming_submission_chunks(submission_id)?;
+        let stream = me.streaming_submission_chunks(submission_id);
         let _tokio_active_runtime_guard = me.runtime.enter();
         async_util::future_into_py(
             py,
