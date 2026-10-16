@@ -425,11 +425,11 @@ impl ProducerClient {
     /// Stream output chunks as soon as each consumer has completed them.
     #[must_use]
     pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
-        self.streaming_submission_chunks(submission_id)
+        self.create_submission_chunk_stream(submission_id)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn streaming_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
+    fn create_submission_chunk_stream(&self, submission_id: SubmissionId) -> PyChunksIter {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
