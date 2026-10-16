@@ -445,6 +445,7 @@ impl ProducerClient {
             },
             |mut state| async move {
                 loop {
+                    // Drain the cached ready prefix before polling for status again.
                     if state.index < state.ready_until {
                         let Some(prefix) = state.prefix.as_deref() else {
                             state.finished = true;
@@ -487,6 +488,7 @@ impl ProducerClient {
                         }
                     };
 
+                    // Cache status progress so each yielded chunk does not require a new poll.
                     match status {
                         submission::SubmissionStatus::InProgress(submission) => {
                             state.prefix = state.prefix.take().or(submission.prefix);
@@ -517,6 +519,8 @@ impl ProducerClient {
                     if state.index < state.ready_until || state.finished {
                         continue;
                     }
+
+                    // Back off only while the next chunk is not ready; retrieval resets the interval.
                     tokio::time::sleep(state.interval).await;
                     if state.interval < SUBMISSION_POLLING_INTERVAL {
                         state.interval = (state.interval * 2).min(SUBMISSION_POLLING_INTERVAL);
