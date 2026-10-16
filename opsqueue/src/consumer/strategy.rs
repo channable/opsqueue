@@ -9,7 +9,11 @@ use crate::common::chunk::Chunk;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
+    /// Prioritize older submissions; candidate chunks within each submission
+    /// are ordered by ascending chunk index.
     Oldest,
+    /// Prioritize newer submissions; candidate chunks within each submission
+    /// are ordered by ascending chunk index.
     Newest,
     Random,
     /// Perform a sort of submissions by metadata (ordered by in-flight counts),
