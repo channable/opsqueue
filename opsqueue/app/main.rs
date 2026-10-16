@@ -55,7 +55,31 @@ pub async fn async_main() {
     .await
     .expect("Timed out while initiating the database");
 
+    // Triggered when new submissions are inserted, or existing submissions are retried.
+    // Used to wake consumers when new work is available.
+    //
+    // Notifications are triggered *after* mutation. That is, after a transaction completes.
+    // Meaning that it might happen that a notification is missed. However, this is generally safe,
+    // since the failing submission will be picked up as usual whenever another
+    // notification is sent.
+    //
+    // TODO(https://github.com/channable/opsqueue/issues/193): Incorporate a fallback timer, such
+    //  that consumers check for new work at least every x seconds?
     let notify_on_insert = Arc::new(Notify::new());
+    // Triggered when a submission's status changes.
+    // Exposed via the CoreApi for use in extensions (e.g. the delegation extension).
+    //
+    // Notifications are triggered *after* mutation. That is, after a transaction completes.
+    // Meaning that it might happen that a notification is missed. It is the extension's
+    // responsibility to deal with this. For instance, by checking for new work at least every x
+    // seconds.
+    //
+    // We set the capacity to a somewhat arbitrary 128, to prevent unbounded memory growth. This
+    // channel is implemented as a ringbuffer, so when the capacity is exceeded pending events will
+    // be overwritten. Receivers will get a `RecvError::Lagged` in that case. Depending on the
+    // requirements, Receivers might want to do a full scan for available work if that happens.
+    //
+    // Receiver is dropped because listeners subscribe independently
     let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(128);
 
     let core_api = CoreApi::new(

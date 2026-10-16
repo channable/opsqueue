@@ -34,6 +34,8 @@ pub struct CoreApi {
     submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
 }
 
+/// Interface exposed by OpsQueue Core and made available to extensions to interact with database
+/// tables which are the responsibility of OpsQueue core.
 impl CoreApi {
     #[must_use]
     pub fn new(

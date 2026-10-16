@@ -304,6 +304,8 @@ pub mod db {
 
     /// Mark a chunk as completed and update related submission state.
     ///
+    /// If the submission is completed then a notification is sent via `submission_status_changed`.
+    ///
     /// # Errors
     ///
     /// Returns an error if the chunk/submission cannot be updated in the database.
@@ -412,7 +414,10 @@ pub mod db {
         Ok(chunk_moved)
     }
 
-    /// Increment retries for a chunk, or move it to failed state.
+    /// Increment retries for a chunk.
+    ///
+    /// If the submission has failed permanently (no more retries) then mark the submission as
+    /// failed and notify on the provided broadcast channel 'submission_status_changed'.
     ///
     /// # Errors
     ///
@@ -755,11 +760,13 @@ pub mod db {
 
     /// Delete all chunks belonging to the given submission.
     ///
+    /// Do not call directly! Must be called inside a transaction.
+    ///
     /// # Errors
     ///
     /// Returns an error if deletion failed.
     #[tracing::instrument(skip(conn))]
-    pub async fn delete_chunks(
+    pub async fn delete_chunks_notx(
         submission_id: SubmissionId,
         mut conn: impl WriterConnection,
     ) -> sqlx::Result<()> {
@@ -918,7 +925,9 @@ pub mod test {
             .unwrap();
         }
 
-        delete_chunks(deleted_submission, &mut conn).await.unwrap();
+        delete_chunks_notx(deleted_submission, &mut conn)
+            .await
+            .unwrap();
 
         let remaining = sqlx::query!(
             r#"
@@ -931,12 +940,11 @@ pub mod test {
         .fetch_all(conn.get_inner())
         .await
         .unwrap();
-        assert_eq!(
+        assert!(
             remaining
                 .iter()
                 .map(|row| row.submission_id)
-                .collect::<Vec<_>>(),
-            vec![retained_submission; 4]
+                .eq([retained_submission; 4])
         );
     }
 
@@ -1048,7 +1056,8 @@ pub mod test {
     ) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
-        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+        let (submission_status_changed_tx, submission_status_changed_rx) =
+            tokio::sync::broadcast::channel(10);
 
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -1068,9 +1077,11 @@ pub mod test {
 
         let res = complete_chunk(chunk_id, None, &mut conn, &submission_status_changed_tx).await;
         assert!(res.is_ok());
+        assert!(submission_status_changed_rx.is_empty());
 
         let res = complete_chunk(chunk_id, None, &mut conn, &submission_status_changed_tx).await;
         assert!(res.is_ok());
+        assert!(submission_status_changed_rx.is_empty());
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1105,7 +1116,8 @@ pub mod test {
     ) {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
-        let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(10);
+        let (submission_status_changed_tx, mut submission_status_changed_rx) =
+            tokio::sync::broadcast::channel(10);
 
         let (submission, chunks) = Submission::from_vec(
             vec![Some("foo".into()), Some("bar".into()), Some("baz".into())],
@@ -1134,6 +1146,7 @@ pub mod test {
         )
         .await;
         assert_matches!(res, Ok(false)); // Retry limit not yet reached.
+        assert!(submission_status_changed_rx.is_empty());
 
         let res = retry_or_fail_chunk(
             chunk_id,
@@ -1144,6 +1157,7 @@ pub mod test {
         )
         .await;
         assert_matches!(res, Ok(true)); // Retry limit reached, submission is now permanently failed.
+        assert_eq!(submission_status_changed_rx.try_recv(), Ok(submission.id));
 
         let res = retry_or_fail_chunk(
             chunk_id,
@@ -1154,5 +1168,6 @@ pub mod test {
         )
         .await;
         assert_matches!(res, Ok(false)); // Submission was already failed, check that we ignore.
+        assert!(submission_status_changed_rx.is_empty());
     }
 }

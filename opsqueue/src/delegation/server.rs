@@ -2,6 +2,7 @@ use crate::common::errors::{E, SubmissionNotFound};
 use crate::common::extension::CoreApi;
 use crate::common::submission::{SubmissionId, SubmissionStatus};
 use crate::db::{Connection, DBPools, WriterConnection};
+use crate::tracing::as_dyn_error;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -14,7 +15,6 @@ use tokio::select;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
-// use tower::ServiceExt;
 
 #[cfg(test)]
 pub(crate) fn app_for_tests(
@@ -100,7 +100,7 @@ struct DelegatedJobPayload {
 
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "type", content = "contents")]
-enum MasterDelegationEvent<'a> {
+enum OrchestratorDelegationEvent<'a> {
     #[serde(rename = "updated")]
     Updated(Vec<DelegatedJobUpdate<'a>>),
     #[serde(rename = "completed")]
@@ -152,8 +152,9 @@ async fn submit(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    // Note that we don't need a transaction here. Say we fail half-way, JM will just retry. Since
-    // all operations in `handle_worker_events` are idempotent, that would be fine.
+    // Note that we don't need a transaction here. Say we fail half-way, the external delegator will
+    // just retry. Since all operations in `handle_worker_events` are idempotent, that would be
+    // fine.
     handle_worker_events(&state.core_api, &mut conn, events)
         .await
         .map_err(|e: sqlx::Error| {
@@ -176,7 +177,10 @@ async fn handle_worker_events(
                     handle_delegate_event(core_api, &mut *conn, &delegation)
                         .await
                         .map_err(|e| {
-                            tracing::error!("Error handling delegate event: {e:?}");
+                            tracing::error!(
+                                error = as_dyn_error(&e),
+                                "Error handling delegate event"
+                            );
                             e
                         })?;
                 }
@@ -210,31 +214,37 @@ async fn handle_delegate_event(
     conn: &mut impl WriterConnection,
     job: &DelegatedJob,
 ) -> sqlx::Result<()> {
-    let task_id = &job.task_id;
+    // TODO: Any way to avoid the clones, without resorting to an Arc?
+    //  We need to do this because tokio requires any future to be `Send + Sync + 'static`
+    let task_id = job.task_id.clone();
     let submission_id = job.payload.submission_id;
+    let core_api = core_api.clone();
 
-    let rows_affected = insert_external_task(&mut *conn, submission_id, task_id).await?;
+    conn.transaction(move |mut tx| {
+        Box::pin(async move {
+            let rows_affected = insert_external_task(&mut tx, submission_id, &task_id).await?;
 
-    if rows_affected == 0 {
-        tracing::debug!(%submission_id, %task_id, "External task was already registered");
-    }
+            if rows_affected == 0 {
+                tracing::debug!(%submission_id, %task_id, "External task was already registered");
+            }
 
-    match core_api.unpause_submission(submission_id, &mut *conn).await {
-        Ok(()) => {}
-        Err(E::R(SubmissionNotFound(_))) => {
-            // Note that this path could be hit when doing resubmitting a task with the same
-            // submission id.
-            tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
-            // Send a notification, s.t. the status is promptly reported to the external system.
-            core_api.notify_submission_status_changed(submission_id);
-        }
-        Err(E::L(db_err)) => {
-            tracing::error!(%submission_id, "DB error unpausing submission: {db_err:?}");
-            return Err(db_err.0);
-        }
-    }
+            match core_api.unpause_submission(submission_id, &mut tx).await {
+                Ok(()) => {}
+                Err(E::R(SubmissionNotFound(_))) => {
+                    // Note that this path could be hit when doing resubmitting a task with the same
+                    // submission id.
+                    tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
+                    // Send a notification, s.t. the status is promptly reported to the external system.
+                    core_api.notify_submission_status_changed(submission_id);
+                }
+                Err(E::L(db_err)) => {
+                    tracing::error!(%submission_id, "DB error unpausing submission: {db_err:?}");
+                    return Err(db_err.0);
+                }
+            }
 
-    Ok(())
+            Ok(())
+        })}).await
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
@@ -243,35 +253,43 @@ async fn handle_kill_event(
     conn: &mut impl WriterConnection,
     task_id: &str,
 ) -> sqlx::Result<()> {
-    let submission_id = sqlx::query_scalar!(
-        r#"SELECT submission_id AS "submission_id: SubmissionId"
-           FROM submissions_external_task
-           WHERE task_id = $1"#,
-        task_id,
-    )
-    .fetch_optional(conn.get_inner())
-    .await?;
+    // TODO: Any way to avoid the clones, without resorting to an Arc?
+    //  We need to do this because tokio requires any future to be `Send + Sync + 'static`
+    let task_id = task_id.to_owned();
+    let core_api = core_api.clone();
 
-    let Some(submission_id) = submission_id else {
-        tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
-        return Ok(());
-    };
+    conn.transaction(move |mut tx| {
+        Box::pin(async move {
+            let submission_id = sqlx::query_scalar!(
+                r#"SELECT submission_id AS "submission_id: SubmissionId"
+                   FROM submissions_external_task
+                   WHERE task_id = $1"#,
+                task_id,
+            )
+                .fetch_optional( tx.get_inner())
+                .await?;
 
-    match core_api.cancel_submission(submission_id, conn).await {
-        Ok(()) => {}
-        Err(E::L(db_err)) => {
-            tracing::error!(%submission_id, "DB error cancelling submission: {db_err:?}");
-            return Err(db_err.0);
-        }
-        Err(E::R(E::L(SubmissionNotFound(_)))) => {
-            tracing::warn!(%submission_id, "Submission not found when attempting to cancel; already gone");
-        }
-        Err(E::R(E::R(_not_cancelable))) => {
-            tracing::debug!(%submission_id, "Submission was already cancelled");
-        }
-    }
+            let Some(submission_id) = submission_id else {
+                tracing::warn!(%task_id, "Kill event for unknown task_id; ignoring");
+                return Ok(());
+            };
 
-    Ok(())
+            match core_api.cancel_submission(submission_id, &mut tx).await {
+                Ok(()) => {},
+                Err(E::L(db_err)) => {
+                    tracing::error!(%submission_id, "DB error cancelling submission: {db_err:?}");
+                    return Err(db_err.0);
+                }
+                Err(E::R(E::L(SubmissionNotFound(_)))) => {
+                    tracing::warn!(%submission_id, "Submission not found when attempting to cancel; already gone");
+                }
+                Err(E::R(E::R(_not_cancelable))) => {
+                    tracing::debug!(%submission_id, "Submission was already cancelled");
+                }
+            }
+
+            Ok(())
+        })}).await
 }
 
 const DELEGATION_BACKGROUND_LOOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -597,8 +615,8 @@ async fn send_status_updates(
 ) -> reqwest::Result<()> {
     let (updates, completions): (Vec<_>, Vec<_>) = events.partition_map(status_update);
     let events = vec![
-        MasterDelegationEvent::Updated(updates),
-        MasterDelegationEvent::Completed(completions),
+        OrchestratorDelegationEvent::Updated(updates),
+        OrchestratorDelegationEvent::Completed(completions),
     ];
     state
         .http_client
