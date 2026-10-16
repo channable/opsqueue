@@ -417,7 +417,7 @@ pub mod db {
     /// Increment retries for a chunk.
     ///
     /// If the submission has failed permanently (no more retries) then mark the submission as
-    /// failed and notify on the provided broadcast channel 'submission_status_changed'.
+    /// failed and notify on the provided broadcast channel '`submission_status_changed`'.
     ///
     /// # Errors
     ///

@@ -29,13 +29,13 @@ pub trait Extension: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct CoreApi {
-    pub pool: DBPools,
+    pool: DBPools,
     notify_on_insert: Arc<Notify>,
     submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
 }
 
-/// Interface exposed by OpsQueue Core and made available to extensions to interact with database
-/// tables which are the responsibility of OpsQueue core.
+/// Interface exposed by `OpsQueue` Core and made available to extensions to interact with database
+/// tables which are the responsibility of `OpsQueue` core.
 impl CoreApi {
     #[must_use]
     pub fn new(
@@ -50,7 +50,13 @@ impl CoreApi {
         }
     }
 
-    /// Subscribe before starting a task that processes submission status changes.
+    /// Get a `DBPools` instance that can be used to interact with the database.
+    #[must_use]
+    pub fn get_db_pools(&self) -> &DBPools {
+        &self.pool
+    }
+
+    /// Subscribe to submission status change events.
     #[must_use]
     pub fn subscribe_submission_status_changes(
         &self,
@@ -58,6 +64,7 @@ impl CoreApi {
         self.submission_status_changed_tx.subscribe()
     }
 
+    /// Send a submission status change event.
     pub(crate) fn notify_submission_status_changed(&self, id: SubmissionId) {
         let _ = self.submission_status_changed_tx.send(id);
     }

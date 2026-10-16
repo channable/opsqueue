@@ -147,10 +147,15 @@ async fn submit(
     State(state): State<ServerState>,
     Json(events): Json<Vec<WorkerDelegationEvent>>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut conn = state.core_api.pool.writer_conn().await.map_err(|e| {
-        tracing::error!("DB error acquiring writer connection: {e:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let mut conn = state
+        .core_api
+        .get_db_pools()
+        .writer_conn()
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error acquiring writer connection: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     // Note that we don't need a transaction here. Say we fail half-way, the external delegator will
     // just retry. Since all operations in `handle_worker_events` are idempotent, that would be
@@ -176,12 +181,11 @@ async fn handle_worker_events(
                 for delegation in delegations {
                     handle_delegate_event(core_api, &mut *conn, &delegation)
                         .await
-                        .map_err(|e| {
+                        .inspect_err(|e| {
                             tracing::error!(
-                                error = as_dyn_error(&e),
+                                error = as_dyn_error(e),
                                 "Error handling delegate event"
                             );
-                            e
                         })?;
                 }
             }
@@ -231,7 +235,7 @@ async fn handle_delegate_event(
             match core_api.unpause_submission(submission_id, &mut tx).await {
                 Ok(()) => {}
                 Err(E::R(SubmissionNotFound(_))) => {
-                    // Note that this path could be hit when doing resubmitting a task with the same
+                    // Note that this path could be hit when resubmitting a task with the same
                     // submission id.
                     tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
                     // Send a notification, s.t. the status is promptly reported to the external system.
@@ -378,9 +382,19 @@ async fn report_submission_status(
         ReportTrigger::Submissions(submission_ids) => Some(submission_ids),
         ReportTrigger::FullScan | ReportTrigger::Timeout => None,
     };
-    let mut conn_0 = state.core_api.pool.reader_conn().await.map_err(E::L)?;
+    let mut conn_0 = state
+        .core_api
+        .get_db_pools()
+        .reader_conn()
+        .await
+        .map_err(E::L)?;
     let conn_1 = Arc::new(tokio::sync::Mutex::new(
-        state.core_api.pool.reader_conn().await.map_err(E::L)?,
+        state
+            .core_api
+            .get_db_pools()
+            .reader_conn()
+            .await
+            .map_err(E::L)?,
     ));
     let core_api = Arc::new(state.core_api.clone());
 
@@ -417,7 +431,7 @@ async fn report_submission_status(
         // we will resend the update next iteration. Which is no big deal because
         // `send_status_updates` is idempotent.
 
-        update_statuses_in_db(&state.core_api.pool, batch.iter())
+        update_statuses_in_db(state.core_api.get_db_pools(), batch.iter())
             .await
             .map_err(E::L)?;
 
