@@ -878,6 +878,7 @@ def test_streams_completed_chunks_before_submission_finishes(
             producer_client.get_submission_status(submission_id),
             SubmissionStatus.InProgress,
         )
+        allow_second_chunk.set()
         assert next(results) == b"[2]"
 
 
