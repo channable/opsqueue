@@ -421,6 +421,51 @@ pub mod test {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_oldest_with_submission_info(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let mut qb = QueryBuilder::new("");
+
+        let qb = Strategy::Oldest.build_query_with_submission_info(&mut qb);
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+            ORDER BY
+              submission_id ASC
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_query(qb, &explained);
+        assert_eq!(explained, "3, 0, SCAN chunks");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_newest(db: sqlx::SqlitePool) {
         let mut conn = db.acquire().await.unwrap();
         register_lookup_noops(&mut conn).await;
@@ -438,6 +483,52 @@ pub mod test {
           opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
         ORDER BY
           submission_id DESC
+        ");
+        let explained = explain(qb, &mut conn).await;
+
+        assert_streaming_query(qb, &explained);
+        assert_eq!(explained, "3, 0, SCAN chunks");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_newest_with_submission_info(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let mut qb = QueryBuilder::new("");
+
+        let qb = Strategy::Newest.build_query_with_submission_info(&mut qb);
+        let options = FormatOptions::default();
+        let formatted_query = format(qb.sql().as_str(), &QueryParams::None, &options);
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+            ORDER BY
+              submission_id DESC
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
         ");
         let explained = explain(qb, &mut conn).await;
 
@@ -484,6 +575,72 @@ pub mod test {
         5, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
         26, 1, UNION ALL
         29, 26, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_random_with_submission_info(db: sqlx::SqlitePool) {
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let mut qb = QueryBuilder::new("");
+        let qb = Strategy::Random.build_query_with_submission_info(&mut qb);
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              random_order >= ?
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+            UNION ALL
+            SELECT
+              *
+            FROM
+              chunks
+            WHERE
+              random_order < ?
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_query(qb, &explained);
+        insta::assert_snapshot!(explained, @"
+        1, 0, COMPOUND QUERY
+        2, 1, LEFT-MOST SUBQUERY
+        7, 2, SEARCH chunks USING INDEX random_chunks_order (random_order>?)
+        19, 2, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        39, 2, CORRELATED SCALAR SUBQUERY 1
+        44, 39, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        61, 1, UNION ALL
+        66, 61, SEARCH chunks USING INDEX random_chunks_order (random_order<?)
+        79, 61, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        99, 61, CORRELATED SCALAR SUBQUERY 1
+        104, 99, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -571,6 +728,111 @@ pub mod test {
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_prefer_distinct_oldest_with_submission_info(db: sqlx::SqlitePool) {
+        use Strategy::*;
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let strategy = PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(Oldest),
+        };
+        let mut qb = QueryBuilder::new("");
+        let qb = strategy.build_query_with_submission_info(&mut qb);
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            WITH
+            underlying_submission_ids AS MATERIALIZED (
+              WITH
+              inner AS NOT MATERIALIZED (
+                SELECT
+                  submission_id,
+                  ROW_NUMBER() OVER () as underlying_row
+                FROM
+                  (
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    ORDER BY
+                      id ASC
+                  )
+              ),
+              counts_0 AS (
+                SELECT
+                  sm.submission_id,
+                  ffi_counts.value AS count
+                FROM
+                  json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+                  CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
+                WHERE
+                  sm.metadata_key = ?
+              )
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+              ORDER BY
+                counts_0.count ASC NULLS FIRST,
+                inner.underlying_row ASC
+            )
+            SELECT
+              chunks.*
+            FROM
+              underlying_submission_ids
+              CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_chunks(qb, &explained);
+        insta::assert_snapshot!(explained, @"
+        3, 0, MATERIALIZE underlying_submission_ids
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-8)
+        11, 8, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        22, 5, SCAN (subquery-8)
+        59, 3, MATERIALIZE counts_0
+        63, 59, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        68, 59, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        87, 3, SCAN inner
+        94, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        104, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        124, 3, USE TEMP B-TREE FOR ORDER BY
+        139, 0, SCAN underlying_submission_ids
+        141, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        151, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        183, 0, CORRELATED SCALAR SUBQUERY 1
+        188, 183, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_query_plan_prefer_distinct_newest(db: sqlx::SqlitePool) {
         use Strategy::*;
         let mut conn = db.acquire().await.unwrap();
@@ -650,6 +912,111 @@ pub mod test {
         124, 3, USE TEMP B-TREE FOR ORDER BY
         136, 0, SCAN underlying_submission_ids
         138, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_prefer_distinct_newest_with_submission_info(db: sqlx::SqlitePool) {
+        use Strategy::*;
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let strategy = PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(Newest),
+        };
+        let mut qb = QueryBuilder::new("");
+        let qb = strategy.build_query_with_submission_info(&mut qb);
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            WITH
+            underlying_submission_ids AS MATERIALIZED (
+              WITH
+              inner AS NOT MATERIALIZED (
+                SELECT
+                  submission_id,
+                  ROW_NUMBER() OVER () as underlying_row
+                FROM
+                  (
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    ORDER BY
+                      id DESC
+                  )
+              ),
+              counts_0 AS (
+                SELECT
+                  sm.submission_id,
+                  ffi_counts.value AS count
+                FROM
+                  json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+                  CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
+                WHERE
+                  sm.metadata_key = ?
+              )
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+              ORDER BY
+                counts_0.count ASC NULLS FIRST,
+                inner.underlying_row ASC
+            )
+            SELECT
+              chunks.*
+            FROM
+              underlying_submission_ids
+              CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_chunks(qb, &explained);
+        insta::assert_snapshot!(explained, @"
+        3, 0, MATERIALIZE underlying_submission_ids
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-8)
+        11, 8, SCAN submissions USING COVERING INDEX sqlite_autoindex_submissions_1
+        22, 5, SCAN (subquery-8)
+        59, 3, MATERIALIZE counts_0
+        63, 59, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        68, 59, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        87, 3, SCAN inner
+        94, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        104, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        124, 3, USE TEMP B-TREE FOR ORDER BY
+        139, 0, SCAN underlying_submission_ids
+        141, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        151, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        183, 0, CORRELATED SCALAR SUBQUERY 1
+        188, 183, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -744,6 +1111,122 @@ pub mod test {
         143, 3, USE TEMP B-TREE FOR ORDER BY
         155, 0, SCAN underlying_submission_ids
         157, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_prefer_distinct_random_with_submission_info(db: sqlx::SqlitePool) {
+        use Strategy::*;
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let strategy = PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(Random),
+        };
+        let mut qb = QueryBuilder::new("");
+        let qb = strategy.build_query_with_submission_info(&mut qb);
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            WITH
+            underlying_submission_ids AS MATERIALIZED (
+              WITH
+              inner AS NOT MATERIALIZED (
+                SELECT
+                  submission_id,
+                  ROW_NUMBER() OVER () as underlying_row
+                FROM
+                  (
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    WHERE
+                      random_order >= ?
+                    UNION ALL
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    WHERE
+                      random_order < ?
+                  )
+              ),
+              counts_0 AS (
+                SELECT
+                  sm.submission_id,
+                  ffi_counts.value AS count
+                FROM
+                  json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+                  CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
+                WHERE
+                  sm.metadata_key = ?
+              )
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+              ORDER BY
+                counts_0.count ASC NULLS FIRST,
+                inner.underlying_row ASC
+            )
+            SELECT
+              chunks.*
+            FROM
+              underlying_submission_ids
+              CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_chunks(qb, &explained);
+        insta::assert_snapshot!(explained, @"
+        3, 0, MATERIALIZE underlying_submission_ids
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-9)
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        41, 5, SCAN (subquery-9)
+        78, 3, MATERIALIZE counts_0
+        82, 78, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        87, 78, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        106, 3, SCAN inner
+        113, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        123, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        143, 3, USE TEMP B-TREE FOR ORDER BY
+        158, 0, SCAN underlying_submission_ids
+        160, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        170, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        202, 0, CORRELATED SCALAR SUBQUERY 1
+        207, 202, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
@@ -859,6 +1342,142 @@ pub mod test {
         199, 3, USE TEMP B-TREE FOR ORDER BY
         211, 0, SCAN underlying_submission_ids
         213, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        ");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    pub async fn test_query_plan_prefer_distinct_nested_with_submission_info(db: sqlx::SqlitePool) {
+        use Strategy::*;
+        let mut conn = db.acquire().await.unwrap();
+        register_lookup_noops(&mut conn).await;
+        let strategy = PreferDistinct {
+            meta_key: "company_id".to_string(),
+            underlying: Box::new(PreferDistinct {
+                meta_key: "priority".to_string(),
+                underlying: Box::new(Random),
+            }),
+        };
+        let mut qb = QueryBuilder::new("");
+        let qb = strategy.build_query_with_submission_info(&mut qb);
+        let formatted_query = format(
+            qb.sql().as_str(),
+            &QueryParams::None,
+            &FormatOptions::default(),
+        );
+        insta::assert_snapshot!(formatted_query, @"
+        SELECT
+          chunks.*,
+          submissions.id,
+          submissions.prefix,
+          submissions.chunks_total,
+          submissions.chunks_done,
+          submissions.chunk_size,
+          submissions.metadata,
+          (
+            SELECT
+              json_group_object(metadata_key, metadata_value)
+            FROM
+              submissions_metadata
+            WHERE
+              submission_id = submissions.id
+          ) AS strategic_metadata,
+          submissions.otel_trace_carrier
+        FROM
+          (
+            WITH
+            underlying_submission_ids AS MATERIALIZED (
+              WITH
+              inner AS NOT MATERIALIZED (
+                SELECT
+                  submission_id,
+                  ROW_NUMBER() OVER () as underlying_row
+                FROM
+                  (
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    WHERE
+                      random_order >= ?
+                    UNION ALL
+                    SELECT
+                      id as submission_id
+                    FROM
+                      submissions
+                    WHERE
+                      random_order < ?
+                  )
+              ),
+              counts_0 AS (
+                SELECT
+                  sm.submission_id,
+                  ffi_counts.value AS count
+                FROM
+                  json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+                  CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
+                WHERE
+                  sm.metadata_key = ?
+              ),
+              counts_1 AS (
+                SELECT
+                  sm.submission_id,
+                  ffi_counts.value AS count
+                FROM
+                  json_each(opsqueue_metadata_counts(?)) AS ffi_counts
+                  CROSS JOIN submissions_metadata sm ON sm.metadata_value = CAST(ffi_counts.key AS INTEGER)
+                WHERE
+                  sm.metadata_key = ?
+              )
+              SELECT
+                inner.submission_id
+              FROM
+                inner
+                LEFT JOIN counts_0 ON inner.submission_id = counts_0.submission_id
+                LEFT JOIN counts_1 ON inner.submission_id = counts_1.submission_id
+              ORDER BY
+                counts_0.count ASC NULLS FIRST,
+                counts_1.count ASC NULLS FIRST,
+                inner.underlying_row ASC
+            )
+            SELECT
+              chunks.*
+            FROM
+              underlying_submission_ids
+              CROSS JOIN chunks ON chunks.submission_id = underlying_submission_ids.submission_id
+              AND opsqueue_is_reserved(chunks.submission_id, chunks.chunk_index) = FALSE
+          ) AS chunks
+          CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ");
+
+        let explained = explain(qb, &mut conn).await;
+        assert_streaming_chunks(qb, &explained);
+        insta::assert_snapshot!(explained, @"
+        3, 0, MATERIALIZE underlying_submission_ids
+        5, 3, CO-ROUTINE inner
+        8, 5, CO-ROUTINE (subquery-10)
+        9, 8, COMPOUND QUERY
+        10, 9, LEFT-MOST SUBQUERY
+        13, 10, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        22, 9, UNION ALL
+        25, 22, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        41, 5, SCAN (subquery-10)
+        78, 3, MATERIALIZE counts_0
+        82, 78, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        87, 78, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        106, 3, MATERIALIZE counts_1
+        110, 106, SCAN ffi_counts VIRTUAL TABLE INDEX 1:
+        115, 106, SEARCH sm USING COVERING INDEX lookup_submission_by_metadata (metadata_key=? AND metadata_value=?)
+        134, 3, SCAN inner
+        141, 3, BLOOM FILTER ON counts_0 (submission_id=?)
+        151, 3, SEARCH counts_0 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        164, 3, BLOOM FILTER ON counts_1 (submission_id=?)
+        174, 3, SEARCH counts_1 USING AUTOMATIC COVERING INDEX (submission_id=?) LEFT-JOIN
+        199, 3, USE TEMP B-TREE FOR ORDER BY
+        214, 0, SCAN underlying_submission_ids
+        216, 0, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        226, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        258, 0, CORRELATED SCALAR SUBQUERY 1
+        263, 258, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)
         ");
     }
 
