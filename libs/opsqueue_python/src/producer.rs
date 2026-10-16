@@ -595,7 +595,7 @@ impl ProducerClient {
         submission_id: SubmissionId,
     ) -> PyResult<Bound<'p, PyAny>> {
         let me = self.clone();
-        let stream = me.streaming_submission_chunks(submission_id);
+        let stream = me.create_submission_chunk_stream(submission_id);
         let _tokio_active_runtime_guard = me.runtime.enter();
         async_util::future_into_py(
             py,
