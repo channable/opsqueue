@@ -8,7 +8,7 @@ import time
 from collections.abc import Iterator, Sequence
 from typing import Any
 
-import multiprocess
+import multiprocess  # type: ignore[import-untyped]
 import pytest
 from conftest import (
     OpsqueueProcess,
