@@ -80,7 +80,6 @@ impl Strategy {
 
 #[cfg(feature = "server-logic")]
 impl Strategy {
-
     /// Build a query to return chunks using for the current 'Strategy'.
     pub fn build_query<'a>(
         &'a self,
@@ -91,12 +90,13 @@ impl Strategy {
         qb
     }
 
-    /// Like 'build_query' but the query returns chunks joined with submissions.
+    /// Like '`build_query`' but the query returns chunks joined with submissions.
     pub fn build_query_with_submission_info<'a>(
         &'a self,
         qb: &'a mut QueryBuilder<Sqlite>,
     ) -> &'a mut QueryBuilder<Sqlite> {
-        qb.push(r#"
+        qb.push(
+            r"
             SELECT chunks.*
             , submissions.id
             , submissions.prefix
@@ -110,14 +110,28 @@ impl Strategy {
               ) AS strategic_metadata
             , submissions.otel_trace_carrier
             FROM (
-            "#
+            ",
         );
         self.build_query_snippet_returning_chunks(qb);
         // The 'CROSS JOIN' here keeps the chunks as the outer loop.
         qb.push(
             ") AS chunks CROSS JOIN submissions
-            ON submissions.id = chunks.submission_id"
+            ON submissions.id = chunks.submission_id",
         );
+        // In the case of 'Oldest' and 'Newest' strategies the query planner
+        // ignores the underlying ordering, so we need to explicitly order here.
+        // This isn't needed for underlying 'Random' because that does not use
+        // an "ORDER BY", and isn't needed for 'PreferDistinct' because of the
+        // materialized ranking of in-flight submissions.
+        match self {
+            Self::Oldest => {
+                qb.push(" ORDER BY submission_id ASC");
+            }
+            Self::Newest => {
+                qb.push(" ORDER BY submission_id DESC");
+            }
+            Self::Random | Self::PreferDistinct { .. } => {}
+        }
         tracing::trace!("sql: {:?}", qb.sql());
         qb
     }
@@ -459,10 +473,15 @@ pub mod test {
               submission_id ASC
           ) AS chunks
           CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ORDER BY
+          submission_id ASC
         ");
         let explained = explain(qb, &mut conn).await;
         assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_eq!(
+            explained,
+            "5, 0, SCAN chunks\n11, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)\n39, 0, CORRELATED SCALAR SUBQUERY 1\n44, 39, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -529,11 +548,16 @@ pub mod test {
               submission_id DESC
           ) AS chunks
           CROSS JOIN submissions ON submissions.id = chunks.submission_id
+        ORDER BY
+          submission_id DESC
         ");
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
-        assert_eq!(explained, "3, 0, SCAN chunks");
+        assert_eq!(
+            explained,
+            "5, 0, SCAN chunks\n11, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)\n39, 0, CORRELATED SCALAR SUBQUERY 1\n44, 39, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
