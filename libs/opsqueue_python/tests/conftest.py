@@ -366,6 +366,21 @@ any_strategies: Iterable[StrategyDescription] = (
 )
 
 
+def _ends_with_oldest(strategy: StrategyDescription) -> bool:
+    match strategy:
+        case "Oldest":
+            return True
+        case ("PreferDistinct", _, underlying):
+            return _ends_with_oldest(underlying)
+        case _:
+            return False
+
+
+oldest_strategies: tuple[StrategyDescription, ...] = tuple(
+    strategy for strategy in any_strategies if _ends_with_oldest(strategy)
+)
+
+
 @pytest.fixture(
     scope="function",
     ids=lambda s: f"Strategy.{strategy_from_description(s)}",
@@ -383,6 +398,17 @@ def basic_consumer_strategy(
     params=any_strategies,
 )
 def any_consumer_strategy(
+    request: pytest.FixtureRequest,
+) -> Generator[StrategyDescription, None, None]:
+    yield request.param
+
+
+@pytest.fixture(
+    scope="function",
+    ids=lambda s: f"Strategy.{strategy_from_description(s)}",
+    params=oldest_strategies,
+)
+def oldest_consumer_strategy(
     request: pytest.FixtureRequest,
 ) -> Generator[StrategyDescription, None, None]:
     yield request.param
