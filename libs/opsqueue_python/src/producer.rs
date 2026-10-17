@@ -460,8 +460,10 @@ impl ProducerClient {
                             .retrieve_chunk(prefix, state.index.into(), ChunkType::Output)
                             .await
                             .map_err(StreamingChunkError::Retrieval);
+                        if result.is_ok() {
                         state.index = state.index + u63::new(1);
                         state.interval = INITIAL_SUBMISSION_POLLING_INTERVAL;
+                        }
                         return Some((result, state));
                     }
 
