@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import multiprocess  # type: ignore[import-untyped]
@@ -25,6 +26,7 @@ from opsqueue.consumer import (  # type: ignore[attr-defined]
     Strategy,
     opsqueue_internal,
 )
+from opsqueue.exceptions import ChunkRetrievalError
 from opsqueue.producer import (
     ChunkFailed,
     InitialSubmissionStatus,
@@ -1041,6 +1043,34 @@ def test_stream_submission_chunks_fails_if_submission_failed_before_read() -> No
             next(results)
 
 
+def test_stream_submission_chunks_retries_failed_retrieval(
+    opsqueue: OpsqueueProcess, tmp_path: Path
+) -> None:
+    url = tmp_path.as_uri()
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+    consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+    [chunk] = consumer_client.reserve_chunks(max=1, strategy=Strategy.Oldest())
+    consumer_client.complete_chunk(
+        chunk.submission_id,
+        chunk.submission_prefix,
+        chunk.chunk_index,
+        chunk.input_content,
+    )
+
+    output_path = tmp_path / chunk.submission_prefix / "0-out.bin"
+    output = output_path.read_bytes()
+    output_path.unlink()
+    results = producer_client.stream_submission_chunks(submission_id)
+    with pytest.raises(ChunkRetrievalError):
+        next(results)
+
+    output_path.write_bytes(output)
+    assert next(results) == b"[1]"
+    with pytest.raises(StopIteration):
+        next(results)
+
+
 def test_stream_submission_chunks_not_found(opsqueue: OpsqueueProcess) -> None:
     url = "file:///tmp/opsqueue/test_streaming_submission_not_found"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
@@ -1050,11 +1080,27 @@ def test_stream_submission_chunks_not_found(opsqueue: OpsqueueProcess) -> None:
     with pytest.raises(SubmissionNotFoundError) as exc_info:
         next(results)
     assert exc_info.value.submission_id == submission_id.id
+    with pytest.raises(StopIteration):
+        next(results)
 
     async def read_missing_chunk() -> None:
         results = await producer_client.async_stream_submission_chunks(submission_id)
-        await results.__anext__()
+        with pytest.raises(SubmissionNotFoundError):
+            await anext(results)
+        with pytest.raises(StopAsyncIteration):
+            await anext(results)
 
-    with pytest.raises(SubmissionNotFoundError) as exc_info:
-        asyncio.run(read_missing_chunk())
-    assert exc_info.value.submission_id == submission_id.id
+    asyncio.run(read_missing_chunk())
+
+
+def test_stream_submission_chunks_cancelled(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_cancelled"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+    producer_client.cancel_submission(submission_id)
+
+    results = producer_client.stream_submission_chunks(submission_id)
+    with pytest.raises(Exception, match="Submission cancelled"):
+        next(results)
+    with pytest.raises(StopIteration):
+        next(results)
