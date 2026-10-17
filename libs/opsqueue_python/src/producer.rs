@@ -461,8 +461,8 @@ impl ProducerClient {
                             .await
                             .map_err(StreamingChunkError::Retrieval);
                         if result.is_ok() {
-                        state.index = state.index + u63::new(1);
-                        state.interval = INITIAL_SUBMISSION_POLLING_INTERVAL;
+                            state.index = state.index + u63::new(1);
+                            state.interval = INITIAL_SUBMISSION_POLLING_INTERVAL;
                         }
                         return Some((result, state));
                     }
@@ -478,6 +478,7 @@ impl ProducerClient {
                     {
                         Ok(Some(status)) => status,
                         Ok(None) => {
+                            state.finished = true;
                             return Some((
                                 Err(StreamingChunkError::SubmissionNotFound(SubmissionNotFound(
                                     state.submission_id.into(),
@@ -514,6 +515,7 @@ impl ProducerClient {
                         }
                         submission::SubmissionStatus::Paused(_) => {}
                         submission::SubmissionStatus::Cancelled(_) => {
+                            state.finished = true;
                             return Some((Err(StreamingChunkError::Cancelled), state));
                         }
                     }
