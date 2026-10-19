@@ -16,4 +16,4 @@ source "$venv_path/bin/activate"
 
 # Ensure `pytest` is available in the venv;
 # If we were to use `pytest` from Nix, it would not see the locally built python package!
-uv pip install -r "$absolute_dir_path/pyproject.toml" --all-extras --quiet
+uv pip install -r "$absolute_dir_path/pyproject.toml" --extra test --extra postgres --quiet

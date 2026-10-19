@@ -67,6 +67,49 @@ test-integration *TEST_ARGS: build
 
   timeout --signal term --kill-after {{pytest_timeout_kill_seconds}} {{pytest_timeout_seconds}} pytest --color=yes {{TEST_ARGS}}
 
+# PostgreSQL Python integration tests using a temporary pgrx-managed database
+[group('test')]
+test-postgres-python *TEST_ARGS: build-python
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  cd pg_extension
+  pg_config="$(cargo pgrx info pg-config pg16)"
+  pg_bin_dir="$(dirname "$pg_config")"
+  export PATH="$pg_bin_dir:$PATH"
+  cargo pgrx install --pg-config "$pg_config"
+  pg_port="${OPSQUEUE_PG16_PORT:-28816}"
+  if ! cargo pgrx start pg16; then
+    echo "pgrx start returned an error; waiting for PostgreSQL readiness" >&2
+  fi
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    if pg_isready --quiet --host localhost --port "$pg_port"; then
+      break
+    fi
+    if ((attempt == 29)); then
+      cargo pgrx status pg16
+      echo "PostgreSQL 16 did not become ready on port $pg_port" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+
+  test_db="opsqueue_python_test_$$"
+  createdb --host localhost --port "$pg_port" "$test_db"
+  cleanup() {
+    dropdb --if-exists --host localhost --port "$pg_port" "$test_db"
+  }
+  trap cleanup EXIT
+
+  psql --host localhost --port "$pg_port" --dbname "$test_db" \
+    --set ON_ERROR_STOP=1 --command 'CREATE EXTENSION opsqueue_pg'
+
+  export OPSQUEUE_TEST_POSTGRES_DSN="host=localhost port=$pg_port dbname=$test_db"
+  cd ../libs/opsqueue_python
+  source ./.setup_local_venv.sh
+  timeout --signal term --kill-after {{pytest_timeout_kill_seconds}} {{pytest_timeout_seconds}} \
+    pytest --color=yes -n0 tests/test_postgres_clients.py {{TEST_ARGS}}
+
 # Python integration test suite, using artefacts built through Nix. Args are forwarded to pytest
 [group('nix')]
 nix-test-integration *TEST_ARGS: nix-build

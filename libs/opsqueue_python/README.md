@@ -117,6 +117,16 @@ The PostgreSQL clients store input and output chunks in the extension's `bytea` 
 
 More examples can be found in `./libs/opsqueue_python/examples/`
 
+### Python PostgreSQL Integration Tests
+
+These tests use a real PostgreSQL connection. From the workspace root, run:
+
+```bash
+just test-postgres-python
+```
+
+The recipe builds and installs the extension with pgrx, starts the PostgreSQL 16 instance if needed, creates a fresh test database, runs pytest serially, and drops the temporary database afterward. It leaves the pgrx server running. Initialize pgrx once with `cargo pgrx init --pg16 download`; check or stop the server with `cargo pgrx status pg16` or `cargo pgrx stop pg16`. Set `OPSQUEUE_PG16_PORT` if your pgrx PostgreSQL 16 instance uses a non-default port.
+
 
 ## More Info
 
