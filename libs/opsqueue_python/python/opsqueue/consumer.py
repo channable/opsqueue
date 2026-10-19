@@ -1,21 +1,28 @@
 from __future__ import annotations
-from collections.abc import Sequence
+
 import typing
-from typing import Any, Callable, cast
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import opentelemetry
-import opentelemetry.trace
 import opentelemetry.baggage
+import opentelemetry.trace
 import opentelemetry.util.types
 
-from . import opsqueue_internal
+from . import common, opsqueue_internal, tracing
 from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
-from . import tracing
-from . import common
+from .postgres import PostgresChunk, PostgresConsumerClient
 
 DEFAULT_STRATEGY = Strategy.Random()
 
-__all__ = ["ConsumerClient", "Strategy", "Chunk", "SubmissionId"]
+__all__ = [
+    "Chunk",
+    "ConsumerClient",
+    "PostgresChunk",
+    "PostgresConsumerClient",
+    "Strategy",
+    "SubmissionId",
+]
 
 
 class ConsumerClient:

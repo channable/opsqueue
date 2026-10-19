@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterable, Iterator, AsyncIterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any, cast
 
 from opentelemetry import trace
+
 from opsqueue.common import (
-    SerializationFormat,
-    encode_chunk,
-    decode_chunk,
     DEFAULT_SERIALIZATION_FORMAT,
+    SerializationFormat,
+    decode_chunk,
+    encode_chunk,
 )
 from opsqueue.exceptions import (
     SubmissionFailedError,
@@ -17,22 +18,25 @@ from opsqueue.exceptions import (
     SubmissionNotFoundError,
     TooManyMatchingSubmissionsError,
 )
-from . import opsqueue_internal
-from . import tracing
+
+from . import opsqueue_internal, tracing
 from .opsqueue_internal import (  # type: ignore[import-not-found]
-    SubmissionId,
-    SubmissionStatus,
+    ChunkFailed,
+    InitialSubmissionStatus,
     SubmissionCompleted,
     SubmissionFailed,
-    ChunkFailed,
+    SubmissionId,
     SubmissionNotCancellable,
     SubmissionPaused,
-    InitialSubmissionStatus,
+    SubmissionStatus,
 )
+from .postgres import PostgresProducerClient, PostgresSubmissionFailedError
 
 __all__ = [
     "ChunkFailed",
     "InitialSubmissionStatus",
+    "PostgresProducerClient",
+    "PostgresSubmissionFailedError",
     "ProducerClient",
     "SubmissionCompleted",
     "SubmissionFailed",

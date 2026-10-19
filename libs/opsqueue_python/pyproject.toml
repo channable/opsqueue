@@ -40,6 +40,7 @@ include = ["**/py.typed"]
 # We specify test-dependencies here (and have them loaded through `.setup_local_venv.sh`)
 # because otherwise `pytest` won't be able to see the locally build python package!
 [project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2,<4"]
 test = [
     "pytest==9.0.3",
     "pytest-xdist==3.8.0",

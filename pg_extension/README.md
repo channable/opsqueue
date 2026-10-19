@@ -2,7 +2,7 @@
 
 This crate adds a PostgreSQL-native queue API alongside the existing Opsqueue service. PostgreSQL stores submission state, chunk payloads, retry history, and reservation leases. Consumers claim work using `FOR UPDATE SKIP LOCKED`; expired leases become claimable again.
 
-The extension currently targets PostgreSQL 16 through `pgrx` 0.19.3. It does not replace the HTTP/WebSocket service or migrate the Rust/Python clients yet. Payloads can be stored directly in PostgreSQL as `bytea`, or represented by a `prefix` and fetched from an external object store by the client.
+The extension currently targets PostgreSQL 16 through `pgrx` 0.19.3. It does not replace the HTTP/WebSocket service or migrate the Rust client. The Python package provides opt-in `PostgresProducerClient` and `PostgresConsumerClient` adapters, which store payloads directly in PostgreSQL as `bytea`; they do not currently fetch payloads from an external object store using a submission `prefix`.
 
 ## Build and install
 

@@ -18,6 +18,7 @@ from collections.abc import Iterable
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
 
+
 def file_to_words(filename: str) -> Iterable[str]:
     """
     Iterates over each word and inter-word whitespace strings in a file
@@ -28,6 +29,7 @@ def file_to_words(filename: str) -> Iterable[str]:
             for word in line.split():
                 yield word
 
+
 def print_words(words: Iterable[str]) -> None:
     """
     Prints all words and inter-word whitespace tokens
@@ -36,11 +38,15 @@ def print_words(words: Iterable[str]) -> None:
     for word in words:
         print(word, end="")
 
+
 def main() -> None:
     client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
     stream_of_words = file_to_words("lipsum.txt")
-    stream_of_capitalized_words = client.run_submission(stream_of_words, chunk_size=4000)
+    stream_of_capitalized_words = client.run_submission(
+        stream_of_words, chunk_size=4000
+    )
     print_words(stream_of_capitalized_words)
+
 
 if __name__ == "__main__":
     main()
@@ -54,14 +60,17 @@ from opsqueue.consumer import ConsumerClient, Strategy
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
+
 def capitalize_word(word: str) -> str:
     output = word.capitalize()
     # print(f"Capitalized word: {word} -> {output}")
     return output
 
+
 def main() -> None:
     client = ConsumerClient("localhost:3999", "file:///tmp/opsqueue/capitalize_text/")
     client.run_each_op(capitalize_word, strategy=Strategy.Random())
+
 
 if __name__ == "__main__":
     main()
@@ -84,6 +93,27 @@ In production, you probably want to use Google's GCS, Amazon's S3 or Microsoft's
 Please tinker with above code!
 If you want more logging to look under the hood, run `RUST_LOG=debug opsqueue` to enable extra logging for the queue.
 The Producer/Consumer will use whatever log level is configured in Python.
+
+## PostgreSQL Extension
+
+The PostgreSQL extension can be used directly from Python without running the Opsqueue service. Install the optional driver with `pip install 'opsqueue[postgres]'`, then pass a PostgreSQL DSN to the PostgreSQL clients:
+
+Run the producer and consumer snippets in separate processes:
+
+```python
+from opsqueue.consumer import PostgresConsumerClient
+from opsqueue.producer import PostgresProducerClient
+
+dsn = "postgresql://localhost/mydb"
+
+with PostgresProducerClient(dsn) as producer:
+    submission_id = producer.insert_submission(range(100), chunk_size=10)
+
+with PostgresConsumerClient(dsn) as consumer:
+    consumer.run_each_op(lambda value: value + 1)
+```
+
+The PostgreSQL clients store input and output chunks in the extension's `bytea` columns, so they do not take an object-store URL. The consumer accepts `oldest`, `newest`, `random`, or `prefer_distinct` as its `strategy`; for `prefer_distinct`, provide `prefer_distinct_keys` and optionally `underlying_strategy`. Keep `lease_seconds` longer than the time a callback can take, or call `consumer.renew_chunk(submission_id, chunk_index)` during long-running work.
 
 More examples can be found in `./libs/opsqueue_python/examples/`
 
