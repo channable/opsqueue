@@ -6,11 +6,13 @@ The extension currently targets PostgreSQL 16 through `pgrx` 0.19.3. It does not
 
 ## Build and install
 
-Install `cargo-pgrx` 0.19.3 and register the local PostgreSQL 16 installation once:
+Install `cargo-pgrx` 0.19.3 and initialize a user-owned PostgreSQL 16 instance:
 
 ```bash
-cargo pgrx init --pg16 "$(command -v pg_config)"
+cargo pgrx init --pg16 download
 ```
+
+Run this as your normal user, not with `sudo`. Without a version flag, `cargo pgrx init` builds all of pgrx's default PostgreSQL versions.
 
 Then, from this directory, build and start a pgrx-managed PostgreSQL instance:
 
@@ -21,20 +23,34 @@ cargo pgrx run pg16
 In the launched database, create the extension:
 
 ```sql
-CREATE SCHEMA opsqueue;
 CREATE EXTENSION opsqueue_pg;
 ```
 
-The extension installs its objects in the `opsqueue` schema.
+The extension creates the `opsqueue` schema and installs its objects there.
+
+## Tests
+
+Run the PostgreSQL-backed integration tests from this directory with:
+
+```bash
+cargo pgrx test pg16
+```
+
+The suite exercises submission creation, oldest/newest/random and prefer-distinct dispatch, exclusive reservation and renewal, completion, retries and expired leases, pause/cancel transitions, state counters, metadata filtering, and retention cleanup.
 
 ## SQL API
 
 - `opsqueue.submit(...)` inserts a submission and optionally its `bytea[]` chunks. Use `p_initial_status => 'paused'` to hold work until explicitly unpaused.
-- `opsqueue.reserve(worker_uuid, limit, lease, strategy, prefer_distinct_keys, underlying_strategy)` atomically claims chunks and returns their payload and submission metadata. Strategies are `oldest`, `newest`, `random`, and `prefer_distinct`.
-- `opsqueue.renew(...)` extends a worker's lease.
+- `opsqueue.reserve(worker_uuid, limit, lease, strategy, prefer_distinct_keys, underlying_strategy, max_retries)` atomically claims chunks and returns their payload, submission metadata, and trace context. The default lease is 10 minutes. Strategies are `oldest`, `newest`, `random`, and `prefer_distinct`.
+- `opsqueue.renew(...)` extends a worker's unexpired lease. `opsqueue.reap_expired(max_retries, limit)` records expired claims as failed attempts; `reserve` invokes it before claiming work.
 - `opsqueue.complete(...)` stores a result and marks the submission completed when its final chunk completes.
 - `opsqueue.fail(...)` records a retry and returns the chunk to the queue, or fails the submission after `p_max_retries`.
-- `opsqueue.status(id)`, `opsqueue.results(id)`, `opsqueue.failure_history(id)`, `lookup_by_prefix(prefix)`, `lookup_by_metadata(jsonb, limit)`, `count_in_progress()`, and `count_completed()` provide producer-side queries.
+- `opsqueue.status(id)` includes the current pending chunk count as `chunks_ready`. `opsqueue.results(id)`, `opsqueue.failure_history(id)`, `lookup_by_prefix(prefix)`, and `lookup_by_metadata(jsonb, max_results)` provide producer-side queries. Metadata lookup is limited to in-progress submissions and defaults to a 100,000-result cap; exceeding the cap raises an error.
+- `opsqueue.count_in_progress()`, `count_completed()`, `count_failed()`, `count_paused()`, and `count_cancelled()` report submission counts by state.
+- `opsqueue.count_chunks()`, `count_chunks_completed()`, and `count_chunks_failed()` report dispatchable, completed, and permanently failed chunk counts.
 - `opsqueue.cancel(id)` cancels an in-progress or paused submission; `opsqueue.unpause(id)` makes paused work available.
+- `opsqueue.cleanup(older_than, limit)` deletes a bounded batch of completed, failed, and cancelled submissions older than the cutoff; their chunks and retry history are removed by foreign-key cascades. Repeat it from a PostgreSQL scheduler or maintenance job until it returns zero.
 
 Each consumer must use a stable, unique UUID as its worker ID and renew leases for work that may exceed the lease interval. A lost connection is recovered by lease expiry rather than a server-side heartbeat task.
+
+Consumers can subscribe to `LISTEN opsqueue_work_available` and call `reserve` after receiving a notification. Notifications are delivered at transaction commit; the payload is the submission ID. They are wakeup hints, not a durable work log, so consumers should still reserve on startup and after reconnecting.

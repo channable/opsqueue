@@ -4,18 +4,24 @@ pg_module_magic!();
 
 extension_sql_file!("../sql/install.sql", name = "opsqueue_schema", finalize);
 
-#[pg_extern]
-fn opsqueue_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+#[pg_schema]
+pub mod opsqueue {
+    use pgrx::prelude::*;
+
+    #[pg_extern]
+    pub fn opsqueue_version() -> &'static str {
+        env!("CARGO_PKG_VERSION")
+    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]
-#[pg_schema]
-mod tests {
-    use pgrx::prelude::*;
+pub mod pg_test {
+    pub fn setup(_options: Vec<&'static str>) {}
 
-    #[pg_test]
-    fn version_is_available() {
-        assert_eq!(crate::opsqueue_version(), env!("CARGO_PKG_VERSION"));
+    pub fn postgresql_conf_options() -> Vec<&'static str> {
+        Vec::new()
     }
 }
+
+#[cfg(any(test, feature = "pg_test"))]
+mod pg_tests;

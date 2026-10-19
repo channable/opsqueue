@@ -12,8 +12,11 @@ crate-type = ["cdylib", "lib"]
 
 [features]
 default = ["pg16"]
-pg16 = ["pgrx/pg16"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg_test = []
 
 [dependencies]
 pgrx = { version = "=0.19.3", default-features = false }
+
+[dev-dependencies]
+pgrx-tests = { version = "=0.19.3" }

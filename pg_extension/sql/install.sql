@@ -2,12 +2,16 @@ CREATE SCHEMA IF NOT EXISTS opsqueue;
 
 CREATE TABLE opsqueue.submissions (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    random_order integer GENERATED ALWAYS AS (
+        (((((id % 65536) + ((id >> 22) % 65536)) % 65536) * 40503) % 65536)
+    ) STORED,
     prefix text,
     chunks_total bigint NOT NULL CHECK (chunks_total >= 0),
     chunks_done bigint NOT NULL DEFAULT 0 CHECK (chunks_done >= 0),
     chunk_size bigint NOT NULL DEFAULT 1 CHECK (chunk_size > 0),
     metadata bytea,
     strategic_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    otel_trace_carrier text NOT NULL DEFAULT '{}',
     status text NOT NULL CHECK (status IN ('in_progress', 'paused', 'completed', 'failed', 'cancelled')),
     failed_chunk_index bigint,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -18,6 +22,16 @@ CREATE TABLE opsqueue.submissions (
 
 CREATE INDEX submissions_prefix_id ON opsqueue.submissions (prefix, id);
 CREATE INDEX submissions_status_id ON opsqueue.submissions (status, id);
+CREATE INDEX submissions_strategic_metadata ON opsqueue.submissions
+    USING gin (strategic_metadata jsonb_path_ops) WHERE status = 'in_progress';
+CREATE INDEX random_submissions_order ON opsqueue.submissions (random_order, id)
+    WHERE status = 'in_progress';
+CREATE INDEX submissions_completed_at ON opsqueue.submissions (completed_at)
+    WHERE status = 'completed';
+CREATE INDEX submissions_failed_at ON opsqueue.submissions (failed_at)
+    WHERE status = 'failed';
+CREATE INDEX submissions_cancelled_at ON opsqueue.submissions (cancelled_at)
+    WHERE status = 'cancelled';
 
 CREATE TABLE opsqueue.chunks (
     submission_id bigint NOT NULL REFERENCES opsqueue.submissions(id) ON DELETE CASCADE,
@@ -64,13 +78,15 @@ CREATE FUNCTION opsqueue.submit(
     p_metadata bytea DEFAULT NULL,
     p_strategic_metadata jsonb DEFAULT '{}'::jsonb,
     p_initial_status text DEFAULT 'in_progress',
-    p_chunk_contents bytea[] DEFAULT NULL
+    p_chunk_contents bytea[] DEFAULT NULL,
+    p_trace_context text DEFAULT '{}'
 ) RETURNS bigint
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_id bigint;
     v_status text;
+    v_strategic_metadata jsonb := coalesce(p_strategic_metadata, '{}'::jsonb);
 BEGIN
     IF p_chunk_count IS NULL OR p_chunk_size IS NULL OR p_initial_status IS NULL
        OR p_chunk_count < 0 OR p_chunk_size <= 0 THEN
@@ -79,8 +95,22 @@ BEGIN
     IF p_initial_status NOT IN ('in_progress', 'paused') THEN
         RAISE EXCEPTION 'initial_status must be in_progress or paused';
     END IF;
-    IF p_chunk_contents IS NOT NULL AND cardinality(p_chunk_contents) <> p_chunk_count THEN
-        RAISE EXCEPTION 'chunk_contents length must match chunk_count';
+    IF jsonb_typeof(v_strategic_metadata) <> 'object'
+       OR EXISTS (
+           SELECT 1 FROM jsonb_each(v_strategic_metadata) AS item(key, value)
+           WHERE jsonb_typeof(item.value) <> 'number'
+              OR item.value::text !~ '^-?[0-9]+$'
+       ) THEN
+        RAISE EXCEPTION 'strategic_metadata must be an object with integer values';
+    END IF;
+    PERFORM (item.value #>> '{}')::bigint
+    FROM jsonb_each(v_strategic_metadata) AS item(key, value);
+    IF p_chunk_contents IS NOT NULL AND (
+        cardinality(p_chunk_contents) <> p_chunk_count
+        OR (cardinality(p_chunk_contents) > 0
+            AND (array_ndims(p_chunk_contents) <> 1 OR array_lower(p_chunk_contents, 1) <> 1))
+    ) THEN
+        RAISE EXCEPTION 'chunk_contents must be a one-dimensional array matching chunk_count';
     END IF;
 
     v_status := CASE
@@ -90,9 +120,10 @@ BEGIN
     END;
 
     INSERT INTO opsqueue.submissions (
-        prefix, chunks_total, chunk_size, metadata, strategic_metadata, status, completed_at
+        prefix, chunks_total, chunk_size, metadata, strategic_metadata, otel_trace_carrier, status, completed_at
     ) VALUES (
-        p_prefix, p_chunk_count, p_chunk_size, p_metadata, coalesce(p_strategic_metadata, '{}'::jsonb),
+        p_prefix, p_chunk_count, p_chunk_size, p_metadata, v_strategic_metadata,
+        coalesce(p_trace_context, '{}'),
         v_status, CASE WHEN v_status = 'completed' THEN clock_timestamp() END
     ) RETURNING id INTO v_id;
 
@@ -100,6 +131,10 @@ BEGIN
         INSERT INTO opsqueue.chunks (submission_id, chunk_index, input_content)
         SELECT v_id, generated.chunk_index, p_chunk_contents[generated.chunk_index + 1]
         FROM generate_series(0, p_chunk_count - 1) AS generated(chunk_index);
+    END IF;
+
+    IF v_status = 'in_progress' THEN
+        PERFORM pg_notify('opsqueue_work_available', v_id::text);
     END IF;
 
     RETURN v_id;
@@ -120,13 +155,14 @@ CREATE FUNCTION opsqueue._reserve_random_window(
     prefix text,
     chunk_size bigint,
     metadata bytea,
-    strategic_metadata jsonb
+    strategic_metadata jsonb,
+    otel_trace_carrier text
 )
 LANGUAGE sql
 AS $$
     WITH candidates AS MATERIALIZED (
-        SELECT c.submission_id, c.chunk_index, s.prefix, s.chunk_size, s.metadata,
-               s.strategic_metadata, c.input_content
+         SELECT c.submission_id, c.chunk_index, s.prefix, s.chunk_size, s.metadata,
+             s.strategic_metadata, s.otel_trace_carrier, c.input_content
         FROM opsqueue.chunks AS c
         JOIN opsqueue.submissions AS s ON s.id = c.submission_id
         WHERE s.status = 'in_progress'
@@ -134,6 +170,7 @@ AS $$
           AND c.random_order >= p_random_from AND c.random_order < p_random_to
         ORDER BY c.random_order, c.submission_id, c.chunk_index
         LIMIT p_limit
+        FOR SHARE OF s SKIP LOCKED
         FOR UPDATE OF c SKIP LOCKED
     ), reserved AS (
         UPDATE opsqueue.chunks AS c
@@ -149,18 +186,83 @@ AS $$
         RETURNING c.submission_id, c.chunk_index, c.input_content, c.retries
     )
     SELECT r.submission_id, r.chunk_index, r.input_content, r.retries,
-           x.prefix, x.chunk_size, x.metadata, x.strategic_metadata
+            x.prefix, x.chunk_size, x.metadata, x.strategic_metadata, x.otel_trace_carrier
     FROM reserved AS r
     JOIN candidates AS x USING (submission_id, chunk_index)
+$$;
+
+CREATE FUNCTION opsqueue.reap_expired(p_max_retries integer DEFAULT 10, p_limit integer DEFAULT 1000)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_expired record;
+    v_retries integer;
+    v_status text;
+    v_reaped bigint := 0;
+BEGIN
+    IF p_max_retries IS NULL OR p_max_retries <= 0 OR p_limit IS NULL OR p_limit <= 0 THEN
+        RAISE EXCEPTION 'max_retries and limit must be positive';
+    END IF;
+
+    FOR v_expired IN
+        SELECT c.submission_id, c.chunk_index
+        FROM opsqueue.submissions AS s
+        JOIN opsqueue.chunks AS c ON c.submission_id = s.id
+        WHERE s.status = 'in_progress'
+          AND c.status = 'reserved'
+          AND c.reserved_until <= clock_timestamp()
+        ORDER BY c.reserved_until, c.submission_id, c.chunk_index
+        LIMIT p_limit
+        FOR UPDATE OF s, c SKIP LOCKED
+    LOOP
+        UPDATE opsqueue.chunks
+        SET retries = retries + 1,
+            status = CASE WHEN retries + 1 >= p_max_retries THEN 'failed' ELSE 'pending' END,
+            failure = 'Reservation expired',
+            failed_at = CASE WHEN retries + 1 >= p_max_retries THEN clock_timestamp() ELSE failed_at END,
+            reserved_by = NULL,
+            reserved_until = NULL
+        WHERE submission_id = v_expired.submission_id
+          AND chunk_index = v_expired.chunk_index
+          AND status = 'reserved'
+          AND reserved_until <= clock_timestamp()
+        RETURNING retries, status INTO v_retries, v_status;
+        IF NOT FOUND THEN
+            CONTINUE;
+        END IF;
+
+        INSERT INTO opsqueue.chunk_failures (submission_id, chunk_index, retry_number, failure)
+        VALUES (v_expired.submission_id, v_expired.chunk_index, v_retries, 'Reservation expired');
+        v_reaped := v_reaped + 1;
+
+        IF v_status = 'failed' THEN
+            UPDATE opsqueue.submissions
+            SET status = 'failed', failed_chunk_index = v_expired.chunk_index,
+                failed_at = clock_timestamp()
+            WHERE id = v_expired.submission_id AND status = 'in_progress';
+            IF FOUND THEN
+                UPDATE opsqueue.chunks
+                SET status = 'skipped', reserved_by = NULL, reserved_until = NULL
+                WHERE submission_id = v_expired.submission_id
+                  AND status IN ('pending', 'reserved')
+                  AND chunk_index <> v_expired.chunk_index;
+            END IF;
+        END IF;
+    END LOOP;
+
+    RETURN v_reaped;
+END;
 $$;
 
 CREATE FUNCTION opsqueue.reserve(
     p_worker_id uuid,
     p_limit integer,
-    p_lease interval DEFAULT interval '30 seconds',
+    p_lease interval DEFAULT interval '10 minutes',
     p_strategy text DEFAULT 'oldest',
     p_prefer_distinct_keys text[] DEFAULT NULL,
-    p_underlying_strategy text DEFAULT 'oldest'
+    p_underlying_strategy text DEFAULT 'oldest',
+    p_max_retries integer DEFAULT 10
 ) RETURNS TABLE (
     submission_id bigint,
     chunk_index bigint,
@@ -169,7 +271,8 @@ CREATE FUNCTION opsqueue.reserve(
     prefix text,
     chunk_size bigint,
     metadata bytea,
-    strategic_metadata jsonb
+    strategic_metadata jsonb,
+    otel_trace_carrier text
 )
 LANGUAGE plpgsql
 AS $$
@@ -187,10 +290,15 @@ BEGIN
     IF p_underlying_strategy IS NULL OR p_underlying_strategy NOT IN ('oldest', 'newest', 'random') THEN
         RAISE EXCEPTION 'underlying_strategy must be oldest, newest, or random';
     END IF;
+    IF p_max_retries IS NULL OR p_max_retries <= 0 THEN
+        RAISE EXCEPTION 'max_retries must be positive';
+    END IF;
     IF p_strategy = 'prefer_distinct'
        AND (p_prefer_distinct_keys IS NULL OR cardinality(p_prefer_distinct_keys) = 0) THEN
         RAISE EXCEPTION 'prefer_distinct requires at least one metadata key';
     END IF;
+
+    PERFORM opsqueue.reap_expired(p_max_retries, p_limit);
 
     IF p_strategy = 'random' THEN
         v_random_offset := floor(random() * 65536)::integer;
@@ -207,11 +315,14 @@ BEGIN
         END IF;
         RETURN;
     END IF;
+    IF p_strategy = 'prefer_distinct' AND p_underlying_strategy = 'random' THEN
+        v_random_offset := floor(random() * 65536)::integer;
+    END IF;
 
     RETURN QUERY
     WITH candidates AS MATERIALIZED (
-        SELECT c.submission_id, c.chunk_index, s.prefix, s.chunk_size, s.metadata,
-               s.strategic_metadata, c.input_content
+         SELECT c.submission_id, c.chunk_index, s.prefix, s.chunk_size, s.metadata,
+             s.strategic_metadata, s.otel_trace_carrier, c.input_content
         FROM opsqueue.chunks AS c
         JOIN opsqueue.submissions AS s ON s.id = c.submission_id
         WHERE s.status = 'in_progress'
@@ -237,14 +348,15 @@ BEGIN
             ) END ASC,
             CASE WHEN p_strategy = 'newest'
                 OR (p_strategy = 'prefer_distinct' AND p_underlying_strategy = 'newest')
-                THEN c.submission_id END DESC,
+                THEN s.id END DESC,
             CASE WHEN p_strategy = 'oldest'
                 OR (p_strategy = 'prefer_distinct' AND p_underlying_strategy = 'oldest')
-                THEN c.submission_id END ASC,
+                THEN s.id END ASC,
             CASE WHEN p_strategy = 'prefer_distinct' AND p_underlying_strategy = 'random'
-                THEN c.random_order END,
+                THEN ((s.random_order - v_random_offset + 65536) % 65536) END,
             c.chunk_index
         LIMIT p_limit
+        FOR SHARE OF s SKIP LOCKED
         FOR UPDATE OF c SKIP LOCKED
     ), reserved AS (
         UPDATE opsqueue.chunks AS c
@@ -260,7 +372,7 @@ BEGIN
         RETURNING c.submission_id, c.chunk_index, c.input_content, c.retries
     )
     SELECT r.submission_id, r.chunk_index, r.input_content, r.retries,
-           x.prefix, x.chunk_size, x.metadata, x.strategic_metadata
+           x.prefix, x.chunk_size, x.metadata, x.strategic_metadata, x.otel_trace_carrier
     FROM reserved AS r
     JOIN candidates AS x USING (submission_id, chunk_index);
 END;
@@ -270,7 +382,7 @@ CREATE FUNCTION opsqueue.renew(
     p_worker_id uuid,
     p_submission_id bigint,
     p_chunk_index bigint,
-    p_lease interval DEFAULT interval '30 seconds'
+    p_lease interval DEFAULT interval '10 minutes'
 ) RETURNS boolean
 LANGUAGE plpgsql
 AS $$
@@ -402,7 +514,11 @@ BEGIN
     SET status = CASE WHEN chunks_total = 0 THEN 'completed' ELSE 'in_progress' END,
         completed_at = CASE WHEN chunks_total = 0 THEN clock_timestamp() ELSE completed_at END
     WHERE id = p_submission_id AND status = 'paused';
-    RETURN FOUND;
+    IF FOUND THEN
+        PERFORM pg_notify('opsqueue_work_available', p_submission_id::text);
+        RETURN true;
+    END IF;
+    RETURN false;
 END;
 $$;
 
@@ -412,9 +528,11 @@ RETURNS TABLE (
     prefix text,
     chunks_total bigint,
     chunks_done bigint,
+    chunks_ready bigint,
     chunk_size bigint,
     metadata bytea,
     strategic_metadata jsonb,
+    otel_trace_carrier text,
     status text,
     failed_chunk_index bigint,
     created_at timestamptz,
@@ -424,8 +542,13 @@ RETURNS TABLE (
 )
 LANGUAGE sql STABLE
 AS $$
-    SELECT s.id, s.prefix, s.chunks_total, s.chunks_done, s.chunk_size, s.metadata,
-           s.strategic_metadata, s.status, s.failed_chunk_index, s.created_at,
+        SELECT s.id, s.prefix, s.chunks_total, s.chunks_done,
+               CASE WHEN s.status = 'in_progress' THEN (
+                   SELECT count(*) FROM opsqueue.chunks AS c
+                   WHERE c.submission_id = s.id AND c.status = 'pending'
+               ) ELSE 0 END,
+            s.chunk_size, s.metadata, s.strategic_metadata, s.otel_trace_carrier,
+            s.status, s.failed_chunk_index, s.created_at,
            s.completed_at, s.failed_at, s.cancelled_at
     FROM opsqueue.submissions AS s
     WHERE s.id = p_submission_id
@@ -454,17 +577,44 @@ $$;
 CREATE FUNCTION opsqueue.lookup_by_prefix(p_prefix text) RETURNS bigint
 LANGUAGE sql STABLE
 AS $$
-    SELECT id FROM opsqueue.submissions WHERE prefix = p_prefix ORDER BY id DESC LIMIT 1
+    SELECT id FROM opsqueue.submissions
+    WHERE prefix = p_prefix AND status <> 'cancelled'
+    ORDER BY id DESC LIMIT 1
 $$;
 
-CREATE FUNCTION opsqueue.lookup_by_metadata(p_metadata jsonb, p_limit integer DEFAULT 1000)
+CREATE FUNCTION opsqueue.lookup_by_metadata(p_metadata jsonb, p_max_results bigint DEFAULT 100000)
 RETURNS SETOF bigint
-LANGUAGE sql STABLE
+LANGUAGE plpgsql STABLE
 AS $$
+DECLARE
+    v_metadata jsonb := coalesce(p_metadata, '{}'::jsonb);
+    v_rows bigint;
+BEGIN
+    IF jsonb_typeof(v_metadata) <> 'object'
+       OR EXISTS (
+           SELECT 1 FROM jsonb_each(v_metadata) AS item(key, value)
+           WHERE jsonb_typeof(item.value) <> 'number'
+              OR item.value::text !~ '^-?[0-9]+$'
+       ) THEN
+        RAISE EXCEPTION 'strategic_metadata must be an object with integer values';
+    END IF;
+    PERFORM (item.value #>> '{}')::bigint
+    FROM jsonb_each(v_metadata) AS item(key, value);
+    IF p_max_results IS NULL OR p_max_results <= 0 OR p_max_results = 9223372036854775807 THEN
+        RAISE EXCEPTION 'max_results must be positive and less than bigint maximum';
+    END IF;
+
+    RETURN QUERY
     SELECT id FROM opsqueue.submissions
-    WHERE strategic_metadata @> coalesce(p_metadata, '{}'::jsonb)
-    ORDER BY id DESC
-    LIMIT greatest(p_limit, 0)
+    WHERE status = 'in_progress' AND strategic_metadata @> v_metadata
+    ORDER BY id
+    LIMIT p_max_results + 1;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows > p_max_results THEN
+        RAISE EXCEPTION 'too many matching submissions (maximum is %)', p_max_results
+            USING ERRCODE = '54000';
+    END IF;
+END;
 $$;
 
 CREATE FUNCTION opsqueue.count_in_progress() RETURNS bigint
@@ -477,4 +627,71 @@ CREATE FUNCTION opsqueue.count_completed() RETURNS bigint
 LANGUAGE sql STABLE
 AS $$
     SELECT count(*) FROM opsqueue.submissions WHERE status = 'completed'
+$$;
+
+CREATE FUNCTION opsqueue.count_failed() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*) FROM opsqueue.submissions WHERE status = 'failed'
+$$;
+
+CREATE FUNCTION opsqueue.count_paused() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*) FROM opsqueue.submissions WHERE status = 'paused'
+$$;
+
+CREATE FUNCTION opsqueue.count_cancelled() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*) FROM opsqueue.submissions WHERE status = 'cancelled'
+$$;
+
+CREATE FUNCTION opsqueue.count_chunks() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*)
+    FROM opsqueue.chunks AS c
+    JOIN opsqueue.submissions AS s ON s.id = c.submission_id
+    WHERE s.status = 'in_progress' AND c.status IN ('pending', 'reserved')
+$$;
+
+CREATE FUNCTION opsqueue.count_chunks_completed() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*) FROM opsqueue.chunks WHERE status = 'completed'
+$$;
+
+CREATE FUNCTION opsqueue.count_chunks_failed() RETURNS bigint
+LANGUAGE sql STABLE
+AS $$
+    SELECT count(*) FROM opsqueue.chunks WHERE status = 'failed'
+$$;
+
+CREATE FUNCTION opsqueue.cleanup(p_older_than timestamptz, p_limit integer DEFAULT 10000) RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_deleted bigint;
+BEGIN
+    IF p_older_than IS NULL OR p_limit IS NULL OR p_limit <= 0 THEN
+        RAISE EXCEPTION 'older_than and a positive limit are required';
+    END IF;
+
+    WITH expired AS MATERIALIZED (
+        SELECT id
+        FROM opsqueue.submissions
+        WHERE (status = 'completed' AND completed_at < p_older_than)
+           OR (status = 'failed' AND failed_at < p_older_than)
+           OR (status = 'cancelled' AND cancelled_at < p_older_than)
+        ORDER BY id
+        LIMIT p_limit
+        FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM opsqueue.submissions AS s
+    USING expired
+    WHERE s.id = expired.id;
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN v_deleted;
+END;
 $$;

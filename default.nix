@@ -66,15 +66,32 @@ let
         defaultEnv
         # For the shell, libpython needs to be in the search path.
         pythonEnv
+        # pgrx builds its managed PostgreSQL instance from source.
+        pkgs.readline
+        pkgs.readline.dev
+        pkgs.icu
+        pkgs.icu.dev
+        # pgrx bindgen needs libclang and its runtime dependencies.
+        pkgs.llvmPackages_18.libclang.lib
+        pkgs.llvmPackages_18.llvm
+        pkgs.libffi
       ];
       shellHook = ''
         # We need Cargo to re-run if the sqlite3 dev package changes, so we set this env var to point to it.
         export LIBSQLITE3_SYS_USE_PKG_CONFIG="${pkgs.sqlite.dev}"
         # This is needed for the libsqlite3-sys crate to find the correct sqlite3.
-        export PKG_CONFIG_PATH="${pkgs.sqlite.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:''${PKG_CONFIG_PATH}}"
+        export PKG_CONFIG_PATH="${pkgs.sqlite.dev}/lib/pkgconfig:${pkgs.icu.dev}/lib/pkgconfig''${PKG_CONFIG_PATH:+:''${PKG_CONFIG_PATH}}"
       '';
       # Fixes: libstdc++.so.6: cannot open shared object file: No such file or directory
-      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+      LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+        pkgs.stdenv.cc.cc.lib
+        pkgs.llvmPackages_18.libclang.lib
+        pkgs.llvmPackages_18.llvm
+        pkgs.libffi
+        pkgs.icu
+        pkgs.readline
+      ];
     };
   };
 in
