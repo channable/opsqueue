@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "opsqueue-pg"
+version = "0.1.0"
+edition = "2024"
+description = "PostgreSQL-native batch processing queue extension"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["pg16"]
+pg16 = ["pgrx/pg16"]
+pg_test = []
+
+[dependencies]
+pgrx = { version = "=0.19.3", default-features = false }
