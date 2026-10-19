@@ -134,6 +134,9 @@ impl Strategy {
             Oldest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id ASC"),
             Newest => qb.push("SELECT id as submission_id FROM submissions ORDER BY id DESC"),
             Random => Self::push_random_order_query(qb, "id as submission_id", "submissions", None),
+            // There is a lot going on in this strategy, so we document it with
+            // a running example in the comments using the specific strategy:
+            // 'PreferDistinct{"company_id", PreferDistinct{"project_id", Newest}}'
             PreferDistinct { .. } => {
                 let mut meta_keys_iter = self.meta_keys();
                 let meta_keys: Vec<&str> = meta_keys_iter.by_ref().collect();
@@ -146,6 +149,14 @@ impl Strategy {
                 // Unique submission IDs from the underlying strategy. Note how
                 // we also keep the row number from the underlying query, this
                 // is used as a tie-breaker if metadata counts are equal.
+                //
+                // 'inner' CTE in our running example:
+                // │ submission_id │ underlying_row │
+                // ├───────────────┼────────────────┤
+                // │           104 │              1 │
+                // │           103 │              2 │
+                // │           102 │              3 │
+                // │           101 │              4 │
                 let qb = qb.push(
                     "WITH inner AS NOT MATERIALIZED (
                   SELECT submission_id, ROW_NUMBER() OVER () as underlying_row FROM ( ",
@@ -158,6 +169,28 @@ impl Strategy {
                 // The FFI call returns all counts as JSON in a single call.
                 // The CROSS JOIN ON ensures the json_each is the outer loop,
                 // and only performed once.
+                //
+                // 'submissions_metadata' in our running example, where metadata_key is 'company_id':
+                // │ submission_id │ metadata_key │ metadata_value │
+                // ├───────────────┼──────────────┼────────────────┤
+                // │           104 │ company_id   │             20 │
+                // │           103 │ company_id   │             10 │
+                // │           102 │ company_id   │             10 │
+                // │           101 │ company_id   │             20 │
+                //
+                // Result of 'json_each(opsqueue_metadata_counts("company_id"))':
+                // │ key (company_id) │ value (in-flight chunks) │
+                // ├──────────────────┼──────────────────--------┤
+                // │               10 │                        2 │
+                // │               20 │                        5 │
+                //
+                // 'counts_0' in our running example:
+                // │ submission_id │ count │
+                // ├───────────────┼───────┤
+                // │           104 │     5 │
+                // │           103 │     2 │
+                // │           102 │     2 │
+                // │           101 │     5 │
                 for (i, meta_key) in meta_keys.iter().enumerate() {
                     qb.push(format!(
                         ", counts_{i} AS (
@@ -165,6 +198,8 @@ impl Strategy {
                             FROM json_each(opsqueue_metadata_counts("
                     ));
                     qb.push_bind(*meta_key);
+                    // Cast needed because json_each returns object keys as
+                    // 'Text', but metadata_value is an 'Integer'.
                     qb.push(
                         "))
                             AS ffi_counts
@@ -178,6 +213,15 @@ impl Strategy {
 
                 // Submissions ranked by in-flight chunks. Submissions without a
                 // value for a key get a NULL count and so are ranked first.
+                //
+                // For our running example, 'inner' left-joined with 'counts_0'
+                // and 'counts_1' and with ordering applied:
+                // │ submission_id │ Company count │ Project count │ underlying_row │
+                // ├───────────────┼───────────────┼───────────────┼────────────────┤
+                // │           103 │             2 │             6 │              2 │
+                // │           102 │             2 │             6 │              3 │
+                // │           101 │             5 │          NULL │              4 │
+                // │           104 │             5 │             4 │              1 │
                 qb.push(" SELECT inner.submission_id FROM inner");
                 for i in 0..meta_keys.len() {
                     qb.push(format!(
