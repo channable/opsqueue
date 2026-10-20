@@ -180,7 +180,7 @@ impl Strategy {
                 //
                 // Result of 'json_each(opsqueue_metadata_counts("company_id"))':
                 // │ key (company_id) │ value (in-flight chunks) │
-                // ├──────────────────┼──────────────────--------┤
+                // ├──────────────────┼──────────────────────────┤
                 // │               10 │                        2 │
                 // │               20 │                        5 │
                 //
