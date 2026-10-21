@@ -42,6 +42,7 @@ from opsqueue.producer import (
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
     SubmissionNotFoundError,
+    SubmissionPausedError,
     SubmissionStatus,
     TooManyMatchingSubmissionsError,
 )
@@ -837,6 +838,42 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
     assert isinstance(
         producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
     )
+
+
+def test_stream_submission_chunks_paused_then_resumed(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_paused_then_resumed"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]"], chunk_size=1, initial_status=InitialSubmissionStatus.Paused
+    )
+    results = producer_client.stream_submission_chunks(submission_id)
+
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+
+    async def read_paused_and_resumed() -> None:
+        async_results = await producer_client.async_stream_submission_chunks(submission_id)
+        with pytest.raises(SubmissionPausedError):
+            await anext(async_results)
+
+        producer_client.unpause_submission(submission_id)
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        [chunk] = consumer_client.reserve_chunks(max=1, strategy=Strategy.Oldest())
+        consumer_client.complete_chunk(
+            chunk.submission_id,
+            chunk.submission_prefix,
+            chunk.chunk_index,
+            chunk.input_content,
+        )
+
+        assert await anext(async_results) == b"[1]"
+        with pytest.raises(StopAsyncIteration):
+            await anext(async_results)
+
+    asyncio.run(read_paused_and_resumed())
+    assert next(results) == b"[1]"
+    with pytest.raises(StopIteration):
+        next(results)
 
 
 def test_streams_completed_chunks_before_submission_finishes(

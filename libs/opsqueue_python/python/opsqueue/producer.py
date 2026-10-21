@@ -17,6 +17,7 @@ from opsqueue.exceptions import (
     SubmissionFailedError,
     SubmissionNotCancellableError,
     SubmissionNotFoundError,
+    SubmissionPausedError,
     TooManyMatchingSubmissionsError,
 )
 from . import opsqueue_internal
@@ -39,6 +40,7 @@ __all__ = [
     "ProducerClient",
     "SubmissionCompleted",
     "SubmissionCancelledError",
+    "SubmissionPausedError",
     "SubmissionFailed",
     "SubmissionFailedError",
     "SubmissionId",
@@ -252,7 +254,8 @@ class ProducerClient:
         Yield completed output chunks progressively in chunk-index order.
 
         While the submission is in progress, this yields each contiguous prefix
-        of ready chunks. A paused submission waits until it is resumed. A
+        of ready chunks. A paused submission raises `SubmissionPausedError`;
+        the same iterator can be read again after the submission is resumed. A
         completed submission ends iteration after all outputs are yielded; a
         failed submission raises `SubmissionFailedError`. Already-ready chunks
         may still be yielded after the submission fails; failure is reported
@@ -267,6 +270,7 @@ class ProducerClient:
         - `InternalProducerClientError` if polling the submission fails.
         - `ChunkRetrievalError` if an output chunk cannot be retrieved.
         - `SubmissionCancelledError` if the submission is cancelled.
+        - `SubmissionPausedError` if the submission is paused.
         - `InlineOutputStorageUnsupportedError` if the submission uses inline output storage.
         """
         return self.inner.stream_submission_chunks(  # type: ignore[no-any-return]
@@ -281,7 +285,8 @@ class ProducerClient:
         Yield completed output chunks progressively in chunk-index order.
 
         While the submission is in progress, this yields each contiguous prefix
-        of ready chunks. A paused submission waits until it is resumed. A
+        of ready chunks. A paused submission raises `SubmissionPausedError`;
+        the same iterator can be read again after the submission is resumed. A
         completed submission ends iteration after all outputs are yielded; a
         failed submission raises `SubmissionFailedError`. Already-ready chunks
         may still be yielded after the submission fails; failure is reported
@@ -296,6 +301,7 @@ class ProducerClient:
         - `InternalProducerClientError` if polling the submission fails.
         - `ChunkRetrievalError` if an output chunk cannot be retrieved.
         - `SubmissionCancelledError` if the submission is cancelled.
+        - `SubmissionPausedError` if the submission is paused.
         - `InlineOutputStorageUnsupportedError` if the submission uses inline output storage.
         """
         return await self.inner.async_stream_submission_chunks(  # type: ignore[no-any-return]

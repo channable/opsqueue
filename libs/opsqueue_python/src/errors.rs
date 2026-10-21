@@ -15,6 +15,7 @@ use crate::common;
 // Expected errors:
 import_exception!(opsqueue.exceptions, SubmissionFailedError);
 import_exception!(opsqueue.exceptions, SubmissionCancelledError);
+import_exception!(opsqueue.exceptions, SubmissionPausedError);
 
 // Incorrect usage errors:
 import_exception!(opsqueue.exceptions, IncorrectUsageError);

@@ -513,7 +513,9 @@ impl ProducerClient {
                                 state,
                             ));
                         }
-                        submission::SubmissionStatus::Paused(_) => {}
+                        submission::SubmissionStatus::Paused(_) => {
+                            return Some((Err(StreamingChunkError::Paused), state));
+                        }
                         submission::SubmissionStatus::Cancelled(_) => {
                             state.finished = true;
                             return Some((Err(StreamingChunkError::Cancelled), state));
@@ -747,6 +749,7 @@ enum StreamingChunkError {
     Failed(Box<crate::errors::SubmissionFailed>),
     SubmissionNotFound(SubmissionNotFound),
     Cancelled,
+    Paused,
     InlineOutputStorageUnsupported,
 }
 
@@ -758,6 +761,7 @@ impl std::fmt::Display for StreamingChunkError {
             Self::Failed(_) => write!(f, "Submission failed"),
             Self::SubmissionNotFound(error) => error.fmt(f),
             Self::Cancelled => write!(f, "Submission cancelled"),
+            Self::Paused => write!(f, "Submission paused"),
             Self::InlineOutputStorageUnsupported => {
                 write!(f, "Streaming inline submission outputs is not supported")
             }
@@ -776,6 +780,9 @@ impl From<CError<StreamingChunkError>> for PyErr {
             StreamingChunkError::SubmissionNotFound(error) => CError(error).into(),
             error @ StreamingChunkError::Cancelled => {
                 errors::SubmissionCancelledError::new_err(error.to_string())
+            }
+            error @ StreamingChunkError::Paused => {
+                errors::SubmissionPausedError::new_err(error.to_string())
             }
             error @ StreamingChunkError::InlineOutputStorageUnsupported => {
                 errors::InlineOutputStorageUnsupportedError::new_err(error.to_string())

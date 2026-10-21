@@ -43,6 +43,10 @@ class SubmissionCancelledError(Exception):
     """Raised when streaming a submission that has been cancelled."""
 
 
+class SubmissionPausedError(Exception):
+    """Raised when reading the next chunk of a paused submission; retry after unpausing."""
+
+
 class SubmissionNotCancellableError(Exception):
     """Raised when a submission could not be cancelled due to already being
     completed, failed or cancelled.
