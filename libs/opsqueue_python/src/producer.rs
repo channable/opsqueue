@@ -830,6 +830,7 @@ impl PyChunksIter {
         py.detach(move || {
             let runtime = self.runtime.clone();
             let stream = self.stream.clone();
+            // Cancel the pending read on Ctrl+C so it does not keep the stream locked.
             runtime
                 .block_on(run_unless_interrupted(async move {
                     Ok::<_, FatalPythonException>(stream.lock().await.next().await)

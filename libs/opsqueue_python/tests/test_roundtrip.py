@@ -4,6 +4,9 @@
 
 import asyncio
 import logging
+import os
+import signal
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -1105,3 +1108,30 @@ def test_stream_submission_chunks_cancelled(opsqueue: OpsqueueProcess) -> None:
         next(results)
     with pytest.raises(StopIteration):
         next(results)
+
+
+def test_stream_submission_chunks_interrupts_wait(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_interrupt"
+    address = f"localhost:{opsqueue.port}"
+    producer_client = ProducerClient(address, url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+
+    def read_until_interrupted(submission_id_value: int) -> None:
+        client = ProducerClient(address, url)
+        results = client.stream_submission_chunks(SubmissionId(submission_id_value))
+        interrupt = threading.Timer(0.25, lambda: os.kill(os.getpid(), signal.SIGINT))
+        interrupt.start()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                next(results)
+        finally:
+            interrupt.cancel()
+            interrupt.join()
+
+        client.cancel_submission(SubmissionId(submission_id_value))
+        with pytest.raises(SubmissionCancelledError):
+            next(results)
+
+    with background_process(read_until_interrupted, args=(submission_id.id,)) as proc:
+        proc.join(timeout=5)
+        assert proc.exitcode == 0
