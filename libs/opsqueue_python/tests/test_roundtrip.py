@@ -840,7 +840,9 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
     )
 
 
-def test_stream_submission_chunks_paused_then_resumed(opsqueue: OpsqueueProcess) -> None:
+def test_stream_submission_chunks_paused_then_resumed(
+    opsqueue: OpsqueueProcess,
+) -> None:
     url = "file:///tmp/opsqueue/test_streaming_paused_then_resumed"
     producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
     submission_id = producer_client.insert_submission_chunks(
@@ -852,7 +854,9 @@ def test_stream_submission_chunks_paused_then_resumed(opsqueue: OpsqueueProcess)
         next(results)
 
     async def read_paused_and_resumed() -> None:
-        async_results = await producer_client.async_stream_submission_chunks(submission_id)
+        async_results = await producer_client.async_stream_submission_chunks(
+            submission_id
+        )
         with pytest.raises(SubmissionPausedError):
             await anext(async_results)
 
