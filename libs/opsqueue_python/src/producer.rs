@@ -422,7 +422,7 @@ impl ProducerClient {
         })
     }
 
-    /// Stream output chunks as soon as each consumer has completed them.
+    /// Stream output chunks in index order as soon as they are completed.
     #[must_use]
     pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
         self.create_submission_chunk_stream(submission_id)
