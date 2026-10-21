@@ -39,6 +39,10 @@ class SubmissionFailedError(Exception):
         return str(self)
 
 
+class SubmissionCancelledError(Exception):
+    """Raised when streaming a submission that has been cancelled."""
+
+
 class SubmissionNotCancellableError(Exception):
     """Raised when a submission could not be cancelled due to already being
     completed, failed or cancelled.
@@ -80,6 +84,10 @@ class IncorrectUsageError(TypeError):
     """
 
     pass
+
+
+class InlineOutputStorageUnsupportedError(IncorrectUsageError):
+    """Raised when streaming inline outputs from an insert_submission_direct submission."""
 
 
 class TryFromIntError(IncorrectUsageError):

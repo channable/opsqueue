@@ -32,6 +32,7 @@ from opsqueue.producer import (
     InitialSubmissionStatus,
     ProducerClient,
     SubmissionCompleted,
+    SubmissionCancelledError,
     SubmissionFailed,
     SubmissionFailedError,
     SubmissionId,
@@ -1100,7 +1101,7 @@ def test_stream_submission_chunks_cancelled(opsqueue: OpsqueueProcess) -> None:
     producer_client.cancel_submission(submission_id)
 
     results = producer_client.stream_submission_chunks(submission_id)
-    with pytest.raises(Exception, match="Submission cancelled"):
+    with pytest.raises(SubmissionCancelledError, match="Submission cancelled"):
         next(results)
     with pytest.raises(StopIteration):
         next(results)
