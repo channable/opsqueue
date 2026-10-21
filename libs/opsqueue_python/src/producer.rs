@@ -795,7 +795,9 @@ pub struct PyChunksIter {
 impl PyChunksIter {
     fn from_stream(client: &ProducerClient, stream: ChunksStream) -> Self {
         Self {
-            stream: Arc::new(tokio::sync::Mutex::new(stream)),
+            // Python may call next() again after exhaustion. The underlying stream can panic
+            // if polled again after returning None; fuse() makes later reads return None too.
+            stream: Arc::new(tokio::sync::Mutex::new(stream.fuse().boxed())),
             runtime: client.runtime.clone(),
         }
     }

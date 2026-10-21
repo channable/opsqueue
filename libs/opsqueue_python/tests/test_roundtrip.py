@@ -1071,6 +1071,10 @@ def test_stream_submission_chunks_retries_failed_retrieval(
 
     output_path.write_bytes(output)
     assert next(results) == b"[1]"
+
+    # "If default is given, it is returned if the iterator is exhausted, otherwise StopIteration is raised."
+    # c.f. https://docs.python.org/3/builtins/functions.html#next
+    assert next(results, None) is None
     with pytest.raises(StopIteration):
         next(results)
 
