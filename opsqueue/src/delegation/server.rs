@@ -15,6 +15,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use axum_prometheus::metrics::{counter, histogram};
 use either::Either;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -250,10 +251,12 @@ async fn handle_delegate_event(
     let external_task_id = &job.task_id;
     let submission_id = job.payload.submission_id;
 
-    let rows_affected = insert_external_task(conn, submission_id, external_task_id).await?;
+    // TODO: Add tests for handle_delegate_event when the underlying submission has a different
+    // status (or doesn't exist anymore, or never existed).
+    let rows_affected = insert_delegated_submission(conn, submission_id, external_task_id).await?;
 
     if rows_affected == 0 {
-        tracing::debug!(%submission_id, %external_task_id, "External task was already registered");
+        tracing::debug!(%submission_id, %external_task_id, "Delegated submission was already registered");
     }
 
     match core_api.unpause_submission(submission_id, conn).await {
@@ -261,7 +264,11 @@ async fn handle_delegate_event(
         Err(E::R(SubmissionNotFound(_))) => {
             // Note that this path could be hit when resubmitting a task with the same
             // submission id.
+            //
+            // Also see `out_of_date_delegated_submission` for which status we report in these
+            // cases (especially the case where the submission was already cleaned up).
             tracing::debug!(%submission_id, "Submission was not in paused state; either already active/completed/failed or already cleaned up.");
+
             // Send a notification, s.t. the status is promptly reported to the external system.
             core_api.notify_submission_status_changed(submission_id);
         }
@@ -280,7 +287,8 @@ async fn handle_kill_event(
     conn: &mut impl WriterConnection,
     external_task_id: &str,
 ) -> sqlx::Result<()> {
-    let submission_id = sqlx::query_scalar!(
+    // Get the submission_id, if it exists.
+    let submission_id: Option<SubmissionId> = sqlx::query_scalar!(
         r#"SELECT submission_id AS "submission_id: SubmissionId"
            FROM delegated_submissions
            WHERE external_task_id = $1"#,
@@ -304,16 +312,21 @@ async fn handle_kill_event(
             tracing::warn!(%submission_id, "Submission not found when attempting to cancel; already gone");
         }
         Err(E::R(E::R(_not_cancelable))) => {
-            tracing::debug!(%submission_id, "Submission was already cancelled");
+            tracing::debug!(%submission_id, "Submission was already cancelled/failed/completed");
         }
     }
 
     Ok(())
 }
 
-const DELEGATION_BACKGROUND_LOOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD: std::time::Duration =
+    std::time::Duration::from_secs(5);
+const DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD: std::time::Duration =
+    std::time::Duration::from_millis(100);
+const DELEGATION_BACKGROUND_LOOP_BATCH_SIZE: usize = 128;
 
 /// An error that occurred while listening for submission changes.
+#[derive(Debug)]
 enum SubmissionStatusChangeBatchError {
     /// The notification channel was closed, this happens when the server is shutting down.
     Closed,
@@ -323,7 +336,8 @@ enum SubmissionStatusChangeBatchError {
 
 /// Listen for submission status changes.
 ///
-/// Returns the ids of the submissions that changed.
+/// Returns the ids of the submissions that changed, collecting notifications for
+/// a short period after the first one to batch nearby changes.
 ///
 /// There are two error cases that should be dealt with, see `SubmissionStatusChangeBatchError`.
 async fn submission_status_change_batch(
@@ -332,6 +346,7 @@ async fn submission_status_change_batch(
     match submission_status_changed.recv().await {
         Ok(submission_id) => {
             let mut submission_ids = vec![submission_id];
+            tokio::time::sleep(DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD).await;
             loop {
                 match submission_status_changed.try_recv() {
                     Ok(submission_id) => submission_ids.push(submission_id),
@@ -356,8 +371,12 @@ async fn submission_status_change_batch(
 enum ReportTrigger {
     /// Check all submissions for updates.
     ///
-    /// Used during start-up and when the notification channel has overflown.
-    FullScan,
+    /// Used during start-up.
+    StartupFullScan,
+    /// Check all submissions for updates.
+    ///
+    /// Used when the notification channel has overflown.
+    LaggedFullScan,
     /// Check all submissions for updates.
     ///
     /// Triggered periodically. We don't expect there to be work here, but we have this in-place
@@ -379,13 +398,23 @@ async fn run_in_background(
     );
 
     let mut full_scan_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + DELEGATION_BACKGROUND_LOOP_TIMEOUT,
-        DELEGATION_BACKGROUND_LOOP_TIMEOUT,
+        tokio::time::Instant::now() + DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD,
+        DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD,
     );
     full_scan_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut trigger = ReportTrigger::FullScan;
+    let mut trigger = ReportTrigger::StartupFullScan;
 
     loop {
+        // NOTE: In case this reporting loop is too slow, observe the
+        // DELEGATION_REPORTING_LOOP_ITERATIONS_COUNTER and
+        // DELEGATION_TASKS_REPORTED_PER_ITERATION_HISTOGRAM metrics.
+        //
+        // Informed by those, try:
+        //  - Increasing the full-scan period, to amortize the cost over time.
+        //  - Increase the capacity of the `submission_status_changed` channel, to avoid lagged
+        //    full scans.
+        //  - Increase the debounce period, trading latency for throughput.
+
         match report_submission_status(&state, trigger).await {
             Ok(()) => {}
             Err(e) => tracing::error!("Error in delegation background loop: {e:?}"),
@@ -396,7 +425,7 @@ async fn run_in_background(
             res = submission_status_change_batch(&mut submission_status_changed_rx) => {
                 match res {
                     Ok(submission_ids) => ReportTrigger::Submissions(submission_ids),
-                    Err(SubmissionStatusChangeBatchError::Lagged) => ReportTrigger::FullScan,
+                    Err(SubmissionStatusChangeBatchError::Lagged) => ReportTrigger::LaggedFullScan,
                     Err(SubmissionStatusChangeBatchError::Closed) => break,
                 }
             },
@@ -407,16 +436,37 @@ async fn run_in_background(
     Ok(())
 }
 
+fn increment_delegation_reporting_loop_iterations(trigger: &ReportTrigger) {
+    let trigger_label = match trigger {
+        ReportTrigger::StartupFullScan => "startup_full_scan",
+        ReportTrigger::LaggedFullScan => "lagged_full_scan",
+        ReportTrigger::PeriodicFullScan => "periodic_full_scan",
+        ReportTrigger::Submissions(_) => "submissions",
+    };
+
+    counter!(
+        crate::prometheus::DELEGATION_REPORTING_LOOP_ITERATIONS_COUNTER,
+        &[("trigger", trigger_label)]
+    )
+    .increment(1);
+}
+
 /// Check for and report submission status updates to the external orchestrator.
+#[allow(clippy::cast_precision_loss)]
 async fn report_submission_status(
     state: &ServerState,
     trigger: ReportTrigger,
 ) -> Result<(), E<sqlx::Error, reqwest::Error>> {
     use futures::{StreamExt, TryStreamExt};
+
+    increment_delegation_reporting_loop_iterations(&trigger);
+
     let triggered_by_timeout = matches!(trigger, ReportTrigger::PeriodicFullScan);
     let update_specific_submissions = match trigger {
         ReportTrigger::Submissions(submission_ids) => Some(submission_ids),
-        ReportTrigger::FullScan | ReportTrigger::PeriodicFullScan => None,
+        ReportTrigger::StartupFullScan
+        | ReportTrigger::LaggedFullScan
+        | ReportTrigger::PeriodicFullScan => None,
     };
     let mut conn_0 = state
         .core_api
@@ -450,7 +500,7 @@ async fn report_submission_status(
                     }
                 }
             })
-            .try_chunks(128)
+            .try_chunks(DELEGATION_BACKGROUND_LOOP_BATCH_SIZE)
     };
 
     let mut task_count = 0;
@@ -473,6 +523,9 @@ async fn report_submission_status(
         task_count += batch_len;
     }
 
+    histogram!(crate::prometheus::DELEGATION_TASKS_REPORTED_PER_ITERATION_HISTOGRAM)
+        .record(task_count as f64);
+
     if task_count > 0 && triggered_by_timeout {
         tracing::warn!(
             n_out_of_date_tasks = task_count,
@@ -486,7 +539,7 @@ async fn report_submission_status(
     Ok(())
 }
 
-async fn insert_external_task(
+async fn insert_delegated_submission(
     conn: &mut impl Connection,
     submission_id: SubmissionId,
     external_task_id: &str,
@@ -709,7 +762,8 @@ pub mod test {
     use crate::common::submission::{InitialSubmissionStatus, SubmissionId};
     use crate::db::{Connection, DBPools};
     use crate::delegation::server::{
-        DelegatedJob, DelegatedJobPayload, app_for_tests, insert_external_task,
+        DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD, DelegatedJob, DelegatedJobPayload,
+        app_for_tests, insert_delegated_submission, submission_status_change_batch,
     };
     use axum::http::Request;
     use axum::{Router, body::Body};
@@ -747,7 +801,7 @@ pub mod test {
         }
     }
 
-    async fn count_external_tasks(mut db: impl Connection) -> sqlx::Result<u64> {
+    async fn count_delegated_submissions(mut db: impl Connection) -> sqlx::Result<u64> {
         let count = sqlx::query_scalar!("SELECT COUNT(*) as count FROM delegated_submissions;")
             .fetch_one(db.get_inner())
             .await?;
@@ -824,6 +878,38 @@ pub mod test {
             .expect("Sender dropped without signaling");
     }
 
+    #[tokio::test]
+    async fn submission_changes_are_batched_during_debounce_period() {
+        let (sender, mut receiver) = broadcast::channel(16);
+        let first = SubmissionId::new();
+        let second = SubmissionId::new();
+        sender.send(first).unwrap();
+
+        let mut batch = Box::pin(submission_status_change_batch(&mut receiver));
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs_f64(
+                    0.5 * DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD.as_secs_f64()
+                ),
+                &mut batch
+            )
+            .await
+            .is_err()
+        );
+
+        sender.send(second).unwrap();
+        let ids = tokio::time::timeout(
+            std::time::Duration::from_secs_f64(
+                4.0 * DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD.as_secs_f64(),
+            ),
+            batch,
+        )
+        .await
+        .expect("Timed out waiting for batched notifications")
+        .unwrap();
+        assert_eq!(ids, vec![first, second]);
+    }
+
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_job_delegation(
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
@@ -851,7 +937,7 @@ pub mod test {
         {
             let mut conn = test.pool.reader_conn().await.unwrap();
             assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
-            assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 0);
+            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
         }
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -875,7 +961,7 @@ pub mod test {
 
         {
             let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 1);
+            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
             assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
         }
     }
@@ -903,7 +989,7 @@ pub mod test {
             .await
             .unwrap();
 
-            insert_external_task(&mut conn, submission, "test")
+            insert_delegated_submission(&mut conn, submission, "test")
                 .await
                 .unwrap();
         };
@@ -928,12 +1014,12 @@ pub mod test {
 
         wait_for_update(rx).await;
 
-        // Wait for background loop to remove external tasks;
+        // Wait for background loop to remove delegated submission;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         {
             let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_external_tasks(&mut conn).await.unwrap(), 0);
+            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
         }
     }
 
@@ -960,7 +1046,7 @@ pub mod test {
             .await
             .unwrap();
 
-            insert_external_task(&mut conn, submission, "test")
+            insert_delegated_submission(&mut conn, submission, "test")
                 .await
                 .unwrap();
 
@@ -1012,7 +1098,7 @@ pub mod test {
             .await
             .unwrap();
 
-            insert_external_task(&mut conn, submission, "test")
+            insert_delegated_submission(&mut conn, submission, "test")
                 .await
                 .unwrap();
 
@@ -1068,7 +1154,7 @@ pub mod test {
             .await
             .unwrap();
 
-            insert_external_task(&mut conn, submission, "test")
+            insert_delegated_submission(&mut conn, submission, "test")
                 .await
                 .unwrap();
 
@@ -1123,7 +1209,7 @@ pub mod test {
             .await
             .unwrap();
 
-            insert_external_task(&mut conn, submission, "test")
+            insert_delegated_submission(&mut conn, submission, "test")
                 .await
                 .unwrap();
 

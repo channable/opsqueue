@@ -44,8 +44,11 @@ pub const CONSUMER_FETCH_AND_RESERVE_CHUNKS_HISTOGRAM: &str =
     "consumer_fetch_and_reserve_chunks_duration_seconds";
 pub const CONSUMER_COMPLETE_CHUNK_DURATION: &str = "consumer_complete_chunk_duration_seconds";
 pub const CONSUMER_FAIL_CHUNK_DURATION: &str = "consumer_fail_chunk_duration_seconds";
-
 pub const OPERATIONS_BACKLOG_GAUGE: &str = "operations_in_backlog_count";
+pub const DELEGATION_REPORTING_LOOP_ITERATIONS_COUNTER: &str =
+    "delegation_reporting_loop_iterations";
+pub const DELEGATION_TASKS_REPORTED_PER_ITERATION_HISTOGRAM: &str =
+    "delegation_tasks_reported_per_iteration";
 
 #[allow(clippy::too_many_lines)]
 pub fn describe_metrics() {
@@ -165,11 +168,20 @@ pub fn describe_metrics() {
         Unit::Seconds,
         "Time spent by Opsqueue to mark a given chunk as failed"
     );
-
     describe_gauge!(
         OPERATIONS_BACKLOG_GAUGE,
         Unit::Count,
         "Slight overestimation of the number of operations in the backlog (chunk_size * chunk_count for each submission). For simplicity, we always consider the last chunk full. This is a gauge reflecting the rough current DB state."
+    );
+    describe_counter!(
+        DELEGATION_REPORTING_LOOP_ITERATIONS_COUNTER,
+        Unit::Count,
+        "Number of times the reporting in the delegation extension was triggered"
+    );
+    describe_histogram!(
+        DELEGATION_TASKS_REPORTED_PER_ITERATION_HISTOGRAM,
+        Unit::Count,
+        "Number of delegated tasks successfully reported per reporting run, including runs with no updates"
     );
 }
 
@@ -197,6 +209,13 @@ pub fn setup_prometheus() -> (
             SECONDS_DURATION_BUCKETS,
         )
         .expect("Building Prometheus failed")
+        .set_buckets_for_metric(
+            Matcher::Full(DELEGATION_TASKS_REPORTED_PER_ITERATION_HISTOGRAM.to_string()),
+            &[
+                0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+            ],
+        )
+        .expect("Building delegation task-count histogram failed")
         .install_recorder()
         .expect("Installing global Prometheus recorder failed");
 
