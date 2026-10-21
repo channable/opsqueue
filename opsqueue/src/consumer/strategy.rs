@@ -15,6 +15,8 @@ pub enum Strategy {
     /// Prioritize newer submissions; candidate chunks within each submission
     /// are ordered by ascending chunk index.
     Newest,
+    /// Randomness is at submission granularity, not chunk granularity, so
+    /// completed output chunks can be streamed in sequential index order.
     Random,
     /// Perform a sort of submissions by metadata (ordered by in-flight counts),
     /// ties are broken by the underlying strategy. For example: if we have two
