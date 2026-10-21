@@ -880,6 +880,28 @@ def test_stream_submission_chunks_paused_then_resumed(
         next(results)
 
 
+def test_stream_submission_chunks_paused_then_cancelled(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_paused_then_cancelled"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]"], chunk_size=1, initial_status=InitialSubmissionStatus.Paused
+    )
+    results = producer_client.stream_submission_chunks(submission_id)
+
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+
+    producer_client.cancel_submission(submission_id)
+    with pytest.raises(SubmissionCancelledError):
+        next(results)
+    with pytest.raises(StopIteration):
+        next(results)
+
+
 def test_streams_completed_chunks_before_submission_finishes(
     opsqueue: OpsqueueProcess,
 ) -> None:
