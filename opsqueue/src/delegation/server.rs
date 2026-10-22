@@ -217,15 +217,16 @@ async fn handle_worker_events(
     conn: &mut impl WriterConnection,
     events: Vec<IncomingDelegationEvent>,
 ) -> sqlx::Result<()> {
-    let core_api = core_api.clone();
+    let transaction_core_api = core_api.clone();
 
-    conn.transaction(move |mut tx| {
+    let unpaused = conn.transaction(move |mut tx| {
         Box::pin(async move {
+            let mut unpaused = false;
             for event in events {
                 match event {
                     IncomingDelegationEvent::Delegate(delegations) => {
                         for delegation in delegations {
-                            handle_delegate_event(&core_api, &mut tx, &delegation)
+                            unpaused |= handle_delegate_event(&transaction_core_api, &mut tx, &delegation)
                                 .await
                                 .inspect_err(|e| {
                                     tracing::error!(
@@ -237,7 +238,7 @@ async fn handle_worker_events(
                     }
                     IncomingDelegationEvent::Kill(external_task_ids) => {
                         for external_task_id in external_task_ids {
-                            handle_kill_event(&core_api, &mut tx, &external_task_id)
+                            handle_kill_event(&transaction_core_api, &mut tx, &external_task_id)
                                 .await
                                 .map_err(|e| {
                                     tracing::error!(
@@ -255,9 +256,16 @@ async fn handle_worker_events(
                 }
             }
 
-            Ok(())
+            Ok::<_, sqlx::Error>(unpaused)
         })
-    }).await
+    }).await?;
+
+    if unpaused {
+        // TODO(https://github.com/channable/opsqueue/issues/205): Remove this method after we
+        //  schedule the call to `notify_on_insert` as part of `unpause_submission`.
+        core_api.notify_consumers();
+    }
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
@@ -265,7 +273,7 @@ async fn handle_delegate_event(
     core_api: &CoreApi,
     conn: &mut impl WriterConnection,
     job: &DelegatedJob,
-) -> sqlx::Result<()> {
+) -> sqlx::Result<bool> {
     let external_task_id = &job.task_id;
     let submission_id = job.payload.submission_id;
 
@@ -275,8 +283,8 @@ async fn handle_delegate_event(
         tracing::debug!(%submission_id, %external_task_id, "Delegated submission was already registered");
     }
 
-    match core_api.unpause_submission(submission_id, conn).await {
-        Ok(()) => {}
+    let unpaused = match core_api.unpause_submission(submission_id, conn).await {
+        Ok(()) => true,
         Err(E::R(SubmissionNotFound(_))) => {
             // Note that this path could be hit when resubmitting a task with the same
             // submission id.
@@ -287,14 +295,15 @@ async fn handle_delegate_event(
 
             // Send a notification, s.t. the status is promptly reported to the external system.
             core_api.notify_submission_status_changed(submission_id);
+            false
         }
         Err(E::L(db_err)) => {
             tracing::error!(%submission_id, "DB error unpausing submission: {db_err:?}");
             return Err(db_err.0);
         }
-    }
+    };
 
-    Ok(())
+    Ok(unpaused)
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
