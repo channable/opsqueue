@@ -256,7 +256,8 @@ async fn handle_worker_events(
             }
 
             Ok(())
-        })}).await
+        })
+    }).await
 }
 
 #[tracing::instrument(level = "debug", skip(conn))]
@@ -268,8 +269,6 @@ async fn handle_delegate_event(
     let external_task_id = &job.task_id;
     let submission_id = job.payload.submission_id;
 
-    // TODO: Add tests for handle_delegate_event when the underlying submission has a different
-    // status (or doesn't exist anymore, or never existed).
     let rows_affected = insert_delegated_submission(conn, submission_id, external_task_id).await?;
 
     if rows_affected == 0 {
@@ -771,11 +770,12 @@ pub mod test {
         count_submissions, count_submissions_cancelled, count_submissions_paused,
         insert_submission_from_chunks,
     };
-    use crate::common::submission::{InitialSubmissionStatus, SubmissionId};
+    use crate::common::submission::{InitialSubmissionStatus, SubmissionId, SubmissionStatus};
     use crate::db::{Connection, DBPools};
     use crate::delegation::server::{
-        DelegatedJob, DelegatedJobPayload, app_for_tests, insert_delegated_submission,
-        submission_status_change_batch,
+        DelegatedJob, DelegatedJobPayload, ReportTrigger, ServerState, app_for_tests,
+        handle_delegate_event, handle_kill_event, insert_delegated_submission,
+        report_submission_status, submission_status_change_batch,
     };
     use axum::http::Request;
     use axum::{Router, body::Body};
@@ -785,7 +785,7 @@ pub mod test {
     use tokio::sync::{Notify, broadcast, oneshot};
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
-    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::matchers::{body_json, body_partial_json, method, path};
     use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
     struct SignalResponder {
@@ -888,6 +888,601 @@ pub mod test {
             .await
             .expect("Timed out waiting for HTTP request")
             .expect("Sender dropped without signaling");
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_paused_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::Paused,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::Paused(_))
+        ));
+
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::InProgress(_))
+        ));
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+
+        // Test for idempotency.
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_in_progress_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::InProgress(_))));
+
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_completed_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
+
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_failed_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(
+            pool.clone(),
+            Arc::new(Notify::new()),
+            status_changed.clone(),
+        );
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        retry_or_fail_chunk(
+            (submission_id, ChunkIndex::zero()).into(),
+            "error".to_owned(),
+            &mut conn,
+            0,
+            &status_changed,
+        )
+        .await
+        .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Failed(_, _))));
+
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_cancelled_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        core_api
+            .cancel_submission(submission_id, &mut conn)
+            .await
+            .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
+
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_delegate_event_for_missing_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+
+        let submission_id = SubmissionId::new();
+        let job = DelegatedJob {
+            task_id: "test".to_owned(),
+            payload: DelegatedJobPayload { submission_id },
+        };
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_delegate_event(&core_api, &mut conn, &job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_paused_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::Paused,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::Paused(_))
+        ));
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::Cancelled(_))
+        ));
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_in_progress_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::InProgress(_))
+        ));
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let mut notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            Some(SubmissionStatus::Cancelled(_))
+        ));
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_completed_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert!(notifications.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_failed_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(
+            pool.clone(),
+            Arc::new(Notify::new()),
+            status_changed.clone(),
+        );
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        retry_or_fail_chunk(
+            (submission_id, ChunkIndex::zero()).into(),
+            "error".to_owned(),
+            &mut conn,
+            0,
+            &status_changed,
+        )
+        .await
+        .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Failed(_, _))));
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert!(notifications.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_cancelled_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = insert_submission_from_chunks(
+            None,
+            vec![Some("foo".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::InProgress,
+            &mut conn,
+        )
+        .await
+        .unwrap();
+        core_api
+            .cancel_submission(submission_id, &mut conn)
+            .await
+            .unwrap();
+        let before = core_api
+            .submission_status(submission_id, &mut conn)
+            .await
+            .unwrap();
+        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert!(notifications.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_missing_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+        let submission_id = SubmissionId::new();
+        insert_delegated_submission(&mut conn, submission_id, "test")
+            .await
+            .unwrap();
+
+        let notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
+        assert!(notifications.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_unknown_task(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let mut conn = pool.writer_conn().await.unwrap();
+
+        let notifications = core_api.subscribe_submission_status_changes();
+        handle_kill_event(&core_api, &mut conn, "unknown")
+            .await
+            .unwrap();
+
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
+        assert!(notifications.is_empty());
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn report_submission_status_for_missing_submission(db: sqlx::SqlitePool) {
+        let pool = DBPools::from_test_pool(&db);
+        let (status_changed, _) = broadcast::channel(16);
+        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
+        let submission_id = SubmissionId::new();
+        {
+            let mut conn = pool.writer_conn().await.unwrap();
+            assert_eq!(
+                core_api
+                    .submission_status(submission_id, &mut conn)
+                    .await
+                    .unwrap(),
+                None
+            );
+            insert_delegated_submission(&mut conn, submission_id, "test")
+                .await
+                .unwrap();
+        }
+
+        let external_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/delegation/submit"))
+            .and(body_json(json!([
+                {"type": "updated", "contents": []},
+                {"type": "completed", "contents": [
+                    {"task_id": "test", "completion": {"status": "success"}}
+                ]}
+            ])))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&external_server)
+            .await;
+
+        let config = crate::config::Config::default();
+        let state = ServerState::new(
+            CancellationToken::new(),
+            core_api,
+            external_server.uri().parse().unwrap(),
+            config.delegation_full_scan_period.into(),
+            config.delegation_debounce_period.into(),
+            config.delegation_batch_size,
+        );
+        report_submission_status(&state, ReportTrigger::Submissions(vec![submission_id]))
+            .await
+            .unwrap();
+
+        external_server.verify().await;
+        let mut conn = pool.reader_conn().await.unwrap();
+        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
     }
 
     #[tokio::test]
