@@ -313,7 +313,8 @@ export LITESTREAM_SECRET_ACCESS_KEY=minioadmin
 
 # A brief overview of Opsqueue's architecture
 
-Opsqueue consists of three independently running parts: the Producer, the Queue (the 'opsqueue executable'), and the Consumer.
+Opsqueue consists of three independently running parts: the Producer, the Queue (the 'opsqueue executable'), and the
+Consumer. Optionally, there can be more parts in the form of [Extensions](#extensions).
 
 The producer and the consumer are pieces of code that you write (in e.g. Python), which use the Opsqueue client library to communicate with the queue.
 
@@ -394,3 +395,125 @@ For heartbeating between the queue and the consumer, the following approach is u
 - If the 'missed heartbeats' counter is > 3 (configurable), the connection is considered unhealthy, and the connection is closed.
   - The consumer: Upon a connection being closed, ongoing work is dropped. After that, the consumer will attempt to reconnect with the queue
   - The queue: Upon a connection being closed, work reserved by a consumer is un-reserved and may be picked up by another consumer
+
+
+## Extensions
+
+Opsqueue has an extension mechanism, such that it can be extended while preserving separation of concerns.
+See `opsqueue/src/common/extension.rs` for details.
+
+### Delegation
+
+The 'delegation' extension can be used to delegate the responsibility of starting/stopping submissions to another
+service, and keeping that other service up-to-date on a submission's status. An example use-case is a job scheduling
+system that keeps tracks of dependencies between jobs (which are not necessarily Opsqueue submissions), and schedules
+them accordingly. Enabling cross-system dependencies to be expressed and handled.
+
+See `opsqueue/src/delegation/` for more details.
+
+See below for a sequence diagram how this works in under-the-hood:
+
+***
+
+The happy path:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CL as Client
+    participant D as Delegator
+    participant OD as Opsqueue (Delegation module)
+    participant C as Opsqueue (Core module)
+    participant DB@{"type": "database"} as Database
+
+CL ->>+ OC: insert_submission(chunks, paused=True)
+OC ->> DB: insert_submission
+OC -->>- CL: submission_id
+CL ->>+ D: submit(submission_id)
+D -->>- CL: task_id
+
+Note over D: Delegator is free to wait. (e.g. to ensure all dependencies are satisfied)
+
+D ->>+ OD: delegate(task_id, submission_id)
+OD ->> DB: insert_external_task(task_id, submission_id)
+OD -->> C: unpause(submission_id)
+OD -->>- D: 202 ACCEPTED
+
+
+C -)+ OD: submission_status_changed(submission_id)
+OD ->>+ DB: select_external_tasks(submission_id)
+DB -->>- OD: [{task_id, submission_id, last_status_sent}]
+OD ->>+ C: submission_status(submission_id)
+C -->>- OD: "IN_PROGRESS"
+OD ->> D: submit(Updated(task_id, "RUNNING"))
+OD ->>- DB: update_last_status_sent(task_id, "RUNNING")
+
+Note over OD, C: Some time passes until the submission is completed.
+
+C -)+ OD: submission_status_changed(submission_id)
+OD ->>+ DB: select_external_tasks(submission_id)
+DB -->>- OD: [{task_id, submission_id, last_status_sent}]
+OD ->>+ C: submission_status(submission_id)
+C -->>- OD: "COMPLETED"
+OD ->> D: submit(Completion(task_id, "SUCCESS"))
+OD ->>- DB: delete_external_task(task_id)
+
+Note over D: Delegator can respond to status change (e.g. start processing jobs that depended on this submission)
+```
+
+***
+
+The path when a submission is cancelled mid-way:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CL as Client
+    participant D as Delegator
+    participant OD as Opsqueue (Delegation module)
+    participant C as Opsqueue (Core module)
+    participant DB@{"type": "database"} as Database
+
+CL ->>+ OC: insert_submission(chunks, paused=True)
+OC ->> DB: insert_submission
+OC -->>- CL: submission_id
+CL ->>+ D: submit(submission_id)
+D -->>- CL: task_id
+
+Note over D: Delegator is free to wait. (e.g. to ensure all dependencies are satisfied)
+
+D ->>+ OD: delegate(task_id, submission_id)
+OD ->> DB: insert_external_task(task_id, submission_id)
+OD -->> C: unpause(submission_id)
+OD -->>- D: 202 ACCEPTED
+
+
+C -)+ OD: submission_status_changed(submission_id)
+OD ->>+ DB: select_external_tasks(submission_id)
+DB -->>- OD: [{task_id, submission_id, last_status_sent}]
+OD ->>+ C: submission_status(submission_id)
+C -->>- OD: "IN_PROGRESS"
+OD ->> D: update(task_id, "RUNNING")
+OD ->>- DB: update_last_status_sent(task_id, "RUNNING")
+
+Note over OD, C: Some time passes but the submission is not completed yet.
+
+CL -) D: kill(task_id)
+D -) OD: kill(task_id)
+OD -->> C: cancel(submission_id)
+
+C -)+ OD: submission_status_changed(submission_id)
+OD ->>+ DB: select_external_tasks(submission_id)
+DB -->>- OD: [{task_id, submission_id, last_status_sent}]
+OD ->>+ C: submission_status(submission_id)
+C -->>- OD: "CANCELLED"
+OD ->> D: submit(Failure(task_id, "FORCED"))
+OD ->>- DB: delete_external_task(task_id)
+
+Note over D: Delegator can respond to status change (e.g. block processing jobs that depend on this submission)
+```
+
+***
+
+The path when an error occurs while running the submission is similar to the path for cancellation, without the client
+explicitly canceling the submission.
