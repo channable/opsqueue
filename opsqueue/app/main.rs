@@ -4,12 +4,15 @@ use opentelemetry_otlp::SpanExporter;
 use opentelemetry_resource_detectors::HostResourceDetector;
 use opentelemetry_resource_detectors::{OsResourceDetector, ProcessResourceDetector};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
+use opsqueue::common::extension::{CoreApi, Extension};
+use opsqueue::delegation::extension::DelegationExtension;
 use opsqueue::tracing::as_dyn_error;
 use opsqueue::{common::submission::db::periodically_cleanup_old, config::Config, prometheus};
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::level_filters::LevelFilter;
 
@@ -52,6 +55,51 @@ pub async fn async_main() {
     .await
     .expect("Timed out while initiating the database");
 
+    // Triggered when new submissions are inserted, or existing submissions are retried.
+    // Used to wake consumers when new work is available.
+    //
+    // Notifications are triggered *after* mutation. That is, after a transaction completes.
+    // Meaning that it might happen that a notification is missed. However, this is generally safe,
+    // since the failing submission will be picked up as usual whenever another
+    // notification is sent.
+    //
+    // TODO(https://github.com/channable/opsqueue/issues/193): Incorporate a fallback timer, such
+    //  that consumers check for new work at least every x seconds?
+    let notify_on_insert = Arc::new(Notify::new());
+    // Triggered when a submission's status changes.
+    // Exposed via the CoreApi for use in extensions (e.g. the delegation extension).
+    //
+    // Notifications are triggered *after* mutation. That is, after a transaction completes.
+    // Meaning that it might happen that a notification is missed. It is the extension's
+    // responsibility to deal with this. For instance, by checking for new work at least every x
+    // seconds.
+    //
+    // The channel is a bounded ringbuffer, so when its configured capacity is exceeded pending
+    // events will be overwritten. Receivers will get a `RecvError::Lagged` in that case and may
+    // need to do a full scan for available work.
+    //
+    // Receiver is dropped because listeners subscribe independently
+    let (submission_status_changed_tx, _) =
+        tokio::sync::broadcast::channel(config.submission_status_change_channel_capacity);
+
+    let core_api = CoreApi::new(
+        db_pool.clone(),
+        notify_on_insert.clone(),
+        submission_status_changed_tx.clone(),
+    );
+
+    let mut extensions: Vec<Box<dyn Extension>> = Vec::new();
+    if let Some(delegation_server_url) = &config.delegation_server_url {
+        extensions.push(Box::new(DelegationExtension::new(
+            cancellation_token.clone(),
+            core_api,
+            delegation_server_url.clone(),
+            config.delegation_full_scan_period.into(),
+            config.delegation_debounce_period.into(),
+            config.delegation_batch_size,
+        )));
+    }
+
     moro_local::async_scope!(|scope| {
         let checkpoint_handle = scope.spawn(db_pool.periodically_checkpoint_wal());
 
@@ -63,10 +111,14 @@ pub async fn async_main() {
             &cancellation_token,
             &app_healthy_flag,
             prometheus_config,
+            notify_on_insert,
+            submission_status_changed_tx,
+            &extensions,
         ));
 
         let max_age = config.max_submission_age.into();
-        let cleanup_handle = scope.spawn(periodically_cleanup_old(db_pool.writer_pool(), max_age));
+
+        let cleanup_handle = scope.spawn(periodically_cleanup_old(&db_pool, max_age, &extensions));
 
         let prometheus_handle = scope.spawn(prometheus::periodically_calculate_scaling_metrics(
             &db_pool,
