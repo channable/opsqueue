@@ -472,6 +472,15 @@ pub mod test {
         let explained = explain(qb, &mut conn).await;
         assert_streaming_chunks(qb, &explained);
         assert!(!explained.contains("USE TEMP B-TREE"));
+        insta::assert_snapshot!(explained, @"
+        1, 0, COMPOUND QUERY
+        2, 1, LEFT-MOST SUBQUERY
+        6, 2, SEARCH submissions USING INDEX random_submissions_order (random_order>?)
+        12, 2, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        39, 1, UNION ALL
+        43, 39, SEARCH submissions USING INDEX random_submissions_order (random_order<?)
+        50, 39, SEARCH chunks USING PRIMARY KEY (submission_id=?)
+        ");
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
