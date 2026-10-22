@@ -495,6 +495,15 @@ impl ProducerClient {
                     match status {
                         submission::SubmissionStatus::InProgress(submission) => {
                             state.prefix = state.prefix.take().or(submission.prefix);
+                            if state.prefix.is_none()
+                                && submission.chunks_total != chunk::ChunkCount::zero()
+                            {
+                                state.finished = true;
+                                return Some((
+                                    Err(StreamingChunkError::InlineOutputStorageUnsupported),
+                                    state,
+                                ));
+                            }
                             state.ready_until = submission.chunks_ready.into();
                         }
                         submission::SubmissionStatus::Completed(submission) => {

@@ -33,6 +33,7 @@ from opsqueue.exceptions import ChunkRetrievalError
 from opsqueue.producer import (
     ChunkFailed,
     InitialSubmissionStatus,
+    InlineOutputStorageUnsupportedError,
     ProducerClient,
     SubmissionCompleted,
     SubmissionCancelledError,
@@ -1202,3 +1203,19 @@ def test_stream_submission_chunks_interrupts_wait(opsqueue: OpsqueueProcess) -> 
     with background_process(read_until_interrupted, args=(submission_id.id,)) as proc:
         proc.join(timeout=5)
         assert proc.exitcode == 0
+
+
+def test_stream_submission_chunks_rejects_inline_storage_before_completion(
+    opsqueue: OpsqueueProcess, tmp_path: Path
+) -> None:
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", tmp_path.as_uri())
+    submission_id = producer_client.inner.insert_submission_direct(
+        [b"[1]"], chunk_size=1
+    )
+
+    async def read_inline_chunk() -> None:
+        results = await producer_client.async_stream_submission_chunks(submission_id)
+        with pytest.raises(InlineOutputStorageUnsupportedError):
+            await asyncio.wait_for(anext(results), timeout=SUBMISSION_COMPLETED_TIMEOUT)
+
+    asyncio.run(read_inline_chunk())
