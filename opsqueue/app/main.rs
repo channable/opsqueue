@@ -74,13 +74,13 @@ pub async fn async_main() {
     // responsibility to deal with this. For instance, by checking for new work at least every x
     // seconds.
     //
-    // We set the capacity to a somewhat arbitrary 128, to prevent unbounded memory growth. This
-    // channel is implemented as a ringbuffer, so when the capacity is exceeded pending events will
-    // be overwritten. Receivers will get a `RecvError::Lagged` in that case. Depending on the
-    // requirements, Receivers might want to do a full scan for available work if that happens.
+    // The channel is a bounded ringbuffer, so when its configured capacity is exceeded pending
+    // events will be overwritten. Receivers will get a `RecvError::Lagged` in that case and may
+    // need to do a full scan for available work.
     //
     // Receiver is dropped because listeners subscribe independently
-    let (submission_status_changed_tx, _) = tokio::sync::broadcast::channel(128);
+    let (submission_status_changed_tx, _) =
+        tokio::sync::broadcast::channel(config.submission_status_change_channel_capacity);
 
     let core_api = CoreApi::new(
         db_pool.clone(),
@@ -94,6 +94,9 @@ pub async fn async_main() {
             cancellation_token.clone(),
             core_api,
             delegation_server_url.clone(),
+            config.delegation_full_scan_period.into(),
+            config.delegation_debounce_period.into(),
+            config.delegation_batch_size,
         )));
     }
 
