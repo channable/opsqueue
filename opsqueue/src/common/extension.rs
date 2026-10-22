@@ -69,6 +69,11 @@ impl CoreApi {
         let _ = self.submission_status_changed_tx.send(id);
     }
 
+    /// Wake waiting consumers after newly available work has been committed.
+    pub fn notify_consumers(&self) {
+        self.notify_on_insert.notify_waiters();
+    }
+
     /// Unpauses the given submission.
     ///
     /// # Errors

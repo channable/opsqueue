@@ -2,8 +2,10 @@
 # - use pytest's `--log-cli-level=info` (or `=debug`) argument to get more detailed logs from the producer/consumer clients
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
+import json
 import logging
 import time
+import urllib.request
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -790,6 +792,57 @@ def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
             producer_client.get_submission_status(submission_id),
             SubmissionStatus.Completed,
         )
+
+
+def test_delegation_wakes_waiting_consumer() -> None:
+    with opsqueue_service(
+        command_args=["--delegation-server-url", "http://127.0.0.1:1"]
+    ) as opsqueue:
+        url = "file:///tmp/opsqueue/test_delegation_wakes_waiting_consumer"
+        producer = ProducerClient(f"localhost:{opsqueue.port}", url)
+
+        def run_consumer() -> None:
+            ConsumerClient(f"localhost:{opsqueue.port}", url).run_each_op(increment)
+
+        with background_process(run_consumer):
+            deadline = time.monotonic() + SUBMISSION_COMPLETED_TIMEOUT
+            while True:
+                with urllib.request.urlopen(
+                    f"http://localhost:{opsqueue.port}/metrics", timeout=2
+                ) as response:
+                    metrics = response.read().decode()
+                if "consumers_connected_count 1\n" in metrics:
+                    break
+                assert time.monotonic() < deadline, "Consumer did not connect"
+                time.sleep(0.05)
+
+            for value in range(3):
+                submission = producer.insert_submission(
+                    [value], chunk_size=1, initial_status=InitialSubmissionStatus.Paused
+                )
+                event = [
+                    {
+                        "type": "delegate",
+                        "contents": [
+                            {
+                                "task_id": f"test-{value}",
+                                "payload": {"submission_id": submission.id},
+                            }
+                        ],
+                    }
+                ]
+                request = urllib.request.Request(
+                    f"http://localhost:{opsqueue.port}/delegation/submit",
+                    data=json.dumps(event).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(request, timeout=2) as response:
+                    assert response.status == 202
+                assert list(
+                    producer.blocking_stream_completed_submission(
+                        submission, timeout=SUBMISSION_COMPLETED_TIMEOUT
+                    )
+                ) == [value + 1]
 
 
 def test_unpause_not_found(opsqueue: OpsqueueProcess) -> None:
