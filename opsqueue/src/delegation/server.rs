@@ -19,7 +19,7 @@ use axum_prometheus::metrics::{counter, histogram};
 use either::Either;
 use futures::stream::BoxStream;
 use itertools::Itertools;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::select;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::time::MissedTickBehavior;
@@ -31,9 +31,17 @@ pub(crate) fn app_for_tests(
     core_api: CoreApi,
     delegation_server_url: url::Url,
 ) -> Router {
-    let router = ServerState::new(cancellation_token.clone(), core_api, delegation_server_url)
-        .run_background()
-        .build_router();
+    let config = crate::config::Config::default();
+    let router = ServerState::new(
+        cancellation_token.clone(),
+        core_api,
+        delegation_server_url,
+        config.delegation_full_scan_period.into(),
+        config.delegation_debounce_period.into(),
+        config.delegation_batch_size,
+    )
+    .run_background()
+    .build_router();
 
     Router::new().nest("/delegation", router)
 }
@@ -43,6 +51,9 @@ pub struct ServerState {
     cancellation_token: CancellationToken,
     core_api: CoreApi,
     delegation_server_url: url::Url,
+    full_scan_period: Duration,
+    debounce_period: Duration,
+    batch_size: usize,
     http_client: reqwest::Client,
 }
 
@@ -52,11 +63,17 @@ impl ServerState {
         cancellation_token: CancellationToken,
         core_api: CoreApi,
         delegation_server_url: url::Url,
+        full_scan_period: Duration,
+        debounce_period: Duration,
+        batch_size: usize,
     ) -> Self {
         Self {
             cancellation_token,
             core_api,
             delegation_server_url,
+            full_scan_period,
+            debounce_period,
+            batch_size,
             http_client: reqwest::Client::new(),
         }
     }
@@ -319,12 +336,6 @@ async fn handle_kill_event(
     Ok(())
 }
 
-const DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD: std::time::Duration =
-    std::time::Duration::from_secs(5);
-const DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD: std::time::Duration =
-    std::time::Duration::from_millis(100);
-const DELEGATION_BACKGROUND_LOOP_BATCH_SIZE: usize = 128;
-
 /// An error that occurred while listening for submission changes.
 #[derive(Debug)]
 enum SubmissionStatusChangeBatchError {
@@ -342,11 +353,12 @@ enum SubmissionStatusChangeBatchError {
 /// There are two error cases that should be dealt with, see `SubmissionStatusChangeBatchError`.
 async fn submission_status_change_batch(
     submission_status_changed: &mut tokio::sync::broadcast::Receiver<SubmissionId>,
+    debounce_period: Duration,
 ) -> Result<Vec<SubmissionId>, SubmissionStatusChangeBatchError> {
     match submission_status_changed.recv().await {
         Ok(submission_id) => {
             let mut submission_ids = vec![submission_id];
-            tokio::time::sleep(DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD).await;
+            tokio::time::sleep(debounce_period).await;
             loop {
                 match submission_status_changed.try_recv() {
                     Ok(submission_id) => submission_ids.push(submission_id),
@@ -398,8 +410,8 @@ async fn run_in_background(
     );
 
     let mut full_scan_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD,
-        DELEGATION_BACKGROUND_LOOP_FULL_SCAN_PERIOD,
+        tokio::time::Instant::now() + state.full_scan_period,
+        state.full_scan_period,
     );
     full_scan_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut trigger = ReportTrigger::StartupFullScan;
@@ -422,7 +434,7 @@ async fn run_in_background(
 
         trigger = select! {
             () = state.cancellation_token.cancelled() => break,
-            res = submission_status_change_batch(&mut submission_status_changed_rx) => {
+            res = submission_status_change_batch(&mut submission_status_changed_rx, state.debounce_period) => {
                 match res {
                     Ok(submission_ids) => ReportTrigger::Submissions(submission_ids),
                     Err(SubmissionStatusChangeBatchError::Lagged) => ReportTrigger::LaggedFullScan,
@@ -500,7 +512,7 @@ async fn report_submission_status(
                     }
                 }
             })
-            .try_chunks(DELEGATION_BACKGROUND_LOOP_BATCH_SIZE)
+            .try_chunks(state.batch_size)
     };
 
     let mut task_count = 0;
@@ -762,8 +774,8 @@ pub mod test {
     use crate::common::submission::{InitialSubmissionStatus, SubmissionId};
     use crate::db::{Connection, DBPools};
     use crate::delegation::server::{
-        DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD, DelegatedJob, DelegatedJobPayload,
-        app_for_tests, insert_delegated_submission, submission_status_change_batch,
+        DelegatedJob, DelegatedJobPayload, app_for_tests, insert_delegated_submission,
+        submission_status_change_batch,
     };
     use axum::http::Request;
     use axum::{Router, body::Body};
@@ -885,12 +897,14 @@ pub mod test {
         let second = SubmissionId::new();
         sender.send(first).unwrap();
 
-        let mut batch = Box::pin(submission_status_change_batch(&mut receiver));
+        let debounce_period = std::time::Duration::from_millis(100);
+        let mut batch = Box::pin(submission_status_change_batch(
+            &mut receiver,
+            debounce_period,
+        ));
         assert!(
             tokio::time::timeout(
-                std::time::Duration::from_secs_f64(
-                    0.5 * DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD.as_secs_f64()
-                ),
+                std::time::Duration::from_secs_f64(0.5 * debounce_period.as_secs_f64()),
                 &mut batch
             )
             .await
@@ -899,9 +913,7 @@ pub mod test {
 
         sender.send(second).unwrap();
         let ids = tokio::time::timeout(
-            std::time::Duration::from_secs_f64(
-                4.0 * DELEGATION_BACKGROUND_LOOP_DEBOUNCE_PERIOD.as_secs_f64(),
-            ),
+            std::time::Duration::from_secs_f64(4.0 * debounce_period.as_secs_f64()),
             batch,
         )
         .await

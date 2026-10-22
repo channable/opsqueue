@@ -6,12 +6,16 @@ use crate::delegation::server::ServerState;
 use async_trait::async_trait;
 use axum::Router;
 use sqlx::query_scalar;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 pub struct DelegationExtension {
     cancellation_token: CancellationToken,
     core_api: CoreApi,
     delegation_server_url: url::Url,
+    full_scan_period: Duration,
+    debounce_period: Duration,
+    batch_size: usize,
 }
 
 impl DelegationExtension {
@@ -20,11 +24,17 @@ impl DelegationExtension {
         cancellation_token: CancellationToken,
         core_api: CoreApi,
         delegation_server_url: url::Url,
+        full_scan_period: Duration,
+        debounce_period: Duration,
+        batch_size: usize,
     ) -> Self {
         DelegationExtension {
             cancellation_token,
             core_api,
             delegation_server_url,
+            full_scan_period,
+            debounce_period,
+            batch_size,
         }
     }
 }
@@ -50,6 +60,9 @@ impl Extension for DelegationExtension {
             self.cancellation_token.clone(),
             self.core_api.clone(),
             self.delegation_server_url.clone(),
+            self.full_scan_period,
+            self.debounce_period,
+            self.batch_size,
         )
         .run_background()
         .build_router();
@@ -134,10 +147,14 @@ mod tests {
         };
 
         let (sender, _) = broadcast::channel(1);
+        let config = crate::config::Config::default();
         let extensions: Vec<Box<dyn Extension>> = vec![Box::new(DelegationExtension::new(
             CancellationToken::new(),
             CoreApi::new(db.clone(), Arc::new(Notify::new()), sender),
             "http://localhost/".parse().unwrap(),
+            config.delegation_full_scan_period.into(),
+            config.delegation_debounce_period.into(),
+            config.delegation_batch_size,
         ))];
         let cleanup_db = db.clone();
         let cleanup = tokio::spawn(async move {
