@@ -69,6 +69,13 @@ impl CoreApi {
         let _ = self.submission_status_changed_tx.send(id);
     }
 
+    /// Wake waiting consumers after newly available work has been committed.
+    pub fn notify_consumers(&self) {
+        // TODO(https://github.com/channable/opsqueue/issues/205): Remove this method after we
+        //  schedule the call to `notify_on_insert` as part of `unpause_submission`.
+        self.notify_on_insert.notify_waiters();
+    }
+
     /// Unpauses the given submission.
     ///
     /// # Errors
