@@ -261,6 +261,11 @@ class ProducerClient:
         may still be yielded after the submission fails; failure is reported
         when the iterator next polls the submission status.
 
+        `SubmissionPausedError`, `ChunkRetrievalError`, and transient
+        `InternalProducerClientError` failures leave the iterator usable: call
+        `next()` again after the underlying condition is resolved. The other
+        errors below end iteration and cannot be retried on this iterator.
+
         Non-empty submissions inserted with `insert_submission_direct` use
         inline output storage and cannot be streamed by this method.
 
@@ -291,6 +296,11 @@ class ProducerClient:
         failed submission raises `SubmissionFailedError`. Already-ready chunks
         may still be yielded after the submission fails; failure is reported
         when the iterator next polls the submission status.
+
+        `SubmissionPausedError`, `ChunkRetrievalError`, and transient
+        `InternalProducerClientError` failures leave the iterator usable: call
+        `anext()` again after the underlying condition is resolved. The other
+        errors below end iteration and cannot be retried on this iterator.
 
         Non-empty submissions inserted with `insert_submission_direct` use
         inline output storage and cannot be streamed by this method.
