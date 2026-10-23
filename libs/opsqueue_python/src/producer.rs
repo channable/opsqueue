@@ -549,7 +549,7 @@ impl ProducerClient {
                 index: u63::new(0),
                 prefix: None,
                 ready_until: u63::new(0),
-                finished: false,
+                polling_finished: false,
                 interval: INITIAL_SUBMISSION_POLLING_INTERVAL,
             },
             |mut state| async move {
@@ -557,7 +557,7 @@ impl ProducerClient {
                     // Drain the cached ready prefix before polling for status again.
                     if state.index < state.ready_until {
                         let Some(prefix) = state.prefix.as_deref() else {
-                            state.finished = true;
+                            state.polling_finished = true;
                             state.ready_until = state.index;
                             return Some((
                                 Err(StreamingChunkError::InlineOutputStorageUnsupported),
@@ -576,7 +576,7 @@ impl ProducerClient {
                         return Some((result, state));
                     }
 
-                    if state.finished {
+                    if state.polling_finished {
                         return None;
                     }
 
@@ -587,7 +587,7 @@ impl ProducerClient {
                     {
                         Ok(Some(status)) => status,
                         Ok(None) => {
-                            state.finished = true;
+                            state.polling_finished = true;
                             return Some((
                                 Err(StreamingChunkError::SubmissionNotFound(SubmissionNotFound(
                                     state.submission_id.into(),
@@ -607,7 +607,7 @@ impl ProducerClient {
                             if state.prefix.is_none()
                                 && submission.chunks_total != chunk::ChunkCount::zero()
                             {
-                                state.finished = true;
+                                state.polling_finished = true;
                                 return Some((
                                     Err(StreamingChunkError::InlineOutputStorageUnsupported),
                                     state,
@@ -618,12 +618,12 @@ impl ProducerClient {
                         submission::SubmissionStatus::Completed(submission) => {
                             state.prefix = state.prefix.take().or(submission.prefix);
                             state.ready_until = submission.chunks_total.into();
-                            state.finished = true;
+                            state.polling_finished = true;
                         }
                         submission::SubmissionStatus::Failed(submission, chunk) => {
                             let failure =
                                 crate::common::ChunkFailed::from_internal(chunk, &submission);
-                            state.finished = true;
+                            state.polling_finished = true;
                             return Some((
                                 Err(StreamingChunkError::Failed(Box::new(
                                     crate::errors::SubmissionFailed(submission.into(), failure),
@@ -635,12 +635,12 @@ impl ProducerClient {
                             return Some((Err(StreamingChunkError::Paused), state));
                         }
                         submission::SubmissionStatus::Cancelled(_) => {
-                            state.finished = true;
+                            state.polling_finished = true;
                             return Some((Err(StreamingChunkError::Cancelled), state));
                         }
                     }
 
-                    if state.index < state.ready_until || state.finished {
+                    if state.index < state.ready_until || state.polling_finished {
                         continue;
                     }
 
@@ -746,7 +746,7 @@ struct StreamingChunkState {
     ready_until: u63,
     /// Stops further polling after completion, failure, or rejecting inline output.
     /// Completed submissions still drain their cached ready range before ending.
-    finished: bool,
+    polling_finished: bool,
     /// Delay before the next status poll. It backs off while waiting and resets after retrieval.
     interval: Duration,
 }
