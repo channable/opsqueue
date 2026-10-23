@@ -912,6 +912,8 @@ pub mod test {
                 first_submission_ids.push(chunks[0].submission_id);
             }
         }
+        // This test can flake, but with 100 submissions, getting the exact same
+        // first ID 5 times in a row has a 1 in 100^4 chance of happening.
         assert!(
             first_submission_ids
                 .iter()
