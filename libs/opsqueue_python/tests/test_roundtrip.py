@@ -1178,7 +1178,9 @@ def test_stream_submission_chunks_cancelled(opsqueue: OpsqueueProcess) -> None:
         next(results)
 
 
-def test_stream_submission_chunks_interrupts_wait(opsqueue: OpsqueueProcess) -> None:
+def test_stream_submission_chunks_interrupted_read_does_not_consume_next_result(
+    opsqueue: OpsqueueProcess,
+) -> None:
     url = "file:///tmp/opsqueue/test_streaming_interrupt"
     address = f"localhost:{opsqueue.port}"
     producer_client = ProducerClient(address, url)
@@ -1196,11 +1198,56 @@ def test_stream_submission_chunks_interrupts_wait(opsqueue: OpsqueueProcess) -> 
             interrupt.cancel()
             interrupt.join()
 
+        # A detached read would still hold the stream lock and consume the
+        # cancellation, leaving nothing for this next call to observe.
         client.cancel_submission(SubmissionId(submission_id_value))
         with pytest.raises(SubmissionCancelledError):
             next(results)
 
     with background_process(read_until_interrupted, args=(submission_id.id,)) as proc:
+        proc.join(timeout=5)
+        assert proc.exitcode == 0
+
+
+def test_async_stream_submission_chunks_cancelled_read_does_not_consume_next_result(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_cancelled_read"
+    address = f"localhost:{opsqueue.port}"
+    producer_client = ProducerClient(address, url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+
+    def read_until_cancelled(submission_id_value: int) -> None:
+        async def read() -> None:
+            client = ProducerClient(address, url)
+            submission = SubmissionId(submission_id_value)
+            results = await client.async_stream_submission_chunks(submission)
+            pending = asyncio.ensure_future(anext(results))
+
+            # The event loop must advance while Rust waits for a chunk. If the
+            # read survives cancellation in a detached Tokio task, it will
+            # consume the output before the next read can see it.
+            await asyncio.sleep(0.1)
+            assert not pending.done()
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+            consumer = ConsumerClient(address, url)
+            [chunk] = consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
+            consumer.complete_chunk(
+                chunk.submission_id,
+                chunk.submission_prefix,
+                chunk.chunk_index,
+                chunk.input_content,
+            )
+            assert await asyncio.wait_for(anext(results), timeout=2) == b"[1]"
+            with pytest.raises(StopAsyncIteration):
+                await anext(results)
+
+        asyncio.run(read())
+
+    with background_process(read_until_cancelled, args=(submission_id.id,)) as proc:
         proc.join(timeout=5)
         assert proc.exitcode == 0
 

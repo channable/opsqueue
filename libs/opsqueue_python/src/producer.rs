@@ -848,7 +848,9 @@ impl PyChunksIter {
         py.detach(move || {
             let runtime = self.runtime.clone();
             let stream = self.stream.clone();
-            // Cancel the pending read on Ctrl+C so it does not keep the stream locked.
+            // Release the GIL while waiting so Tokio's worker can make progress
+            // independently of Python. Keep the read inside run_unless_interrupted
+            // so Ctrl+C drops the pending read and releases its stream lock.
             runtime
                 .block_on(run_unless_interrupted(async move {
                     Ok::<_, FatalPythonException>(stream.lock().await.next().await)
@@ -885,12 +887,14 @@ impl PyChunksAsyncIter {
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let stream = self.stream.clone();
+        // Select this client's Tokio runtime for future_into_py.
         let _tokio_active_runtime_guard = self.runtime.enter();
 
         async_util::future_into_py(
             py,
-            // The only time we need the GIL is when turning the result into Python datatypes.
-            // By unlocking here, we reduce the chance of deadlocks.
+            // Poll on the Tokio worker without holding the GIL, so Python's event
+            // loop can progress while the stream waits. Cancellation drops this
+            // read and releases its stream lock.
             async_util::async_detach(Box::pin(async move {
                 let res = stream.lock().await.next().await;
                 match res {
