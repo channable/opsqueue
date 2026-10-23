@@ -425,11 +425,120 @@ impl ProducerClient {
     /// Stream output chunks in index order as soon as they are completed.
     #[must_use]
     pub fn stream_submission_chunks(&self, submission_id: SubmissionId) -> PyChunksIter {
-        self.create_submission_chunk_stream(submission_id)
+        self.create_submission_chunk_stream_internal(submission_id)
     }
 
+    /// Blocks (and short-polls) until the submission is completed.
+    ///
+    /// We start with a small short-polling interval
+    /// to reduce the latency of tiny submissions.
+    /// This interval is then doubled for each subsequent poll,
+    /// until we check every few seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if polling or output streaming fails.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    #[pyo3(signature = (submission_id, timeout=None))]
+    pub fn blocking_stream_completed_submission_chunks(
+        &self,
+        py: Python<'_>,
+        submission_id: SubmissionId,
+        timeout: Option<f64>,
+    ) -> CPyResult<
+        PyChunksIter,
+        E![
+            FatalPythonException,
+            TryFromFloatSecsError,
+            Elapsed,
+            errors::SubmissionFailed,
+            InternalProducerClientError
+        ],
+    > {
+        py.detach(|| {
+            self.block_unless_interrupted(async move {
+                let fut = self.stream_completed_submission_chunks(submission_id);
+                match timeout {
+                    Some(duration) => {
+                        let duration = Duration::try_from_secs_f64(duration)
+                            .map_err(|err| CError(R(L(err))))?;
+                        tokio::time::timeout(duration, fut)
+                            .await
+                            .map_err(|err| CError(R(R(L(err)))))
+                            .and_then(|err| {
+                                err.map_err(|err| match err.0 {
+                                    L(err) => CError(L(err)),
+                                    R(err) => CError(R(R(R(err)))),
+                                })
+                            })
+                    }
+                    None => fut.await.map_err(|err| match err.0 {
+                        L(err) => CError(L(err)),
+                        R(err) => CError(R(R(R(err)))),
+                    }),
+                }
+            })
+        })
+    }
+
+    /// Return an awaitable that resolves immediately to an async iterator of output chunks.
+    ///
+    /// The iterator polls submission progress and yields each output chunk as soon as it is ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Python error if creating the awaitable fails.
+    pub fn async_stream_submission_chunks<'p>(
+        &self,
+        py: Python<'p>,
+        submission_id: SubmissionId,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let me = self.clone();
+        let stream = me.create_submission_chunk_stream_internal(submission_id);
+        let _tokio_active_runtime_guard = me.runtime.enter();
+        async_util::future_into_py(
+            py,
+            async_util::async_detach(Box::pin(async move { Ok(PyChunksAsyncIter::from(stream)) })),
+        )
+    }
+
+    /// Return an awaitable that resolves to an async iterator of output chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Python error if creating the awaitable fails.
+    #[pyo3(signature = (submission_id))]
+    pub fn async_stream_completed_submission_chunks<'p>(
+        &self,
+        py: Python<'p>,
+        submission_id: SubmissionId,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let me = self.clone();
+        let _tokio_active_runtime_guard = me.runtime.enter();
+        async_util::future_into_py(
+            py,
+            async_util::async_detach(Box::pin(async move {
+                match me.stream_completed_submission_chunks(submission_id).await {
+                    Ok(iter) => {
+                        let async_iter = PyChunksAsyncIter::from(iter);
+                        Ok(async_iter)
+                    }
+                    Err(e) => PyResult::Err(e.into()),
+                }
+            })),
+        )
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("The submission with ID {0:?} is not completed yet. ")]
+pub struct SubmissionNotCompletedYetError(pub SubmissionId);
+
+// What follows are internal helper functions
+// that are not available from Python
+impl ProducerClient {
     #[allow(clippy::too_many_lines)]
-    fn create_submission_chunk_stream(&self, submission_id: SubmissionId) -> PyChunksIter {
+    fn create_submission_chunk_stream_internal(&self, submission_id: SubmissionId) -> PyChunksIter {
         let client = self.client.clone();
         let object_store_client = self.object_store_client.clone();
         let stream = futures::stream::unfold(
@@ -548,115 +657,6 @@ impl ProducerClient {
         PyChunksIter::from_stream(self, stream)
     }
 
-    /// Blocks (and short-polls) until the submission is completed.
-    ///
-    /// We start with a small short-polling interval
-    /// to reduce the latency of tiny submissions.
-    /// This interval is then doubled for each subsequent poll,
-    /// until we check every few seconds.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if polling or output streaming fails.
-    #[allow(clippy::result_large_err, clippy::type_complexity)]
-    #[pyo3(signature = (submission_id, timeout=None))]
-    pub fn blocking_stream_completed_submission_chunks(
-        &self,
-        py: Python<'_>,
-        submission_id: SubmissionId,
-        timeout: Option<f64>,
-    ) -> CPyResult<
-        PyChunksIter,
-        E![
-            FatalPythonException,
-            TryFromFloatSecsError,
-            Elapsed,
-            errors::SubmissionFailed,
-            InternalProducerClientError
-        ],
-    > {
-        py.detach(|| {
-            self.block_unless_interrupted(async move {
-                let fut = self.stream_completed_submission_chunks(submission_id);
-                match timeout {
-                    Some(duration) => {
-                        let duration = Duration::try_from_secs_f64(duration)
-                            .map_err(|err| CError(R(L(err))))?;
-                        tokio::time::timeout(duration, fut)
-                            .await
-                            .map_err(|err| CError(R(R(L(err)))))
-                            .and_then(|err| {
-                                err.map_err(|err| match err.0 {
-                                    L(err) => CError(L(err)),
-                                    R(err) => CError(R(R(R(err)))),
-                                })
-                            })
-                    }
-                    None => fut.await.map_err(|err| match err.0 {
-                        L(err) => CError(L(err)),
-                        R(err) => CError(R(R(R(err)))),
-                    }),
-                }
-            })
-        })
-    }
-
-    /// Return an awaitable that resolves immediately to an async iterator of output chunks.
-    ///
-    /// The iterator polls submission progress and yields each output chunk as soon as it is ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Python error if creating the awaitable fails.
-    pub fn async_stream_submission_chunks<'p>(
-        &self,
-        py: Python<'p>,
-        submission_id: SubmissionId,
-    ) -> PyResult<Bound<'p, PyAny>> {
-        let me = self.clone();
-        let stream = me.create_submission_chunk_stream(submission_id);
-        let _tokio_active_runtime_guard = me.runtime.enter();
-        async_util::future_into_py(
-            py,
-            async_util::async_detach(Box::pin(async move { Ok(PyChunksAsyncIter::from(stream)) })),
-        )
-    }
-
-    /// Return an awaitable that resolves to an async iterator of output chunks.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Python error if creating the awaitable fails.
-    #[pyo3(signature = (submission_id))]
-    pub fn async_stream_completed_submission_chunks<'p>(
-        &self,
-        py: Python<'p>,
-        submission_id: SubmissionId,
-    ) -> PyResult<Bound<'p, PyAny>> {
-        let me = self.clone();
-        let _tokio_active_runtime_guard = me.runtime.enter();
-        async_util::future_into_py(
-            py,
-            async_util::async_detach(Box::pin(async move {
-                match me.stream_completed_submission_chunks(submission_id).await {
-                    Ok(iter) => {
-                        let async_iter = PyChunksAsyncIter::from(iter);
-                        Ok(async_iter)
-                    }
-                    Err(e) => PyResult::Err(e.into()),
-                }
-            })),
-        )
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-#[error("The submission with ID {0:?} is not completed yet. ")]
-pub struct SubmissionNotCompletedYetError(pub SubmissionId);
-
-// What follows are internal helper functions
-// that are not available from Python
-impl ProducerClient {
     fn block_unless_interrupted<T, E>(
         &self,
         future: impl IntoFuture<Output = Result<T, E>>,
