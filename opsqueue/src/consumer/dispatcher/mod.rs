@@ -362,7 +362,9 @@ mod test {
     use super::*;
     use crate::common::chunk::ChunkId;
     use crate::common::chunk::ChunkSize;
+    use crate::common::chunk::db::get_chunk_failed;
     use crate::common::submission::InitialSubmissionStatus;
+    use crate::common::submission::db::cancel_submission;
     use crate::db::DBPools;
     use tokio::sync::mpsc::unbounded_channel;
     use ux::u63;
@@ -410,5 +412,41 @@ mod test {
         assert!(reserved.iter().all(|(chunk, _submission)| {
             ChunkId::from((chunk.submission_id, chunk.chunk_index)) != pre_reserved_chunk
         }));
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn skip_reserved_chunks(db: sqlx::SqlitePool) {
+        let pools = DBPools::from_test_pool(&db);
+        let dispatcher = Dispatcher::new(Duration::from_mins(1));
+        let (stale_chunks_notifier, mut _stale_chunks_receiver) = unbounded_channel::<ChunkId>();
+        let mut writer_conn = pools.writer_conn().await.unwrap();
+        // Insert a submission with 3 chunks.
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            vec![Some("a".into()), Some("b".into()), Some("c".into())],
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut writer_conn,
+        )
+        .await
+        .unwrap();
+        // Reserve one chunjk from that submission
+        let reserved_chunk_index = u63::new(0).into();
+        let reserved_chunk_id = ChunkId::from((submission_id, reserved_chunk_index));
+        dispatcher
+            .reserver()
+            .try_reserve(reserved_chunk_id, reserved_chunk_id, &stale_chunks_notifier)
+            .expect("precondition failed: chunk is reserved");
+        // Cancel the submission.
+        cancel_submission(submission_id, &mut writer_conn)
+            .await
+            .expect("precondition failed: submission is cancelled");
+        // Reserved chunk (that wasn't completed/failed/cancelled) should be marked as skipped.
+        let failed_chunk = get_chunk_failed(reserved_chunk_id, writer_conn)
+            .await
+            .expect("chunk should be failed");
+        assert!(failed_chunk.skipped);
     }
 }
