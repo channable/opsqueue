@@ -584,7 +584,7 @@ mod tests {
         let task_tracker = TaskTracker::new();
 
         let mut conn = db_pools.writer_conn().await.unwrap();
-        let mut input_chunks = vec![
+        let input_chunks = vec![
             Some("a".into()),
             Some("b".into()),
             Some("c".into()),
@@ -624,7 +624,8 @@ mod tests {
             )
             .await
             .unwrap();
-            order_chunks(&mut input_chunks);
+            let mut expected_chunks = input_chunks.clone();
+            order_chunks(&mut expected_chunks);
 
             let chunks = client
                 .reserve_chunks(3, strategy.clone())
@@ -637,7 +638,7 @@ mod tests {
                     .iter()
                     .map(|(c, _s)| c.input_content.clone())
                     .collect::<Vec<Option<Vec<u8>>>>(),
-                input_chunks[0..3]
+                expected_chunks[0..3]
             );
 
             // NOTE: We ensure to fetch exactly the amount left;
