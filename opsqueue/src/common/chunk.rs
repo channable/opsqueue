@@ -220,6 +220,7 @@ pub struct ChunkFailed {
     pub input_content: Content,
     pub failure: String,
     pub failed_at: DateTime<Utc>,
+    pub skipped: bool,
 }
 
 impl Chunk {
@@ -577,6 +578,7 @@ pub mod db {
             , input_content
             , failure AS "failure: String"
             , failed_at AS "failed_at: DateTime<Utc>"
+            , skipped
         FROM chunks_failed WHERE submission_id = $1 AND chunk_index = $2
         "#,
             full_chunk_id.submission_id,
