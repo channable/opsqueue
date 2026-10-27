@@ -2,34 +2,50 @@
 # - use pytest's `--log-cli-level=info` (or `=debug`) argument to get more detailed logs from the producer/consumer clients
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
 
+import asyncio
 import logging
+import os
+import signal
+import threading
 import time
 from collections.abc import Iterator, Sequence
+from pathlib import Path
+from typing import Any
 
+import multiprocess  # type: ignore[import-untyped]
 import pytest
 from conftest import (
+    OpsqueueProcess,
+    StrategyDescription,
     background_process,
     multiple_background_processes,
-    OpsqueueProcess,
     opsqueue_service,
-    StrategyDescription,
     strategy_from_description,
 )
 from opsqueue.common import SerializationFormat
-from opsqueue.consumer import ConsumerClient, Chunk
+from opsqueue.consumer import (  # type: ignore[attr-defined]
+    Chunk,
+    ConsumerClient,
+    Strategy,
+    opsqueue_internal,
+)
+from opsqueue.exceptions import ChunkRetrievalError
 from opsqueue.producer import (
-    SubmissionId,
+    ChunkFailed,
+    InitialSubmissionStatus,
+    InlineOutputStorageUnsupportedError,
     ProducerClient,
+    SubmissionCancelledError,
     SubmissionCompleted,
     SubmissionFailed,
-    ChunkFailed,
-    SubmissionStatus,
     SubmissionFailedError,
-    SubmissionNotFoundError,
+    SubmissionId,
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
+    SubmissionNotFoundError,
+    SubmissionPausedError,
+    SubmissionStatus,
     TooManyMatchingSubmissionsError,
-    InitialSubmissionStatus,
 )
 
 SUBMISSION_COMPLETED_TIMEOUT = 10.0
@@ -58,7 +74,7 @@ def test_roundtrip(
         consumer_client.run_each_op(increment, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -130,7 +146,7 @@ def test_complete_then_fail_chunks(
                 )
 
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
-        input_iter = range(0, n_ops)
+        input_iter = range(n_ops)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -140,7 +156,7 @@ def test_complete_then_fail_chunks(
         )
         res = sum(output_iter)
 
-        assert res == sum(range(0, n_ops))
+        assert res == sum(range(n_ops))
 
 
 def test_empty_submission(opsqueue: OpsqueueProcess) -> None:
@@ -190,7 +206,7 @@ def test_roundtrip_explicit_serialization_format(
         )
 
     with background_process(run_consumer) as _consumer:
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -236,7 +252,7 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
     with background_process(run_consumer) as consumer:
         logging.error(f"Opsqueue: {opsqueue}")
         logging.error(f"Consumer: {consumer}")
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         with pytest.raises(SubmissionFailedError) as exc_info:
             producer_client.run_submission(
@@ -280,7 +296,7 @@ def test_chunk_roundtrip(
         consumer_client.run_each_chunk(increment_list, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
-        input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(0, 10))
+        input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(10))
         output_iter: Iterator[list[int]] = map(
             lambda c: cbor2.loads(c),
             producer_client.run_submission_chunks(
@@ -323,7 +339,7 @@ def test_many_consumers(
 
     n_consumers = 16
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
-        input_iter = range(0, 1000)
+        input_iter = range(1000)
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
             chunk_size=100,
@@ -356,7 +372,7 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
 
     async def run_one_submission(top: int) -> int:
         logging.debug(f"Running submission {top}")
-        input_iter = range(0, top)
+        input_iter = range(top)
         output_iter = await producer_client.async_run_submission(
             input_iter, chunk_size=1000
         )
@@ -749,13 +765,12 @@ def test_run_submission_timeout(opsqueue: OpsqueueProcess) -> None:
 
         consumer_client.run_each_op(process_op)
 
-    with background_process(run_consumer) as _consumer:
-        with pytest.raises(TimeoutError):
-            producer_client.run_submission(
-                [1],
-                chunk_size=1,
-                timeout=0.1,
-            )
+    with background_process(run_consumer) as _consumer, pytest.raises(TimeoutError):
+        producer_client.run_submission(
+            [1],
+            chunk_size=1,
+            timeout=0.1,
+        )
 
 
 def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:
@@ -824,3 +839,469 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
     assert isinstance(
         producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
     )
+
+
+def test_stream_submission_chunks_paused_then_resumed(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_paused_then_resumed"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]"], chunk_size=1, initial_status=InitialSubmissionStatus.Paused
+    )
+    results = producer_client.stream_submission_chunks(submission_id)
+
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+
+    async def read_paused_and_resumed() -> None:
+        async_results = await producer_client.async_stream_submission_chunks(
+            submission_id
+        )
+        with pytest.raises(SubmissionPausedError):
+            await anext(async_results)
+
+        producer_client.unpause_submission(submission_id)
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        [chunk] = consumer_client.reserve_chunks(max=1, strategy=Strategy.Oldest())
+        consumer_client.complete_chunk(
+            chunk.submission_id,
+            chunk.submission_prefix,
+            chunk.chunk_index,
+            chunk.input_content,
+        )
+
+        assert await anext(async_results) == b"[1]"
+        with pytest.raises(StopAsyncIteration):
+            await anext(async_results)
+
+    asyncio.run(read_paused_and_resumed())
+    assert next(results) == b"[1]"
+    with pytest.raises(StopIteration):
+        next(results)
+
+
+def test_stream_submission_chunks_paused_then_cancelled(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_paused_then_cancelled"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]"], chunk_size=1, initial_status=InitialSubmissionStatus.Paused
+    )
+    results = producer_client.stream_submission_chunks(submission_id)
+
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+    with pytest.raises(SubmissionPausedError):
+        next(results)
+
+    producer_client.cancel_submission(submission_id)
+    with pytest.raises(SubmissionCancelledError):
+        next(results)
+    with pytest.raises(StopIteration):
+        next(results)
+
+
+def test_streams_completed_chunks_before_submission_finishes(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_results"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]", b"[2]"], chunk_size=1
+    )
+
+    allow_second_chunk = multiprocess.Event()
+
+    def complete_chunks(_submission_id_value: int, allow_second_chunk: Any) -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        chunks = sorted(
+            consumer_client.reserve_chunks(
+                max=2,
+                strategy=Strategy.Oldest(),
+            ),
+            key=lambda chunk: chunk.chunk_index,
+        )
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
+        if not allow_second_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the second chunk to finish")
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
+        )
+
+    with background_process(
+        complete_chunks,
+        args=(submission_id.id, allow_second_chunk),
+    ):
+        results = producer_client.stream_submission_chunks(submission_id)
+        assert next(results) == b"[1]"
+        assert isinstance(
+            producer_client.get_submission_status(submission_id),
+            SubmissionStatus.InProgress,
+        )
+        allow_second_chunk.set()
+        assert next(results) == b"[2]"
+
+
+def test_async_streams_completed_chunks_before_submission_finishes(
+    opsqueue: OpsqueueProcess,
+    any_consumer_strategy: StrategyDescription,
+) -> None:
+    url = "file:///tmp/opsqueue/test_async_streaming_results"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]", b"[2]"], chunk_size=1
+    )
+
+    allow_first_chunk = multiprocess.Event()
+    allow_second_chunk = multiprocess.Event()
+
+    def complete_chunks(
+        _submission_id_value: int,
+        allow_first_chunk: Any,
+        allow_second_chunk: Any,
+    ) -> None:
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        chunks = sorted(
+            consumer_client.reserve_chunks(
+                max=2,
+                strategy=strategy_from_description(any_consumer_strategy),
+            ),
+            key=lambda chunk: chunk.chunk_index,
+        )
+        if not allow_first_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the first chunk to finish")
+        consumer_client.complete_chunk(
+            chunks[0].submission_id,
+            chunks[0].submission_prefix,
+            chunks[0].chunk_index,
+            chunks[0].input_content,
+        )
+        if not allow_second_chunk.wait(timeout=10):
+            raise TimeoutError("Parent did not allow the second chunk to finish")
+        consumer_client.complete_chunk(
+            chunks[1].submission_id,
+            chunks[1].submission_prefix,
+            chunks[1].chunk_index,
+            chunks[1].input_content,
+        )
+
+    async def collect() -> list[bytes]:
+        results = await producer_client.async_stream_submission_chunks(submission_id)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(anext(results), timeout=0.05)
+
+        allow_first_chunk.set()
+        first = await asyncio.wait_for(anext(results), timeout=5)
+        assert first == b"[1]"
+        assert isinstance(
+            producer_client.get_submission_status(submission_id),
+            SubmissionStatus.InProgress,
+        )
+
+        allow_second_chunk.set()
+        second = await asyncio.wait_for(anext(results), timeout=5)
+        return [first, second]
+
+    with background_process(
+        complete_chunks,
+        args=(submission_id.id, allow_first_chunk, allow_second_chunk),
+    ):
+        assert asyncio.run(collect()) == [b"[1]", b"[2]"]
+
+
+def test_streams_chunks_in_order_when_consumers_complete_out_of_order(
+    opsqueue: OpsqueueProcess,
+    any_consumer_strategy: StrategyDescription,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_out_of_order_consumers"
+    strategy = strategy_from_description(any_consumer_strategy)
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks(
+        [b"[1]", b"[2]"], chunk_size=1
+    )
+    first_consumer = ConsumerClient(f"localhost:{opsqueue.port}", url)
+    second_consumer = ConsumerClient(f"localhost:{opsqueue.port}", url)
+
+    [first_chunk] = first_consumer.reserve_chunks(max=1, strategy=strategy)
+    [second_chunk] = second_consumer.reserve_chunks(max=1, strategy=strategy)
+    assert (first_chunk.chunk_index.id, second_chunk.chunk_index.id) == (0, 1)
+
+    second_consumer.complete_chunk(
+        second_chunk.submission_id,
+        second_chunk.submission_prefix,
+        second_chunk.chunk_index,
+        second_chunk.input_content,
+    )
+
+    opsqueue_address = f"localhost:{opsqueue.port}"
+
+    def complete_first_chunk(
+        _submission_id_value: int,
+        chunk_submission_id: int,
+        submission_prefix: str,
+        chunk_index: int,
+        input_content: bytes,
+    ) -> None:
+        time.sleep(0.25)
+        consumer_client = ConsumerClient(opsqueue_address, url)
+        consumer_client.complete_chunk(
+            SubmissionId(chunk_submission_id),
+            submission_prefix,
+            opsqueue_internal.ChunkIndex(chunk_index),
+            input_content,
+        )
+
+    with background_process(
+        complete_first_chunk,
+        args=(
+            submission_id.id,
+            first_chunk.submission_id.id,
+            first_chunk.submission_prefix,
+            first_chunk.chunk_index.id,
+            first_chunk.input_content,
+        ),
+    ):
+        results = producer_client.stream_submission_chunks(submission_id)
+        assert next(results) == b"[1]"
+        assert next(results) == b"[2]"
+
+
+def test_stream_submission_chunks_fails_if_submission_failed_before_read() -> None:
+    url = "file:///tmp/opsqueue/test_streaming_failed_before_read"
+    with opsqueue_service(command_args=("--max-chunk-retries", "1")) as opsqueue:
+        producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+        submission_id = producer_client.insert_submission_chunks(
+            [b"[1]", b"[2]"], chunk_size=1
+        )
+        results = producer_client.stream_submission_chunks(submission_id)
+        consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+        first_chunk, second_chunk = sorted(
+            consumer_client.reserve_chunks(max=2, strategy=Strategy.Oldest()),
+            key=lambda chunk: chunk.chunk_index,
+        )
+        consumer_client.complete_chunk(
+            first_chunk.submission_id,
+            first_chunk.submission_prefix,
+            first_chunk.chunk_index,
+            first_chunk.input_content,
+        )
+        consumer_client.fail_chunk(
+            second_chunk.submission_id,
+            second_chunk.submission_prefix,
+            second_chunk.chunk_index,
+            "Simulated failure",
+        )
+        with pytest.raises(SubmissionFailedError):
+            producer_client.blocking_stream_completed_submission_chunks(
+                submission_id, timeout=SUBMISSION_COMPLETED_TIMEOUT
+            )
+        with pytest.raises(SubmissionFailedError):
+            next(results)
+        with pytest.raises(StopIteration):
+            next(results)
+
+
+def test_stream_submission_chunks_retries_failed_retrieval(
+    opsqueue: OpsqueueProcess, tmp_path: Path
+) -> None:
+    url = tmp_path.as_uri()
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+    consumer_client = ConsumerClient(f"localhost:{opsqueue.port}", url)
+    [chunk] = consumer_client.reserve_chunks(max=1, strategy=Strategy.Oldest())
+    consumer_client.complete_chunk(
+        chunk.submission_id,
+        chunk.submission_prefix,
+        chunk.chunk_index,
+        chunk.input_content,
+    )
+
+    output_path = tmp_path / chunk.submission_prefix / "0-out.bin"
+    output = output_path.read_bytes()
+    output_path.unlink()
+    results = producer_client.stream_submission_chunks(submission_id)
+    with pytest.raises(ChunkRetrievalError):
+        next(results)
+
+    output_path.write_bytes(output)
+    assert next(results) == b"[1]"
+
+    # "If default is given, it is returned if the iterator is exhausted, otherwise StopIteration is raised."
+    # c.f. https://docs.python.org/3/builtins/functions.html#next
+    assert next(results, None) is None
+    with pytest.raises(StopIteration):
+        next(results)
+
+
+def test_stream_submission_chunks_not_found(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_submission_not_found"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = SubmissionId(0)
+
+    results = producer_client.stream_submission_chunks(submission_id)
+    with pytest.raises(SubmissionNotFoundError) as exc_info:
+        next(results)
+    assert exc_info.value.submission_id == submission_id.id
+    with pytest.raises(StopIteration):
+        next(results)
+
+    async def read_missing_chunk() -> None:
+        results = await producer_client.async_stream_submission_chunks(submission_id)
+        with pytest.raises(SubmissionNotFoundError):
+            await anext(results)
+        with pytest.raises(StopAsyncIteration):
+            await anext(results)
+
+    asyncio.run(read_missing_chunk())
+
+
+def test_stream_submission_chunks_cancelled(opsqueue: OpsqueueProcess) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_cancelled"
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+    producer_client.cancel_submission(submission_id)
+
+    results = producer_client.stream_submission_chunks(submission_id)
+    with pytest.raises(SubmissionCancelledError, match="Submission cancelled"):
+        next(results)
+    with pytest.raises(StopIteration):
+        next(results)
+
+
+def test_stream_submission_chunks_interrupted_read_does_not_consume_next_result(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_interrupt"
+    address = f"localhost:{opsqueue.port}"
+    producer_client = ProducerClient(address, url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+
+    def read_until_interrupted(submission_id_value: int) -> None:
+        client = ProducerClient(address, url)
+        results = client.stream_submission_chunks(SubmissionId(submission_id_value))
+        interrupt = threading.Timer(0.25, lambda: os.kill(os.getpid(), signal.SIGINT))
+        interrupt.start()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                next(results)
+        finally:
+            interrupt.cancel()
+            interrupt.join()
+
+        # A detached read would still hold the stream lock and consume the
+        # cancellation, leaving nothing for this next call to observe.
+        client.cancel_submission(SubmissionId(submission_id_value))
+        with pytest.raises(SubmissionCancelledError):
+            next(results)
+
+    with background_process(read_until_interrupted, args=(submission_id.id,)) as proc:
+        proc.join(timeout=5)
+        assert proc.exitcode == 0
+
+
+def test_async_stream_submission_chunks_cancelled_read_does_not_consume_next_result(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = "file:///tmp/opsqueue/test_streaming_cancelled_read"
+    address = f"localhost:{opsqueue.port}"
+    producer_client = ProducerClient(address, url)
+    submission_id = producer_client.insert_submission_chunks([b"[1]"], chunk_size=1)
+
+    def read_until_cancelled(submission_id_value: int) -> None:
+        async def read() -> None:
+            client = ProducerClient(address, url)
+            submission = SubmissionId(submission_id_value)
+            results = await client.async_stream_submission_chunks(submission)
+            pending = asyncio.ensure_future(anext(results))
+
+            # The event loop must advance while Rust waits for a chunk. If the
+            # read survives cancellation in a detached Tokio task, it will
+            # consume the output before the next read can see it.
+            await asyncio.sleep(0.1)
+            assert not pending.done()
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+            consumer = ConsumerClient(address, url)
+            [chunk] = consumer.reserve_chunks(max=1, strategy=Strategy.Oldest())
+            consumer.complete_chunk(
+                chunk.submission_id,
+                chunk.submission_prefix,
+                chunk.chunk_index,
+                chunk.input_content,
+            )
+            assert await asyncio.wait_for(anext(results), timeout=2) == b"[1]"
+            with pytest.raises(StopAsyncIteration):
+                await anext(results)
+
+        asyncio.run(read())
+
+    with background_process(read_until_cancelled, args=(submission_id.id,)) as proc:
+        proc.join(timeout=5)
+        assert proc.exitcode == 0
+
+
+@pytest.mark.skip(reason="https://github.com/channable/opsqueue/issues/203")
+def test_async_stream_submission_chunks_cancelled_delivery_preserves_chunk(
+    opsqueue: OpsqueueProcess, tmp_path: Path
+) -> None:
+    address = f"localhost:{opsqueue.port}"
+    url = tmp_path.as_uri()
+    producer = ProducerClient(address, url)
+    submission_id = producer.insert_submission_chunks([b"[1]", b"[2]"], chunk_size=1)
+    consumer = ConsumerClient(address, url)
+    chunks = consumer.reserve_chunks(max=2, strategy=Strategy.Oldest())
+    # Make both outputs ready so the read waits only for delivery to Python.
+    for chunk in chunks:
+        consumer.complete_chunk(
+            chunk.submission_id,
+            chunk.submission_prefix,
+            chunk.chunk_index,
+            chunk.input_content,
+        )
+
+    async def read() -> None:
+        results = await producer.async_stream_submission_chunks(submission_id)
+        future = asyncio.ensure_future(anext(results))
+        await asyncio.sleep(0)
+        # Deliberately use time.sleep, not asyncio.sleep: block Python's event
+        # loop while releasing the GIL so Rust can fetch and queue the chunk.
+        # This is timing-dependent: a slow worker may not finish within 0.2s,
+        # in which case the test can miss the bug.
+        time.sleep(0.2)
+        assert future.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await future
+        assert await asyncio.wait_for(anext(results), timeout=2) == b"[1]"
+        assert await asyncio.wait_for(anext(results), timeout=2) == b"[2]"
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(results), timeout=2)
+
+    asyncio.run(read())
+
+
+def test_stream_submission_chunks_rejects_inline_storage_before_completion(
+    opsqueue: OpsqueueProcess, tmp_path: Path
+) -> None:
+    producer_client = ProducerClient(f"localhost:{opsqueue.port}", tmp_path.as_uri())
+    submission_id = producer_client.inner.insert_submission_direct(
+        [b"[1]"], chunk_size=1
+    )
+
+    async def read_inline_chunk() -> None:
+        results = await producer_client.async_stream_submission_chunks(submission_id)
+        with pytest.raises(InlineOutputStorageUnsupportedError):
+            await asyncio.wait_for(anext(results), timeout=SUBMISSION_COMPLETED_TIMEOUT)
+
+    asyncio.run(read_inline_chunk())
