@@ -598,9 +598,11 @@ pub mod test {
         let explained = explain(qb, &mut conn).await;
 
         assert_streaming_query(qb, &explained);
-        assert_eq!(
-            explained,
-            "5, 0, SCAN chunks\n11, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)\n39, 0, CORRELATED SCALAR SUBQUERY 1\n44, 39, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)"
+        insta::assert_snapshot!(explained, @"
+        5, 0, SCAN chunks
+        11, 0, SEARCH submissions USING INDEX sqlite_autoindex_submissions_1 (id=?)
+        39, 0, CORRELATED SCALAR SUBQUERY 1
+        44, 39, SEARCH submissions_metadata USING PRIMARY KEY (submission_id=?)"
         );
     }
 
