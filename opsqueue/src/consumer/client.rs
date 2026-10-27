@@ -575,6 +575,8 @@ mod tests {
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     pub async fn test_fetch_chunks(pool: sqlx::SqlitePool) {
+        type OrderChunks = fn(&mut [chunk::Content]);
+
         let db_pools = db::DBPools::from_test_pool(&pool);
         let uri = "0.0.0.0:10083";
         let ws_uri = "ws://0.0.0.0:10083";
@@ -589,17 +591,6 @@ mod tests {
             Some("d".into()),
             Some("e".into()),
         ];
-        crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            input_chunks.clone(),
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::default(),
-            &mut conn,
-        )
-        .await
-        .unwrap();
 
         let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
             db_pools,
@@ -613,29 +604,57 @@ mod tests {
         let client = Client::new(ws_uri).await.unwrap();
         yield_now().await;
 
-        let chunks = client
-            .reserve_chunks(3, Strategy::Oldest)
+        let cases: [(Strategy, OrderChunks); 2] = [
+            (Strategy::Oldest, |chunks| chunks.sort()),
+            (Strategy::Newest, |chunks| {
+                chunks.sort();
+                chunks.reverse();
+            }),
+        ];
+        // Run the test for each strategy and expected chunk ordering pair.
+        for (strategy, order_chunks) in cases {
+            let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+                None,
+                input_chunks.clone(),
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                InitialSubmissionStatus::default(),
+                &mut conn,
+            )
             .await
-            .expect("No internal error");
-        yield_now().await;
+            .unwrap();
+            let mut expected_chunks = input_chunks.clone();
+            order_chunks(&mut expected_chunks);
 
-        assert_eq!(
-            chunks
-                .iter()
-                .map(|(c, _s)| c.input_content.clone())
-                .collect::<Vec<Option<Vec<u8>>>>(),
-            input_chunks[0..3]
-        );
+            let chunks = client
+                .reserve_chunks(3, strategy.clone())
+                .await
+                .expect("No internal error");
+            yield_now().await;
 
-        // NOTE: We ensure to fetch exactly the amount left;
-        // if we fetch more, the server will only respond when new chunks are inserted,
-        // which would make this test hang
-        let two = client.reserve_chunks(1, Strategy::Oldest);
-        let three = client.reserve_chunks(1, Strategy::Oldest);
+            assert_eq!(
+                chunks
+                    .iter()
+                    .map(|(c, _s)| c.input_content.clone())
+                    .collect::<Vec<Option<Vec<u8>>>>(),
+                expected_chunks[0..3]
+            );
 
-        yield_now().await;
+            // NOTE: We ensure to fetch exactly the amount left;
+            // if we fetch more, the server will only respond when new chunks are inserted,
+            // which would make this test hang
+            let two = client.reserve_chunks(1, strategy.clone());
+            let three = client.reserve_chunks(1, strategy);
 
-        let _three = three.await;
-        let _two = two.await;
+            yield_now().await;
+
+            let _three = three.await;
+            let _two = two.await;
+
+            crate::common::submission::db::cancel_submission(submission_id, &mut conn)
+                .await
+                .unwrap();
+        }
     }
 }
