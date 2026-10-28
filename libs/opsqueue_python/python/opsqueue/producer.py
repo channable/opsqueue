@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterable, Iterator, AsyncIterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any, cast
 
 from opentelemetry import trace
+
 from opsqueue.common import (
-    SerializationFormat,
-    encode_chunk,
-    decode_chunk,
     DEFAULT_SERIALIZATION_FORMAT,
+    SerializationFormat,
+    decode_chunk,
+    encode_chunk,
 )
 from opsqueue.exceptions import (
     SubmissionFailedError,
@@ -17,23 +18,24 @@ from opsqueue.exceptions import (
     SubmissionNotFoundError,
     TooManyMatchingSubmissionsError,
 )
-from . import opsqueue_internal
-from . import tracing
+
+from . import opsqueue_internal, tracing
 from .opsqueue_internal import (  # type: ignore[import-not-found]
-    SubmissionId,
-    SubmissionStatus,
+    ChunkFailed,
+    InitialSubmissionStatus,
     SubmissionCompleted,
     SubmissionFailed,
-    ChunkFailed,
+    SubmissionId,
     SubmissionNotCancellable,
     SubmissionPaused,
-    InitialSubmissionStatus,
+    SubmissionStatus,
 )
 
 __all__ = [
     "ChunkFailed",
     "InitialSubmissionStatus",
     "ProducerClient",
+    "StreamingProducerClient",
     "SubmissionCompleted",
     "SubmissionFailed",
     "SubmissionFailedError",
@@ -418,6 +420,137 @@ class ProducerClient:
 
     def is_completed(self, submission_id: SubmissionId) -> bool:
         raise NotImplementedError
+
+
+class StreamingProducerClient(ProducerClient):
+    """
+    Producer client helpers for streaming work across independent submissions.
+    """
+
+    __slots__ = ()
+
+    def insert_submission_group(
+        self,
+        ops: Iterable[Any],
+        *,
+        submission_size: int,
+        chunk_size: int,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, int] = None,
+        initial_status: InitialSubmissionStatus = InitialSubmissionStatus.InProgress,
+    ) -> Iterator[SubmissionId]:
+        """
+        Insert operations as a lazy stream of independent submissions.
+
+        Each submission contains at most `submission_size` operations, which
+        are chunked using `chunk_size`. An ID is yielded after that batch is
+        inserted. Each batch is an independent submission. The final
+        submission may be smaller; empty input yields no IDs. To have the queue
+        reflect the full workload before processing, exhaust this iterator
+        before starting consumers.
+        """
+        if submission_size <= 0:
+            raise ValueError("submission_size must be a positive integer")
+
+        def submission_ids() -> Iterator[SubmissionId]:
+            for batch in itertools.batched(ops, submission_size):
+                yield self.insert_submission(
+                    batch,
+                    chunk_size=chunk_size,
+                    serialization_format=serialization_format,
+                    metadata=metadata,
+                    strategic_metadata=strategic_metadata,
+                    initial_status=initial_status,
+                )
+
+        return submission_ids()
+
+    async def async_insert_submission_group(
+        self,
+        ops: Iterable[Any],
+        *,
+        submission_size: int,
+        chunk_size: int,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        metadata: None | bytes = None,
+        strategic_metadata: None | dict[str, int] = None,
+        initial_status: InitialSubmissionStatus = InitialSubmissionStatus.InProgress,
+    ) -> AsyncIterator[SubmissionId]:
+        """
+        Async-iterator version of `insert_submission_group`.
+
+        Insertion remains synchronous and happens as the returned iterator is
+        consumed, matching the existing async submission methods.
+        """
+        submission_ids = self.insert_submission_group(
+            ops,
+            submission_size=submission_size,
+            chunk_size=chunk_size,
+            serialization_format=serialization_format,
+            metadata=metadata,
+            strategic_metadata=strategic_metadata,
+            initial_status=initial_status,
+        )
+
+        async def async_submission_ids() -> AsyncIterator[SubmissionId]:
+            for submission_id in submission_ids:
+                yield submission_id
+
+        return async_submission_ids()
+
+    async def async_stream_completed_submission_group(
+        self, submission_ids: Iterable[SubmissionId]
+    ) -> AsyncIterator[bytes]:
+        """
+        Stream completed submissions in the supplied ID order.
+
+        Each submission is awaited before the next one is streamed. Chunk order
+        within each submission is preserved by
+        `async_stream_completed_submission_chunks`.
+        """
+
+        async def stream_group() -> AsyncIterator[bytes]:
+            for submission_id in submission_ids:
+                chunks = await self.async_stream_completed_submission_chunks(
+                    submission_id
+                )
+                async for chunk in chunks:
+                    yield chunk
+
+        return stream_group()
+
+    async def async_count_completed_chunks(
+        self, submission_ids: Iterable[SubmissionId]
+    ) -> int:
+        """
+        Count successfully completed chunks across distinct submissions.
+
+        Partial progress is included for in-progress, paused, cancelled, and
+        failed submissions. A failed submission with an unknown completed
+        chunk count contributes zero.
+
+        Raises `SubmissionNotFoundError` if any ID cannot be found.
+        """
+        completed_chunks = 0
+        seen_submission_ids: set[SubmissionId] = set()
+        for submission_id in submission_ids:
+            if submission_id in seen_submission_ids:
+                continue
+            seen_submission_ids.add(submission_id)
+
+            status = self.get_submission_status(submission_id)
+            if status is None:
+                raise SubmissionNotFoundError(submission_id.id)
+
+            if isinstance(status, SubmissionStatus.Completed):
+                completed_chunks += status.submission.chunks_total
+            elif isinstance(status, SubmissionStatus.Failed):
+                completed_chunks += status.submission.chunks_done or 0
+            else:
+                completed_chunks += status.submission.chunks_done
+
+        return completed_chunks
 
 
 def _chunk_iterator(
