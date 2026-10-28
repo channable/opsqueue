@@ -742,10 +742,13 @@ async fn send_status_updates(
     events: impl Iterator<Item = &OutOfDateDelegatedSubmission>,
 ) -> reqwest::Result<()> {
     let (updates, completions): (Vec<_>, Vec<_>) = events.partition_map(status_update);
-    let events = vec![
-        OutgoingDelegationEvent::Updated(updates),
-        OutgoingDelegationEvent::Completed(completions),
-    ];
+    let mut delegation_events = Vec::with_capacity(2);
+    if !updates.is_empty() {
+        delegation_events.push(OutgoingDelegationEvent::Updated(updates));
+    }
+    if !completions.is_empty() {
+        delegation_events.push(OutgoingDelegationEvent::Completed(completions));
+    }
     state
         .http_client
         .post(
@@ -754,7 +757,7 @@ async fn send_status_updates(
                 .join("/delegation/submit")
                 .unwrap(),
         )
-        .json(&events)
+        .json(&delegation_events)
         .send()
         .await?
         .error_for_status()?;
@@ -780,124 +783,195 @@ pub mod test {
         handle_kill_event, insert_delegated_submission, report_submission_status,
     };
     use axum::http::Request;
-    use axum::{Router, body::Body};
+    use axum::{Json, Router, body::Body, routing::post};
     use http::{StatusCode, header};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
-    use tokio::sync::{Notify, broadcast, oneshot};
+    use std::sync::Arc;
+    use tokio::sync::{Notify, broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
-    use wiremock::matchers::{body_json, body_partial_json, method, path};
-    use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
-
-    #[cfg(test)]
-    pub(crate) fn app_for_tests(
-        cancellation_token: &CancellationToken,
-        core_api: CoreApi,
-        delegation_server_url: url::Url,
-    ) -> Router {
-        let config = crate::config::Config::default();
-        let router = ServerState::new(
-            cancellation_token.clone(),
-            core_api,
-            delegation_server_url,
-            config.delegation_full_scan_period.into(),
-            config.delegation_debounce_period.into(),
-            config.delegation_batch_size,
-        )
-        .run_background()
-        .build_router();
-
-        Router::new().nest("/delegation", router)
-    }
-
-    struct SignalResponder {
-        sender: Mutex<Option<oneshot::Sender<()>>>,
-        response: ResponseTemplate,
-    }
-
-    impl SignalResponder {
-        fn new(sender: oneshot::Sender<()>, response: ResponseTemplate) -> Self {
-            Self {
-                sender: Mutex::new(Some(sender)),
-                response,
-            }
-        }
-    }
-
-    impl Respond for SignalResponder {
-        fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
-            if let Ok(mut lock) = self.sender.lock()
-                && let Some(tx) = lock.take()
-            {
-                let _ = tx.send(());
-            }
-            self.response.clone()
-        }
-    }
-
-    async fn count_delegated_submissions(mut db: impl Connection) -> sqlx::Result<u64> {
-        let count = sqlx::query_scalar!("SELECT COUNT(*) as count FROM delegated_submissions;")
-            .fetch_one(db.get_inner())
-            .await?;
-        Ok(u64::try_from(count).expect("COUNT(*) is always non-negative"))
-    }
 
     struct TestContext {
         pool: DBPools,
-        external_server: MockServer,
         core_api: CoreApi,
-        submission_status_changed: broadcast::Sender<SubmissionId>,
-        app: Router,
+        status_changed: broadcast::Sender<SubmissionId>,
     }
 
     impl TestContext {
-        async fn new(
-            pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
-            conn_opts: sqlx::sqlite::SqliteConnectOptions,
-        ) -> Self {
-            let reader_pool = pool_opts
-                .clone()
-                .max_connections(16)
-                .connect_with(conn_opts.clone())
-                .await
-                .unwrap();
-            let writer_pool = pool_opts
-                .max_connections(1)
-                .connect_with(conn_opts)
-                .await
-                .unwrap();
-            let pool = DBPools::from_test_pools(&reader_pool, &writer_pool);
-            let external_server = MockServer::start().await;
-            let (submission_status_changed, _) = broadcast::channel(128);
+        fn new(pool: DBPools) -> Self {
+            let (status_changed, _) = broadcast::channel(128);
             let core_api = CoreApi::new(
                 pool.clone(),
                 Arc::new(Notify::new()),
-                submission_status_changed.clone(),
-            );
-            let cancellation_token = CancellationToken::new();
-            let app = app_for_tests(
-                &cancellation_token,
-                core_api.clone(),
-                external_server.uri().parse().unwrap(),
+                status_changed.clone(),
             );
             Self {
                 pool,
-                external_server,
                 core_api,
-                submission_status_changed,
-                app,
+                status_changed,
             }
         }
 
-        async fn post_worker_events(&self, events: serde_json::Value) {
+        fn start_listening_for_submission_status_changes(&self) -> SubmissionStatusChangedEvents {
+            SubmissionStatusChangedEvents(self.core_api.subscribe_submission_status_changes())
+        }
+
+        async fn create_submission(
+            &self,
+            initial_status: InitialSubmissionStatus,
+            chunks: Vec<Option<Vec<u8>>>,
+        ) -> SubmissionId {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            insert_submission_from_chunks(
+                None,
+                chunks,
+                None,
+                StrategicMetadataMap::default(),
+                ChunkSize::default(),
+                initial_status,
+                &mut conn,
+            )
+            .await
+            .unwrap()
+        }
+
+        async fn fail_submission(&self, submission_id: SubmissionId) {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            retry_or_fail_chunk(
+                (submission_id, ChunkIndex::zero()).into(),
+                "error".to_owned(),
+                &mut conn,
+                0,
+                &self.status_changed,
+            )
+            .await
+            .unwrap();
+        }
+
+        async fn complete_submission(&self, submission_id: SubmissionId) {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            complete_chunk(
+                (submission_id, ChunkIndex::zero()).into(),
+                None,
+                &mut conn,
+                &self.status_changed,
+            )
+            .await
+            .unwrap();
+        }
+
+        async fn unpause_submission(&self, submission_id: SubmissionId) {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            self.core_api
+                .unpause_submission(submission_id, &mut conn)
+                .await
+                .unwrap();
+        }
+
+        async fn cancel_submission(&self, submission_id: SubmissionId) {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            self.core_api
+                .cancel_submission(submission_id, &mut conn)
+                .await
+                .unwrap();
+        }
+
+        async fn insert_delegated_submission(&self, submission_id: SubmissionId) {
+            let mut conn = self.pool.writer_conn().await.unwrap();
+            insert_delegated_submission(&mut conn, submission_id, "test")
+                .await
+                .unwrap();
+        }
+
+        async fn submission_status(&self, submission_id: SubmissionId) -> Option<SubmissionStatus> {
+            let mut conn = self.pool.reader_conn().await.unwrap();
+            self.core_api
+                .submission_status(submission_id, &mut conn)
+                .await
+                .unwrap()
+        }
+
+        async fn count_delegated_submissions(&self) -> u64 {
+            let mut conn = self.pool.reader_conn().await.unwrap();
+            let count = sqlx::query_scalar!("SELECT COUNT(*) as count FROM delegated_submissions;")
+                .fetch_one(conn.get_inner())
+                .await
+                .unwrap();
+            u64::try_from(count).expect("COUNT(*) is always non-negative")
+        }
+
+        async fn count_submissions(&self) -> u64 {
+            let mut conn = self.pool.reader_conn().await.unwrap();
+            count_submissions(&mut conn).await.unwrap()
+        }
+
+        async fn count_submissions_paused(&self) -> u64 {
+            let mut conn = self.pool.reader_conn().await.unwrap();
+            count_submissions_paused(&mut conn).await.unwrap()
+        }
+
+        async fn count_submissions_cancelled(&self) -> u64 {
+            let mut conn = self.pool.reader_conn().await.unwrap();
+            count_submissions_cancelled(&mut conn).await.unwrap()
+        }
+
+        async fn wait_for_delegated_submissions(&self, expected_count: u64) {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if self.count_delegated_submissions().await == expected_count {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("Timed out waiting for delegated submissions to be updated");
+        }
+    }
+
+    struct SubmissionStatusChangedEvents(broadcast::Receiver<SubmissionId>);
+
+    impl SubmissionStatusChangedEvents {
+        fn assert_received(&mut self, expected: SubmissionId) {
+            assert_eq!(self.0.try_recv().unwrap(), expected);
+        }
+
+        fn assert_empty(&self) {
+            assert!(self.0.is_empty(), "Unexpected submission status change");
+        }
+    }
+
+    struct TestServer {
+        state: ServerState,
+    }
+
+    impl TestServer {
+        fn new(test: &TestContext, delegation_server_url: url::Url) -> Self {
+            let config = crate::config::Config::default();
+            let state = ServerState::new(
+                CancellationToken::new(),
+                test.core_api.clone(),
+                delegation_server_url,
+                config.delegation_full_scan_period.into(),
+                config.delegation_debounce_period.into(),
+                config.delegation_batch_size,
+            );
+            Self { state }
+        }
+
+        fn start_background(&mut self) {
+            self.state = self.state.clone().run_background();
+        }
+
+        async fn submit_events(&self, events: serde_json::Value) {
             let request = Request::builder()
                 .uri("/delegation/submit")
                 .method("POST")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(events.to_string()))
                 .unwrap();
-            let response = self.app.clone().oneshot(request).await.unwrap();
+            let app = Router::new().nest("/delegation", self.state.clone().build_router());
+            let response = app.oneshot(request).await.unwrap();
             assert_eq!(
                 response.status(),
                 StatusCode::ACCEPTED,
@@ -906,554 +980,281 @@ pub mod test {
         }
     }
 
-    async fn wait_for_update(rx: oneshot::Receiver<()>) {
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
-            .await
-            .expect("Timed out waiting for HTTP request")
-            .expect("Sender dropped without signaling");
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.state.cancellation_token.cancel();
+        }
+    }
+
+    struct MockDelegator {
+        server: tokio::task::JoinHandle<()>,
+        received_events: Option<mpsc::UnboundedReceiver<serde_json::Value>>,
+        url: url::Url,
+    }
+
+    impl MockDelegator {
+        async fn new() -> Self {
+            let (events_tx, received_events) = mpsc::unbounded_channel();
+            let app = Router::new().route(
+                "/delegation/submit",
+                post(move |Json(events): Json<serde_json::Value>| {
+                    let events_tx = events_tx.clone();
+                    async move {
+                        events_tx
+                            .send(events)
+                            .expect("Delegator event receiver dropped");
+                        StatusCode::ACCEPTED
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap())
+                .parse()
+                .unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            Self {
+                server,
+                received_events: Some(received_events),
+                url,
+            }
+        }
+
+        fn start_listening_for_delegator_events(&mut self) -> MockDelegatorEvents {
+            MockDelegatorEvents(
+                self.received_events
+                    .take()
+                    .expect("Delegator events already being received"),
+            )
+        }
+    }
+
+    impl Drop for MockDelegator {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    struct MockDelegatorEvents(mpsc::UnboundedReceiver<serde_json::Value>);
+
+    impl MockDelegatorEvents {
+        async fn assert_received(&mut self, expected: serde_json::Value) {
+            let events = tokio::time::timeout(std::time::Duration::from_secs(2), self.0.recv())
+                .await
+                .expect("Timed out waiting for delegator events")
+                .expect("Delegator server closed before sending events");
+            assert_eq!(events, expected);
+            assert!(
+                matches!(self.0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+                "Unexpected additional delegator events"
+            );
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_paused_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::Paused,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::Paused(_))
-        ));
+        let test = TestContext::new(DBPools::from_test_pool(&db));
 
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
+        // Fixture setup
+        let submission_id = test
+            .create_submission(InitialSubmissionStatus::Paused, vec![Some("foo".into())])
+            .await;
+        let initial_status = test.submission_status(submission_id).await;
+        assert!(matches!(initial_status, Some(SubmissionStatus::Paused(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Twice for idempotency.
+        for _ in 0..2 {
+            // Code under test
+            handle_delegate_event(
+                &test.core_api,
+                &mut conn,
+                &DelegatedJob {
+                    task_id: "test".to_owned(),
+                    payload: DelegatedJobPayload { submission_id },
+                },
+            )
             .await
             .unwrap();
 
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::InProgress(_))
-        ));
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
-
-        // Test for idempotency.
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+            // Assertions
+            assert!(matches!(
+                test.submission_status(submission_id).await,
+                Some(SubmissionStatus::InProgress(_))
+            ));
+            assert_eq!(test.count_delegated_submissions().await, 1);
+            submission_status_changes.assert_received(submission_id);
+        }
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_in_progress_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::InProgress(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_delegate_event(
+            &test.core_api,
             &mut conn,
+            &DelegatedJob {
+                task_id: "test".to_owned(),
+                payload: DelegatedJobPayload { submission_id },
+            },
         )
         .await
         .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::InProgress(_))));
 
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_completed_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(InitialSubmissionStatus::InProgress, vec![])
+            .await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_delegate_event(
+            &test.core_api,
             &mut conn,
+            &DelegatedJob {
+                task_id: "test".to_owned(),
+                payload: DelegatedJobPayload { submission_id },
+            },
         )
         .await
         .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
 
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_failed_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(
-            pool.clone(),
-            Arc::new(Notify::new()),
-            status_changed.clone(),
-        );
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        retry_or_fail_chunk(
-            (submission_id, ChunkIndex::zero()).into(),
-            "error".to_owned(),
-            &mut conn,
-            0,
-            &status_changed,
-        )
-        .await
-        .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        test.fail_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
         assert!(matches!(before, Some(SubmissionStatus::Failed(_, _))));
 
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
 
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+        // Code under test
+        handle_delegate_event(
+            &test.core_api,
+            &mut conn,
+            &DelegatedJob {
+                task_id: "test".to_owned(),
+                payload: DelegatedJobPayload { submission_id },
+            },
+        )
+        .await
+        .unwrap();
+
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_cancelled_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        test.cancel_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_delegate_event(
+            &test.core_api,
             &mut conn,
+            &DelegatedJob {
+                task_id: "test".to_owned(),
+                payload: DelegatedJobPayload { submission_id },
+            },
         )
         .await
         .unwrap();
-        core_api
-            .cancel_submission(submission_id, &mut conn)
-            .await
-            .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
 
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn handle_delegate_event_for_missing_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
+        let test = TestContext::new(DBPools::from_test_pool(&db));
 
+        // Fixture setup
         let submission_id = SubmissionId::new();
-        let job = DelegatedJob {
-            task_id: "test".to_owned(),
-            payload: DelegatedJobPayload { submission_id },
-        };
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_delegate_event(&core_api, &mut conn, &job)
-            .await
-            .unwrap();
 
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            None
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
-    }
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
 
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_paused_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::Paused,
+        // Code under test
+        handle_delegate_event(
+            &test.core_api,
             &mut conn,
+            &DelegatedJob {
+                task_id: "test".to_owned(),
+                payload: DelegatedJobPayload { submission_id },
+            },
         )
         .await
         .unwrap();
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::Paused(_))
-        ));
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
 
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::Cancelled(_))
-        ));
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_in_progress_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::InProgress(_))
-        ));
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
-
-        let mut notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert!(matches!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            Some(SubmissionStatus::Cancelled(_))
-        ));
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert_eq!(notifications.try_recv().unwrap(), submission_id);
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_completed_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
-
-        let notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert!(notifications.is_empty());
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_failed_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(
-            pool.clone(),
-            Arc::new(Notify::new()),
-            status_changed.clone(),
-        );
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        retry_or_fail_chunk(
-            (submission_id, ChunkIndex::zero()).into(),
-            "error".to_owned(),
-            &mut conn,
-            0,
-            &status_changed,
-        )
-        .await
-        .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::Failed(_, _))));
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
-
-        let notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert!(notifications.is_empty());
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_cancelled_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = insert_submission_from_chunks(
-            None,
-            vec![Some("foo".into())],
-            None,
-            StrategicMetadataMap::default(),
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .unwrap();
-        core_api
-            .cancel_submission(submission_id, &mut conn)
-            .await
-            .unwrap();
-        let before = core_api
-            .submission_status(submission_id, &mut conn)
-            .await
-            .unwrap();
-        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
-
-        let notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            before
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert!(notifications.is_empty());
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_missing_submission(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-        let submission_id = SubmissionId::new();
-        insert_delegated_submission(&mut conn, submission_id, "test")
-            .await
-            .unwrap();
-
-        let notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "test")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            core_api
-                .submission_status(submission_id, &mut conn)
-                .await
-                .unwrap(),
-            None
-        );
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-        assert!(notifications.is_empty());
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn handle_kill_event_for_unknown_task(db: sqlx::SqlitePool) {
-        let pool = DBPools::from_test_pool(&db);
-        let (status_changed, _) = broadcast::channel(16);
-        let core_api = CoreApi::new(pool.clone(), Arc::new(Notify::new()), status_changed);
-        let mut conn = pool.writer_conn().await.unwrap();
-
-        let notifications = core_api.subscribe_submission_status_changes();
-        handle_kill_event(&core_api, &mut conn, "unknown")
-            .await
-            .unwrap();
-
-        assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
-        assert!(notifications.is_empty());
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, None);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1461,55 +1262,236 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let mut test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        let submission = {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-
-            let chunks_contents = vec![Some("foo".into())];
-            insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
-                InitialSubmissionStatus::Paused,
-                &mut conn,
-            )
-            .await
-            .unwrap()
-        };
-
-        {
-            let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 1);
-            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
-        }
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(
-                json!([{"type": "updated", "contents": [{"task_id": "test", "status": "running"}]}, {"type": "completed", "contents": []}]),
-            ))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
+        // Fixture setup
+        let submission = test
+            .create_submission(InitialSubmissionStatus::Paused, vec![Some("foo".into())])
             .await;
 
-        test.post_worker_events(json!([{"type": "delegate", "contents": [DelegatedJob {
-            task_id: "test".to_string(),
-            payload: DelegatedJobPayload { submission_id: submission },
-        }]}]))
-        .await;
+        assert_eq!(test.count_submissions_paused().await, 1);
+        assert_eq!(test.count_delegated_submissions().await, 0);
 
-        wait_for_update(rx).await;
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
+        test_server.start_background();
 
-        {
-            let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 1);
-            assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
-        }
+        // Code under test
+        test_server
+            .submit_events(json!([
+                {
+                    "type": "delegate",
+                    "contents": [DelegatedJob {
+                        task_id: "test".to_string(),
+                        payload: DelegatedJobPayload {
+                            submission_id: submission,
+                        },
+                    }]
+                }
+            ]))
+            .await;
+
+        // Assertions
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "updated",
+                    "contents": [{"task_id": "test", "status": "running"}]
+                }
+            ]))
+            .await;
+
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        assert_eq!(test.count_submissions().await, 1);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_paused_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(InitialSubmissionStatus::Paused, vec![Some("foo".into())])
+            .await;
+        test.insert_delegated_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Paused(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert!(matches!(
+            test.submission_status(submission_id).await,
+            Some(SubmissionStatus::Cancelled(_))
+        ));
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_in_progress_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        test.insert_delegated_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::InProgress(_))));
+
+        let mut submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert!(matches!(
+            test.submission_status(submission_id).await,
+            Some(SubmissionStatus::Cancelled(_))
+        ));
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_received(submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_completed_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(InitialSubmissionStatus::InProgress, vec![])
+            .await;
+        test.insert_delegated_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Completed(_))));
+
+        let submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_empty();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_failed_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        test.fail_submission(submission_id).await;
+        test.insert_delegated_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Failed(_, _))));
+
+        let submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_empty();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_cancelled_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = test
+            .create_submission(
+                InitialSubmissionStatus::InProgress,
+                vec![Some("foo".into())],
+            )
+            .await;
+        test.cancel_submission(submission_id).await;
+        test.insert_delegated_submission(submission_id).await;
+        let before = test.submission_status(submission_id).await;
+        assert!(matches!(before, Some(SubmissionStatus::Cancelled(_))));
+
+        let submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, before);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_empty();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_missing_submission(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+        let submission_id = SubmissionId::new();
+        test.insert_delegated_submission(submission_id).await;
+
+        let submission_status_changes = test.start_listening_for_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "test")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert_eq!(test.submission_status(submission_id).await, None);
+        assert_eq!(test.count_delegated_submissions().await, 1);
+        submission_status_changes.assert_empty();
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn handle_kill_event_for_unknown_task(db: sqlx::SqlitePool) {
+        let test = TestContext::new(DBPools::from_test_pool(&db));
+
+        // Fixture setup
+
+        let notifications = test.core_api.subscribe_submission_status_changes();
+        let mut conn = test.pool.writer_conn().await.unwrap();
+
+        // Code under test
+        handle_kill_event(&test.core_api, &mut conn, "unknown")
+            .await
+            .unwrap();
+
+        // Assertions
+        assert_eq!(test.count_delegated_submissions().await, 0);
+        assert!(notifications.is_empty());
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1517,56 +1499,58 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let mut test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        {
-            let mut conn = test.pool.writer_conn().await.unwrap();
+        // Fixture setup
+        let submission = test
+            .create_submission(InitialSubmissionStatus::Paused, vec![Some("foo".into())])
+            .await;
+        test.insert_delegated_submission(submission).await;
 
-            let chunks_contents = vec![Some("foo".into())];
-            let submission = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
-                InitialSubmissionStatus::Paused,
-                &mut conn,
-            )
-            .await
-            .unwrap();
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
+        test_server.start_background();
 
-            insert_delegated_submission(&mut conn, submission, "test")
-                .await
-                .unwrap();
-        };
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "forced"}}]}])))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "updated",
+                    "contents": [{"task_id": "test", "status": "queued"}]
+                }
+            ]))
             .await;
 
-        test.post_worker_events(json!([{"type": "kill", "contents": ["test"]}]))
+        // Code under test
+        test_server
+            .submit_events(json!([
+                {
+                    "type": "kill",
+                    "contents": ["test"]
+                }
+            ]))
             .await;
 
-        {
-            let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_submissions_cancelled(&mut conn).await.unwrap(), 1);
-            assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
-        }
+        // Assertions
+        assert_eq!(test.count_submissions_cancelled().await, 1);
+        assert_eq!(test.count_submissions().await, 0);
 
-        wait_for_update(rx).await;
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "completed",
+                    "contents": [{
+                        "task_id": "test",
+                        "completion": {
+                            "status": "failure",
+                            "failure_reason": "forced"
+                        }
+                    }]
+                }
+            ]))
+            .await;
 
-        // Wait for background loop to remove delegated submission;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        {
-            let mut conn = test.pool.reader_conn().await.unwrap();
-            assert_eq!(count_delegated_submissions(&mut conn).await.unwrap(), 0);
-        }
+        test.wait_for_delegated_submissions(0).await;
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1574,51 +1558,38 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        let submission = {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-
-            let chunks_contents = vec![Some("foo".into())];
-            let submission = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
-                InitialSubmissionStatus::Paused,
-                &mut conn,
-            )
-            .await
-            .unwrap();
-
-            insert_delegated_submission(&mut conn, submission, "test")
-                .await
-                .unwrap();
-
-            submission
-        };
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(
-                json!([{"type": "updated", "contents": [{"task_id": "test", "status": "running"}]}, {"type": "completed", "contents": []}]),
-            ))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
+        // Fixture setup
+        let submission = test
+            .create_submission(InitialSubmissionStatus::Paused, vec![Some("foo".into())])
             .await;
+        test.insert_delegated_submission(submission).await;
 
-        {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-            test.core_api
-                .unpause_submission(submission, &mut conn)
-                .await
-                .unwrap();
-        }
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
 
-        wait_for_update(rx).await;
+        // Code under test
+        test.unpause_submission(submission).await;
+
+        report_submission_status(
+            &test_server.state,
+            ReportTrigger::Submissions(vec![submission]),
+        )
+        .await
+        .unwrap();
+
+        // Assertions
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "updated",
+                    "contents": [{"task_id": "test", "status": "running"}]
+                }
+            ]))
+            .await;
+        assert_eq!(test.count_delegated_submissions().await, 1);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1626,55 +1597,44 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        let submission = {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-
-            let chunks_contents = vec![Some("foo".into())];
-            let submission = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
+        // Fixture setup
+        let submission = test
+            .create_submission(
                 InitialSubmissionStatus::InProgress,
-                &mut conn,
+                vec![Some("foo".into())],
             )
-            .await
-            .unwrap();
-
-            insert_delegated_submission(&mut conn, submission, "test")
-                .await
-                .unwrap();
-
-            submission
-        };
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(
-                json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "success"}}]}]),
-            ))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
             .await;
+        test.insert_delegated_submission(submission).await;
 
-        {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-            complete_chunk(
-                (submission, ChunkIndex::zero()).into(),
-                None,
-                &mut conn,
-                &test.submission_status_changed,
-            )
-            .await
-            .unwrap();
-        }
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
 
-        wait_for_update(rx).await;
+        // Code under test
+        test.complete_submission(submission).await;
+
+        report_submission_status(
+            &test_server.state,
+            ReportTrigger::Submissions(vec![submission]),
+        )
+        .await
+        .unwrap();
+
+        // Assertions
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "completed",
+                    "contents": [{
+                        "task_id": "test",
+                        "completion": {"status": "success"}
+                    }]
+                }
+            ]))
+            .await;
+        assert_eq!(test.count_delegated_submissions().await, 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1682,54 +1642,47 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        let submission = {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-
-            let chunks_contents = vec![Some("foo".into())];
-            let submission = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
+        // Fixture setup
+        let submission = test
+            .create_submission(
                 InitialSubmissionStatus::InProgress,
-                &mut conn,
+                vec![Some("foo".into())],
             )
-            .await
-            .unwrap();
-
-            insert_delegated_submission(&mut conn, submission, "test")
-                .await
-                .unwrap();
-
-            submission
-        };
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "unknown"}}]}])))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
             .await;
+        test.insert_delegated_submission(submission).await;
 
-        {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-            retry_or_fail_chunk(
-                (submission, ChunkIndex::zero()).into(),
-                "extreme error".to_owned(),
-                &mut conn,
-                0,
-                &test.submission_status_changed,
-            )
-            .await
-            .unwrap();
-        }
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
 
-        wait_for_update(rx).await;
+        // Code under test
+        test.fail_submission(submission).await;
+
+        report_submission_status(
+            &test_server.state,
+            ReportTrigger::Submissions(vec![submission]),
+        )
+        .await
+        .unwrap();
+
+        // Assertions
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "completed",
+                    "contents": [{
+                        "task_id": "test",
+                        "completion": {
+                            "status": "failure",
+                            "failure_reason": "unknown"
+                        }
+                    }]
+                }
+            ]))
+            .await;
+        assert_eq!(test.count_delegated_submissions().await, 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1737,48 +1690,46 @@ pub mod test {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let test = TestContext::new(pool_opts, conn_opts).await;
+        let test = TestContext::new(DBPools::from_test_options(pool_opts, conn_opts).await);
+        let mut mock_delegator = MockDelegator::new().await;
+        let test_server = TestServer::new(&test, mock_delegator.url.clone());
 
-        let submission = {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-
-            let chunks_contents = vec![Some("foo".into())];
-            let submission = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
-                None,
-                StrategicMetadataMap::default(),
-                ChunkSize::default(),
+        // Fixture setup
+        let submission = test
+            .create_submission(
                 InitialSubmissionStatus::InProgress,
-                &mut conn,
+                vec![Some("foo".into())],
             )
-            .await
-            .unwrap();
-
-            insert_delegated_submission(&mut conn, submission, "test")
-                .await
-                .unwrap();
-
-            submission
-        };
-
-        let (tx, rx) = oneshot::channel::<()>();
-        Mock::given(method("POST"))
-            .and(path("/delegation/submit"))
-            .and(body_partial_json(json!([{"type": "updated", "contents": []}, {"type": "completed", "contents": [{"task_id": "test", "completion": {"status": "failure", "failure_reason": "forced"}}]}])))
-            .respond_with(SignalResponder::new(tx, ResponseTemplate::new(202)))
-            .expect(1)
-            .mount(&test.external_server)
             .await;
+        test.insert_delegated_submission(submission).await;
 
-        {
-            let mut conn = test.pool.writer_conn().await.unwrap();
-            test.core_api
-                .cancel_submission(submission, &mut conn)
-                .await
-                .unwrap();
-        }
+        let mut delegator_events = mock_delegator.start_listening_for_delegator_events();
 
-        wait_for_update(rx).await;
+        // Code under test
+        test.cancel_submission(submission).await;
+
+        report_submission_status(
+            &test_server.state,
+            ReportTrigger::Submissions(vec![submission]),
+        )
+        .await
+        .unwrap();
+
+        // Assertions
+        delegator_events
+            .assert_received(json!([
+                {
+                    "type": "completed",
+                    "contents": [{
+                        "task_id": "test",
+                        "completion": {
+                            "status": "failure",
+                            "failure_reason": "forced"
+                        }
+                    }]
+                }
+            ]))
+            .await;
+        assert_eq!(test.count_delegated_submissions().await, 0);
     }
 }

@@ -81,7 +81,6 @@ workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-wiremock = "0.6.5"
 tower = "0.5.3"
 
 [[bench]]
