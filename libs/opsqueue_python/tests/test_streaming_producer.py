@@ -54,6 +54,43 @@ def test_async_stream_completed_submission_group(
         asyncio.run(stream_group([SubmissionId(0)]))
 
 
+def test_blocking_stream_completed_submission_group(
+    opsqueue: OpsqueueProcess,
+) -> None:
+    url = f"localhost:{opsqueue.port}"
+    object_store_url = (
+        "file:///tmp/opsqueue/test_blocking_stream_completed_submission_group"
+    )
+    producer_client = StreamingProducerClient(url, object_store_url)
+    submission_ids = [
+        producer_client.insert_submission([1, 2], chunk_size=1),
+        producer_client.insert_submission([3, 4], chunk_size=1),
+    ]
+
+    consumer_client = ConsumerClient(url, object_store_url)
+    expected_submission_ids = [submission_ids[1]] * 2 + [submission_ids[0]] * 2
+    for expected_submission_id in expected_submission_ids:
+        [chunk] = consumer_client.reserve_chunks()
+        assert chunk.submission_id == expected_submission_id
+        consumer_client.complete_chunk(
+            chunk.submission_id,
+            chunk.submission_prefix,
+            chunk.chunk_index.id,
+            chunk.input_content,
+        )
+
+    def stream_group(ids: list[SubmissionId]) -> list[int]:
+        output: list[int] = []
+        for chunk in producer_client.blocking_stream_completed_submission_group(ids):
+            output.extend(decode_chunk(chunk, DEFAULT_SERIALIZATION_FORMAT))
+        return output
+
+    assert stream_group(submission_ids) == [1, 2, 3, 4]
+    assert stream_group([]) == []
+    with pytest.raises(SubmissionNotFoundError):
+        stream_group([SubmissionId(0)])
+
+
 def test_insert_submission_group_creates_all_batches_before_return(
     opsqueue: OpsqueueProcess,
 ) -> None:

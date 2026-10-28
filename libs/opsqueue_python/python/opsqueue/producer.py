@@ -523,6 +523,25 @@ class StreamingProducerClient(ProducerClient):
 
         return stream_group()
 
+    def blocking_stream_completed_submission_group(
+        self,
+        submission_ids: Iterable[SubmissionId],
+        *,
+        timeout: float | None = None,
+    ) -> Iterator[bytes]:
+        """
+        Stream completed submissions in the supplied ID order.
+
+        Each submission is awaited before the next one is streamed. Chunk order
+        within each submission is preserved by
+        `blocking_stream_completed_submission_chunks`. `timeout` applies to
+        each submission.
+        """
+        for submission_id in submission_ids:
+            yield from self.blocking_stream_completed_submission_chunks(
+                submission_id, timeout
+            )
+
     async def async_count_completed_chunks(
         self, submission_ids: Iterable[SubmissionId]
     ) -> int:
