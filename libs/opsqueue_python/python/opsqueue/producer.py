@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import AsyncIterator, Iterable, Iterator
+from collections.abc import Iterable, Iterator, AsyncIterator
 from typing import Any, cast
 
 from opentelemetry import trace
-
 from opsqueue.common import (
-    DEFAULT_SERIALIZATION_FORMAT,
     SerializationFormat,
-    decode_chunk,
     encode_chunk,
+    decode_chunk,
+    DEFAULT_SERIALIZATION_FORMAT,
 )
 from opsqueue.exceptions import (
     SubmissionFailedError,
@@ -18,17 +17,17 @@ from opsqueue.exceptions import (
     SubmissionNotFoundError,
     TooManyMatchingSubmissionsError,
 )
-
-from . import opsqueue_internal, tracing
+from . import opsqueue_internal
+from . import tracing
 from .opsqueue_internal import (  # type: ignore[import-not-found]
-    ChunkFailed,
-    InitialSubmissionStatus,
+    SubmissionId,
+    SubmissionStatus,
     SubmissionCompleted,
     SubmissionFailed,
-    SubmissionId,
+    ChunkFailed,
     SubmissionNotCancellable,
     SubmissionPaused,
-    SubmissionStatus,
+    InitialSubmissionStatus,
 )
 
 __all__ = [
@@ -426,8 +425,6 @@ class StreamingProducerClient(ProducerClient):
     """
     Producer client helpers for streaming work across independent submissions.
     """
-
-    __slots__ = ()
 
     def insert_submission_group(
         self,
