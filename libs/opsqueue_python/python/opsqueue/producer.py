@@ -439,23 +439,22 @@ class StreamingProducerClient(ProducerClient):
         metadata: None | bytes = None,
         strategic_metadata: None | dict[str, int] = None,
         initial_status: InitialSubmissionStatus = InitialSubmissionStatus.InProgress,
-    ) -> Iterator[SubmissionId]:
+    ) -> list[SubmissionId]:
         """
-        Insert operations as a lazy stream of independent submissions.
+        Insert all operations as independent submissions before returning.
 
         Each submission contains at most `submission_size` operations, which
-        are chunked using `chunk_size`. An ID is yielded after that batch is
-        inserted. Each batch is an independent submission. The final
-        submission may be smaller; empty input yields no IDs. To have the queue
-        reflect the full workload before processing, exhaust this iterator
-        before starting consumers.
+        are chunked using `chunk_size`. Each batch is an independent
+        submission. The final submission may be smaller; empty input yields an
+        empty list. All IDs are returned only after every batch is inserted.
         """
         if submission_size <= 0:
             raise ValueError("submission_size must be a positive integer")
 
-        def submission_ids() -> Iterator[SubmissionId]:
-            for batch in itertools.batched(ops, submission_size):
-                yield self.insert_submission(
+        submission_ids = []
+        for batch in itertools.batched(ops, submission_size):
+            submission_ids.append(
+                self.insert_submission(
                     batch,
                     chunk_size=chunk_size,
                     serialization_format=serialization_format,
@@ -463,8 +462,9 @@ class StreamingProducerClient(ProducerClient):
                     strategic_metadata=strategic_metadata,
                     initial_status=initial_status,
                 )
+            )
 
-        return submission_ids()
+        return submission_ids
 
     async def async_insert_submission_group(
         self,
@@ -480,8 +480,8 @@ class StreamingProducerClient(ProducerClient):
         """
         Async-iterator version of `insert_submission_group`.
 
-        Insertion remains synchronous and happens as the returned iterator is
-        consumed, matching the existing async submission methods.
+        All batches are inserted during this call, before the async iterator is
+        returned. The underlying insertion calls remain synchronous.
         """
         submission_ids = self.insert_submission_group(
             ops,

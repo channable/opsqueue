@@ -54,7 +54,9 @@ def test_async_stream_completed_submission_group(
         asyncio.run(stream_group([SubmissionId(0)]))
 
 
-def test_insert_submission_group_streams_creation(opsqueue: OpsqueueProcess) -> None:
+def test_insert_submission_group_creates_all_batches_before_return(
+    opsqueue: OpsqueueProcess,
+) -> None:
     url = f"localhost:{opsqueue.port}"
     object_store_url = "file:///tmp/opsqueue/test_insert_submission_group"
     producer_client = StreamingProducerClient(url, object_store_url)
@@ -66,9 +68,9 @@ def test_insert_submission_group_streams_creation(opsqueue: OpsqueueProcess) -> 
         strategic_metadata={"company_id": 42},
     )
 
-    assert producer_client.count_submissions() == 0
+    assert producer_client.count_submissions() == 2
     first_submission_id = next(submission_ids)
-    assert producer_client.count_submissions() == 1
+    assert producer_client.count_submissions() == 2
     first_status = producer_client.get_submission_status(first_submission_id)
     assert isinstance(first_status, SubmissionStatus.InProgress)
     assert first_status.submission.chunks_total == 2
@@ -85,12 +87,7 @@ def test_insert_submission_group_streams_creation(opsqueue: OpsqueueProcess) -> 
     with pytest.raises(StopIteration):
         next(submission_ids)
 
-    assert (
-        list(
-            producer_client.insert_submission_group([], submission_size=2, chunk_size=1)
-        )
-        == []
-    )
+    assert producer_client.insert_submission_group([], submission_size=2, chunk_size=1) == []
     with pytest.raises(ValueError, match="submission_size"):
         producer_client.insert_submission_group([], submission_size=0, chunk_size=1)
 
@@ -98,9 +95,9 @@ def test_insert_submission_group_streams_creation(opsqueue: OpsqueueProcess) -> 
         async_submission_ids = await producer_client.async_insert_submission_group(
             [4, 5, 6], submission_size=2, chunk_size=1
         )
-        assert producer_client.count_submissions() == 2
+        assert producer_client.count_submissions() == 4
         first_id = await anext(async_submission_ids)
-        assert producer_client.count_submissions() == 3
+        assert producer_client.count_submissions() == 4
         remaining_ids = [submission_id async for submission_id in async_submission_ids]
         return [first_id, *remaining_ids]
 
