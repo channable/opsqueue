@@ -187,11 +187,26 @@ enum FailureReason {
     Forced,
 }
 
+fn event_count_exceeds_limit(events: &[IncomingDelegationEvent]) -> bool {
+    events
+        .iter()
+        .map(|event| match event {
+            IncomingDelegationEvent::Delegate(v) => v.len(),
+            IncomingDelegationEvent::Kill(v) | IncomingDelegationEvent::Return(v) => v.len(),
+        })
+        .sum::<usize>()
+        > 2048
+}
+
 #[tracing::instrument(level = "debug", skip(state))]
 async fn submit(
     State(state): State<ServerState>,
     Json(events): Json<Vec<IncomingDelegationEvent>>,
 ) -> Result<StatusCode, StatusCode> {
+    if event_count_exceeds_limit(&events) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let mut conn = state
         .core_api
         .get_db_pools()
