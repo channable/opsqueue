@@ -87,7 +87,10 @@ def test_insert_submission_group_creates_all_batches_before_return(
     with pytest.raises(StopIteration):
         next(submission_ids)
 
-    assert producer_client.insert_submission_group([], submission_size=2, chunk_size=1) == []
+    assert (
+        producer_client.insert_submission_group([], submission_size=2, chunk_size=1)
+        == []
+    )
     with pytest.raises(ValueError, match="submission_size"):
         producer_client.insert_submission_group([], submission_size=0, chunk_size=1)
 
