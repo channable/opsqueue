@@ -69,24 +69,18 @@ def test_insert_submission_group_creates_all_batches_before_return(
     )
 
     assert producer_client.count_submissions() == 2
-    first_submission_id = next(submission_ids)
-    assert producer_client.count_submissions() == 2
+    first_submission_id, second_submission_id = submission_ids
     first_status = producer_client.get_submission_status(first_submission_id)
     assert isinstance(first_status, SubmissionStatus.InProgress)
     assert first_status.submission.chunks_total == 2
     assert first_status.submission.metadata == b"group metadata"
     assert first_status.submission.strategic_metadata == {"company_id": 42}
 
-    second_submission_id = next(submission_ids)
-    assert producer_client.count_submissions() == 2
     second_status = producer_client.get_submission_status(second_submission_id)
     assert isinstance(second_status, SubmissionStatus.InProgress)
     assert second_status.submission.chunks_total == 1
     assert second_status.submission.metadata == b"group metadata"
     assert second_status.submission.strategic_metadata == {"company_id": 42}
-    with pytest.raises(StopIteration):
-        next(submission_ids)
-
     assert (
         producer_client.insert_submission_group([], submission_size=2, chunk_size=1)
         == []
