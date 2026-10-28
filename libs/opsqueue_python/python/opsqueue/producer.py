@@ -423,7 +423,13 @@ class ProducerClient:
 
 class StreamingProducerClient(ProducerClient):
     """
-    Producer client helpers for streaming work across independent submissions.
+    Producer client for tracking the full remaining workload while streaming
+    completed work.
+
+    The group-creation methods insert all operations as independent submissions
+    before returning, so the queue size reflects the workload up front. The
+    client can then stream completed output in submission-ID order and count
+    completed chunks while other submissions are still in progress.
     """
 
     def insert_submission_group(
