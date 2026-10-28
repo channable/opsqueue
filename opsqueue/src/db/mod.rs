@@ -207,15 +207,28 @@ impl DBPools {
     /// Useful to closely mimic the pool that is used in production (multiple reader connections,
     /// a single writer connections).
     #[cfg(test)]
-    pub(crate) fn from_test_pools(
-        read_pool: &sqlx::SqlitePool,
-        write_pool: &sqlx::SqlitePool,
+    pub(crate) async fn from_test_options(
+        pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
+        conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) -> Self {
+        let reader_pool = pool_opts
+            .clone()
+            .max_connections(16)
+            .connect_with(conn_opts.clone())
+            .await
+            .unwrap();
+        let writer_pool = pool_opts
+            .max_connections(1)
+            .connect_with(conn_opts)
+            .await
+            .unwrap();
+
         DBPools {
-            read_pool: Pool::new(read_pool.clone()),
-            write_pool: Pool::new(write_pool.clone()),
+            read_pool: Pool::new(reader_pool),
+            write_pool: Pool::new(writer_pool),
         }
     }
+
     /// We check whether we can not only reach the DB but especially if we can run a transaction.
     ///
     /// This handles the case where for whatever reason some other thing holds the write lock for

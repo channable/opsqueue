@@ -91,18 +91,7 @@ mod tests {
         pool_opts: sqlx::pool::PoolOptions<sqlx::Sqlite>,
         conn_opts: sqlx::sqlite::SqliteConnectOptions,
     ) {
-        let reader_pool = pool_opts
-            .clone()
-            .max_connections(16)
-            .connect_with(conn_opts.clone())
-            .await
-            .unwrap();
-        let writer_pool = pool_opts
-            .max_connections(1)
-            .connect_with(conn_opts)
-            .await
-            .unwrap();
-        let db = DBPools::from_test_pools(&reader_pool, &writer_pool);
+        let db = DBPools::from_test_options(pool_opts, conn_opts).await;
 
         let (referenced, unreferenced) = {
             let mut conn = db.writer_conn().await.unwrap();
