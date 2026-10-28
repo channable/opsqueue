@@ -25,27 +25,6 @@ use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-pub(crate) fn app_for_tests(
-    cancellation_token: &CancellationToken,
-    core_api: CoreApi,
-    delegation_server_url: url::Url,
-) -> Router {
-    let config = crate::config::Config::default();
-    let router = ServerState::new(
-        cancellation_token.clone(),
-        core_api,
-        delegation_server_url,
-        config.delegation_full_scan_period.into(),
-        config.delegation_debounce_period.into(),
-        config.delegation_batch_size,
-    )
-    .run_background()
-    .build_router();
-
-    Router::new().nest("/delegation", router)
-}
-
 #[derive(Debug, Clone)]
 pub struct ServerState {
     cancellation_token: CancellationToken,
@@ -797,9 +776,8 @@ pub mod test {
     use crate::common::submission::{InitialSubmissionStatus, SubmissionId, SubmissionStatus};
     use crate::db::{Connection, DBPools};
     use crate::delegation::server::{
-        DelegatedJob, DelegatedJobPayload, ReportTrigger, ServerState, app_for_tests,
-        handle_delegate_event, handle_kill_event, insert_delegated_submission,
-        report_submission_status, submission_status_change_batch,
+        DelegatedJob, DelegatedJobPayload, ReportTrigger, ServerState, handle_delegate_event,
+        handle_kill_event, insert_delegated_submission, report_submission_status,
     };
     use axum::http::Request;
     use axum::{Router, body::Body};
@@ -811,6 +789,27 @@ pub mod test {
     use tower::ServiceExt;
     use wiremock::matchers::{body_json, body_partial_json, method, path};
     use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
+
+    #[cfg(test)]
+    pub(crate) fn app_for_tests(
+        cancellation_token: &CancellationToken,
+        core_api: CoreApi,
+        delegation_server_url: url::Url,
+    ) -> Router {
+        let config = crate::config::Config::default();
+        let router = ServerState::new(
+            cancellation_token.clone(),
+            core_api,
+            delegation_server_url,
+            config.delegation_full_scan_period.into(),
+            config.delegation_debounce_period.into(),
+            config.delegation_batch_size,
+        )
+        .run_background()
+        .build_router();
+
+        Router::new().nest("/delegation", router)
+    }
 
     struct SignalResponder {
         sender: Mutex<Option<oneshot::Sender<()>>>,
