@@ -1,0 +1,125 @@
+use crate::E;
+use crate::common::errors::{DatabaseError, E, SubmissionNotCancellable, SubmissionNotFound};
+use crate::common::submission::db::{cancel_submission, submission_status, unpause_submission};
+use crate::common::submission::{SubmissionId, SubmissionStatus};
+use crate::db;
+use crate::db::{Connection, DBPools, WriterConnection};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use axum::Router;
+use tokio::sync::Notify;
+
+#[async_trait]
+pub trait Extension: Send + Sync {
+    /// Returns whether the extension references the given submission.
+    /// Used to e.g. check if old submissions can be deleted safely.
+    async fn references_submission(
+        &self,
+        submission: SubmissionId,
+        conn: &mut db::conn::Writer<db::conn::NoTransaction>,
+    ) -> sqlx::Result<bool>;
+
+    /// Allows the Extension to register HTTP handlers.
+    /// Defaults to not registering anything.
+    fn bind_router(&self, router: Router) -> Router {
+        router
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CoreApi {
+    pool: DBPools,
+    notify_on_insert: Arc<Notify>,
+    submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
+}
+
+/// Interface exposed by `OpsQueue` Core and made available to extensions to interact with database
+/// tables which are the responsibility of `OpsQueue` core.
+impl CoreApi {
+    #[must_use]
+    pub fn new(
+        pool: DBPools,
+        notify_on_insert: Arc<Notify>,
+        submission_status_changed_tx: tokio::sync::broadcast::Sender<SubmissionId>,
+    ) -> Self {
+        Self {
+            pool,
+            notify_on_insert,
+            submission_status_changed_tx,
+        }
+    }
+
+    /// Get a `DBPools` instance that can be used to interact with the database.
+    #[must_use]
+    pub fn get_db_pools(&self) -> &DBPools {
+        &self.pool
+    }
+
+    /// Subscribe to submission status change events.
+    #[must_use]
+    pub fn subscribe_submission_status_changes(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<SubmissionId> {
+        self.submission_status_changed_tx.subscribe()
+    }
+
+    /// Send a submission status change event.
+    pub(crate) fn notify_submission_status_changed(&self, id: SubmissionId) {
+        let _ = self.submission_status_changed_tx.send(id);
+    }
+
+    /// Wake waiting consumers after newly available work has been committed.
+    pub fn notify_consumers(&self) {
+        // TODO(https://github.com/channable/opsqueue/issues/205): Remove this method after we
+        //  schedule the call to `notify_on_insert` as part of `unpause_submission`.
+        self.notify_on_insert.notify_waiters();
+    }
+
+    /// Unpauses the given submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the update fails, or `SubmissionNotFound` if the
+    /// submission is not paused.
+    pub async fn unpause_submission(
+        &self,
+        id: SubmissionId,
+        conn: impl WriterConnection,
+    ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
+        unpause_submission(
+            id,
+            conn,
+            &self.notify_on_insert,
+            &self.submission_status_changed_tx,
+        )
+        .await
+    }
+
+    /// Cancels the given submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the update fails, `SubmissionNotFound` if the
+    /// submission is missing, or `SubmissionNotCancellable` if it cannot be cancelled.
+    pub async fn cancel_submission(
+        &self,
+        id: SubmissionId,
+        conn: impl WriterConnection,
+    ) -> Result<(), E![DatabaseError, SubmissionNotFound, SubmissionNotCancellable]> {
+        cancel_submission(id, conn, &self.submission_status_changed_tx).await
+    }
+
+    /// Gets the current status for the given submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the lookup fails.
+    pub async fn submission_status(
+        &self,
+        id: SubmissionId,
+        mut conn: impl Connection,
+    ) -> Result<Option<SubmissionStatus>, DatabaseError> {
+        submission_status(id, &mut conn).await
+    }
+}

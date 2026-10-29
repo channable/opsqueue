@@ -1995,10 +1995,11 @@ dependencies = [
 
 [[package]]
 name = "opsqueue"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "async-trait",
  "axum",
  "axum-prometheus",
  "backon",
@@ -2036,6 +2037,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
+ "tower",
  "tower-http 0.7.0",
  "tracing",
  "tracing-opentelemetry",
@@ -2048,7 +2050,7 @@ dependencies = [
 
 [[package]]
 name = "opsqueue_python"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4263,6 +4265,7 @@ dependencies = [
  "opentelemetry_sdk",
  "rand 0.10.2",
  "rand 0.9.5",
+ "regex",
  "regex-automata",
  "regex-syntax",
  "reqwest",
