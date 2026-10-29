@@ -1,10 +1,9 @@
 use std::{
-    fmt::Debug,
-    hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+use crate::common::chunk::ChunkId;
 use axum_prometheus::metrics::{counter, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
@@ -14,16 +13,27 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::time::DelayQueue;
 
 #[derive(Clone)]
-pub struct Reserver<K, V> {
-    reservations: Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>,
-    pending_removals: Arc<Mutex<DelayQueue<K>>>,
+// OpsQueue reservations are kept in-memory, here.
+pub struct Reserver {
+    reservations: Cache<
+        // ID of the reserved chunk.
+        ChunkId,
+        (
+            // Channel sender to notify of expired reservations.
+            UnboundedSender<ChunkId>,
+            // When the reservation began.
+            Instant,
+        ),
+        FxBuildHasher, // Hashing algorithm.
+    >,
+    // Imagine a consumer B starts reading from SQLite, then consumer A
+    // completes a chunk, B still sees the snapshot from earlier when the chunk
+    // was not complete. To reduce the risk of B reserving the chunk, we create
+    // a delay before releasing the in-memory reservation.
+    pending_removals: Arc<Mutex<DelayQueue<ChunkId>>>,
 }
 
-impl<K, V> core::fmt::Debug for Reserver<K, V>
-where
-    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-    V: Send + Sync + Clone + Debug + 'static,
-{
+impl core::fmt::Debug for Reserver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reserver")
             .field("reservations", &self.reservations)
@@ -32,21 +42,17 @@ where
     }
 }
 
-impl<K, V> Reserver<K, V>
-where
-    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-    V: Send + Sync + Clone + 'static,
-{
+impl Reserver {
     #[must_use]
     pub fn new(reservation_expiration: Duration) -> Self {
         let reservations = Cache::builder()
             .time_to_live(reservation_expiration)
-            .eviction_listener(|_key, val: (V, UnboundedSender<V>, _), cause| {
+            .eviction_listener(|key, val: (UnboundedSender<ChunkId>, _), cause| {
                 if cause == RemovalCause::Expired {
                     // Only error case is if receiver is no longer listening
                     // In that case, nobody cares about the value being evicted anymore.
                     // So `let _ =` is correct here.
-                    let _ = val.1.send(val.0);
+                    let _ = val.0.send(*key);
                 }
             })
             // We're not worried about HashDoS as the consumers are trusted code,
@@ -59,22 +65,22 @@ where
         }
     }
 
-    /// Attempts to reserve a particular key-val.
+    /// Attempts to reserve a particular chunk.
     ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
-    #[tracing::instrument(level = "debug", skip(self, val, sender))]
-    pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
+    #[tracing::instrument(level = "debug", skip(self, sender))]
+    pub fn try_reserve(&self, key: ChunkId, sender: &UnboundedSender<ChunkId>) -> Option<ChunkId> {
         let entry = self
             .reservations
             .entry(key)
-            .or_insert_with(|| (val, sender.clone(), Instant::now()));
+            .or_insert_with(|| (sender.clone(), Instant::now()));
 
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
             counter!(crate::prometheus::RESERVER_RESERVATIONS_SUCCEEDED_COUNTER).increment(1);
 
-            Some(entry.into_value().0)
+            Some(key)
         } else {
             // Someone else reserved this first
             tracing::trace!("Reservation of {key:?} failed!");
@@ -84,21 +90,22 @@ where
     }
 
     /// Returns whether a key currently has an active reservation.
-    pub fn is_reserved(&self, key: &K) -> bool {
+    #[must_use]
+    pub fn is_reserved(&self, key: &ChunkId) -> bool {
         self.reservations.contains_key(key)
     }
 
-    /// Removes a particular key-val from the reserver.
+    /// Removes a particular chunk from the reserver.
     /// Afterwards, it is possible to reserve it again.
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
-    pub async fn finish_reservation(&self, key: &K, delayed: bool) -> Option<Instant> {
+    pub async fn finish_reservation(&self, key: &ChunkId, delayed: bool) -> Option<Instant> {
         match self.reservations.get(key) {
             None => {
                 tracing::warn!("Attempted to finish non-existent reservation: {key:?}");
                 None
             }
-            Some((_val, _sender, reserved_at)) => {
+            Some((_sender, reserved_at)) => {
                 if delayed {
                     // We remove the reservation with a slight delay
                     // This is to prevent a race condition where a SQLite read cursor
@@ -121,10 +128,11 @@ where
 
     /// Sync version of `.finish_reservation`; does not support delayed removal.
     /// Intended to be called from within a `Drop` implementation.
-    pub fn finish_reservation_sync(&self, key: &K) -> Option<Instant> {
+    #[must_use]
+    pub fn finish_reservation_sync(&self, key: &ChunkId) -> Option<Instant> {
         self.reservations
             .remove(key)
-            .map(|(_val, _sender, reserved_at)| reserved_at)
+            .map(|(_sender, reserved_at)| reserved_at)
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up
