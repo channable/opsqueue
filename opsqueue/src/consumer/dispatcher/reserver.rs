@@ -1,10 +1,9 @@
 use std::{
-    fmt::Debug,
-    hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+use crate::common::chunk::ChunkId;
 use axum_prometheus::metrics::{counter, gauge};
 use moka::{notification::RemovalCause, sync::Cache};
 use rustc_hash::FxBuildHasher;
@@ -14,16 +13,12 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::time::DelayQueue;
 
 #[derive(Clone)]
-pub struct Reserver<K, V> {
-    reservations: Cache<K, (V, UnboundedSender<V>, Instant), FxBuildHasher>,
-    pending_removals: Arc<Mutex<DelayQueue<K>>>,
+pub struct Reserver {
+    reservations: Cache<ChunkId, (ChunkId, UnboundedSender<ChunkId>, Instant), FxBuildHasher>,
+    pending_removals: Arc<Mutex<DelayQueue<ChunkId>>>,
 }
 
-impl<K, V> core::fmt::Debug for Reserver<K, V>
-where
-    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-    V: Send + Sync + Clone + Debug + 'static,
-{
+impl core::fmt::Debug for Reserver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reserver")
             .field("reservations", &self.reservations)
@@ -32,16 +27,12 @@ where
     }
 }
 
-impl<K, V> Reserver<K, V>
-where
-    K: Hash + Eq + Send + Sync + Debug + Copy + 'static,
-    V: Send + Sync + Clone + 'static,
-{
+impl Reserver {
     #[must_use]
     pub fn new(reservation_expiration: Duration) -> Self {
         let reservations = Cache::builder()
             .time_to_live(reservation_expiration)
-            .eviction_listener(|_key, val: (V, UnboundedSender<V>, _), cause| {
+            .eviction_listener(|_key, val: (ChunkId, UnboundedSender<ChunkId>, _), cause| {
                 if cause == RemovalCause::Expired {
                     // Only error case is if receiver is no longer listening
                     // In that case, nobody cares about the value being evicted anymore.
@@ -64,7 +55,7 @@ where
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
     #[tracing::instrument(level = "debug", skip(self, val, sender))]
-    pub fn try_reserve(&self, key: K, val: V, sender: &UnboundedSender<V>) -> Option<V> {
+    pub fn try_reserve(&self, key: ChunkId, val: ChunkId, sender: &UnboundedSender<ChunkId>) -> Option<ChunkId> {
         let entry = self
             .reservations
             .entry(key)
@@ -84,7 +75,7 @@ where
     }
 
     /// Returns whether a key currently has an active reservation.
-    pub fn is_reserved(&self, key: &K) -> bool {
+    pub fn is_reserved(&self, key: &ChunkId) -> bool {
         self.reservations.contains_key(key)
     }
 
@@ -92,7 +83,7 @@ where
     /// Afterwards, it is possible to reserve it again.
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
-    pub async fn finish_reservation(&self, key: &K, delayed: bool) -> Option<Instant> {
+    pub async fn finish_reservation(&self, key: &ChunkId, delayed: bool) -> Option<Instant> {
         match self.reservations.get(key) {
             None => {
                 tracing::warn!("Attempted to finish non-existent reservation: {key:?}");
@@ -121,7 +112,7 @@ where
 
     /// Sync version of `.finish_reservation`; does not support delayed removal.
     /// Intended to be called from within a `Drop` implementation.
-    pub fn finish_reservation_sync(&self, key: &K) -> Option<Instant> {
+    pub fn finish_reservation_sync(&self, key: &ChunkId) -> Option<Instant> {
         self.reservations
             .remove(key)
             .map(|(_val, _sender, reserved_at)| reserved_at)
