@@ -18,13 +18,13 @@ pub struct Reserver {
     reservations: Cache<
         // ID of the reserved chunk.
         ChunkId,
-        ( ChunkId,
-          // Channel sender to notify of expired reservations.
-          UnboundedSender<ChunkId>,
-          // When the reservation began.
-          Instant
+        (
+            // Channel sender to notify of expired reservations.
+            UnboundedSender<ChunkId>,
+            // When the reservation began.
+            Instant,
         ),
-        FxBuildHasher // Hashing algorithm.
+        FxBuildHasher, // Hashing algorithm.
     >,
     // Imagine a consumer B starts reading from SQLite, then consumer A
     // completes a chunk, B still sees the snapshot from earlier when the chunks
@@ -47,12 +47,12 @@ impl Reserver {
     pub fn new(reservation_expiration: Duration) -> Self {
         let reservations = Cache::builder()
             .time_to_live(reservation_expiration)
-            .eviction_listener(|_key, val: (ChunkId, UnboundedSender<ChunkId>, _), cause| {
+            .eviction_listener(|key, val: (UnboundedSender<ChunkId>, _), cause| {
                 if cause == RemovalCause::Expired {
                     // Only error case is if receiver is no longer listening
                     // In that case, nobody cares about the value being evicted anymore.
                     // So `let _ =` is correct here.
-                    let _ = val.1.send(val.0);
+                    let _ = val.0.send(*key);
                 }
             })
             // We're not worried about HashDoS as the consumers are trusted code,
@@ -65,22 +65,22 @@ impl Reserver {
         }
     }
 
-    /// Attempts to reserve a particular key-val.
+    /// Attempts to reserve a particular chunk.
     ///
     /// Returns `None` if someone else currently is already reserving `key`.
     #[must_use]
-    #[tracing::instrument(level = "debug", skip(self, val, sender))]
-    pub fn try_reserve(&self, key: ChunkId, val: ChunkId, sender: &UnboundedSender<ChunkId>) -> Option<ChunkId> {
+    #[tracing::instrument(level = "debug", skip(self, sender))]
+    pub fn try_reserve(&self, key: ChunkId, sender: &UnboundedSender<ChunkId>) -> Option<ChunkId> {
         let entry = self
             .reservations
             .entry(key)
-            .or_insert_with(|| (val, sender.clone(), Instant::now()));
+            .or_insert_with(|| (sender.clone(), Instant::now()));
 
         if entry.is_fresh() {
             tracing::debug!("Reservation of {key:?} succeeded!");
             counter!(crate::prometheus::RESERVER_RESERVATIONS_SUCCEEDED_COUNTER).increment(1);
 
-            Some(entry.into_value().0)
+            Some(key)
         } else {
             // Someone else reserved this first
             tracing::trace!("Reservation of {key:?} failed!");
@@ -90,11 +90,12 @@ impl Reserver {
     }
 
     /// Returns whether a key currently has an active reservation.
+    #[must_use]
     pub fn is_reserved(&self, key: &ChunkId) -> bool {
         self.reservations.contains_key(key)
     }
 
-    /// Removes a particular key-val from the reserver.
+    /// Removes a particular chunk from the reserver.
     /// Afterwards, it is possible to reserve it again.
     ///
     /// Precondition: key should be reserved first (checked in debug builds)
@@ -104,7 +105,7 @@ impl Reserver {
                 tracing::warn!("Attempted to finish non-existent reservation: {key:?}");
                 None
             }
-            Some((_val, _sender, reserved_at)) => {
+            Some((_sender, reserved_at)) => {
                 if delayed {
                     // We remove the reservation with a slight delay
                     // This is to prevent a race condition where a SQLite read cursor
@@ -127,10 +128,11 @@ impl Reserver {
 
     /// Sync version of `.finish_reservation`; does not support delayed removal.
     /// Intended to be called from within a `Drop` implementation.
+    #[must_use]
     pub fn finish_reservation_sync(&self, key: &ChunkId) -> Option<Instant> {
         self.reservations
             .remove(key)
-            .map(|(_val, _sender, reserved_at)| reserved_at)
+            .map(|(_sender, reserved_at)| reserved_at)
     }
 
     /// Run this every so often to make sure outdated entries are cleaned up

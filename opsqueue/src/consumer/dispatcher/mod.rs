@@ -299,7 +299,7 @@ impl Dispatcher {
     ) -> Option<Chunk> {
         let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
         self.reserver
-            .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
+            .try_reserve(chunk_id, stale_chunks_notifier)
             .map(|_| chunk)
     }
 
@@ -389,11 +389,7 @@ mod test {
         let pre_reserved_chunk = ChunkId::from((submission_id, u63::new(0).into()));
         dispatcher
             .reserver()
-            .try_reserve(
-                pre_reserved_chunk,
-                pre_reserved_chunk,
-                &stale_chunks_notifier,
-            )
+            .try_reserve(pre_reserved_chunk, &stale_chunks_notifier)
             .expect("precondition: pre-reserving chunk should succeed");
 
         let reserved = dispatcher
