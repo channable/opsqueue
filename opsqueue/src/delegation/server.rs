@@ -1,11 +1,22 @@
 /// An extension for Opsqueue to interact with an external orchestrator. See the top-level README.md
 /// for a high-level overview.
 ///
-/// ## Requirements for implementing the `/delegation/submit` endpoint of the external orchestrator
-///
-/// The external orchestrator should record all events in a request before responding successfully;
+/// Note the external orchestrator should record all events in a request before responding successfully;
 /// if the request fails, none of the events should be acted upon, and an error status code should
 /// be returned. Opsqueue will resubmit the events at a later point in time.
+///
+/// A reasonable question would be why the delegation extension requires submissions to be created
+/// in a paused state out-of-band, instead of them being created as part of delegation. The answer
+/// to that is two-fold:
+///  - When creating as part of delegation, the delegator necessarily has to carry the state needed
+///    to create the submission. Therefore, there would be tight coupling between said state in the
+///    delegator and Opsqueue. As a result, whenever we would make changes to e.g.
+///    `insert_submission` we would have to ensure that the state in the delegator is taken into
+///    account. That would be easy to forget about.
+///  - With the current approach the Opsqueue API can be used as-is, delegation is just a thing on
+///    top. E.g. if the submission would be inserted via the delegator we would have to somehow
+///    get the `submission_id` back to the caller, but it's not obvious how to do that, since
+///    insertion might happen at a (way) later point in time.
 use crate::common::errors::{E, SubmissionNotFound};
 use crate::common::extension::CoreApi;
 use crate::common::submission::{SubmissionId, SubmissionStatus};
