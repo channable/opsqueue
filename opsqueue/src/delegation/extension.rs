@@ -119,7 +119,7 @@ mod tests {
             .unwrap();
 
             sqlx::query!(
-                "INSERT INTO delegated_submissions (submission_id, external_task_id) VALUES ($1, 'task')",
+                "INSERT INTO delegated_submissions (submission_id, external_task_id, external_job_id) VALUES ($1, 'task', 'test-job')",
                 referenced,
             )
             .execute(conn.get_inner())

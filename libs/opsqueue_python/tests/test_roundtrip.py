@@ -816,6 +816,7 @@ def test_delegation_wakes_waiting_consumer() -> None:
                         "type": "delegate",
                         "contents": [
                             {
+                                "job_id": {"test": "hi"},
                                 "task_id": f"test-{value}",
                                 "payload": {"submission_id": submission.id},
                             }

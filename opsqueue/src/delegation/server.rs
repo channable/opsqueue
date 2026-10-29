@@ -115,6 +115,7 @@ enum IncomingDelegationEvent {
 struct DelegatedJob {
     task_id: String,
     payload: DelegatedJobPayload,
+    job_id: serde_json::Value, // Extra identifier used only for logging purposes.
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -244,13 +245,7 @@ async fn handle_worker_events(
                     IncomingDelegationEvent::Kill(external_task_ids) => {
                         for external_task_id in external_task_ids {
                             handle_kill_event(&transaction_core_api, &mut tx, &external_task_id)
-                                .await
-                                .map_err(|e| {
-                                    tracing::error!(
-                                        "Error handling kill event for external_task_id={external_task_id}: {e:?}"
-                                    );
-                                    e
-                                })?;
+                                .await?;
                         }
                     }
                     IncomingDelegationEvent::Return(_external_task_ids) => {
@@ -273,19 +268,27 @@ async fn handle_worker_events(
     Ok(())
 }
 
-#[tracing::instrument(level = "debug", skip(conn))]
+#[tracing::instrument(level = "debug", skip(conn, core_api))]
 async fn handle_delegate_event(
     core_api: &CoreApi,
     conn: &mut impl WriterConnection,
     job: &DelegatedJob,
 ) -> sqlx::Result<bool> {
     let external_task_id = &job.task_id;
+    let external_job_id = job.job_id.to_string();
     let submission_id = job.payload.submission_id;
 
-    let rows_affected = insert_delegated_submission(conn, submission_id, external_task_id).await?;
+    let rows_affected =
+        insert_delegated_submission(conn, submission_id, external_task_id, &external_job_id)
+            .await?;
 
     if rows_affected == 0 {
-        tracing::debug!(%submission_id, %external_task_id, "Delegated submission was already registered");
+        tracing::debug!(
+            %submission_id,
+            %external_task_id,
+            %external_job_id,
+            "Delegated submission was already registered"
+        );
     }
 
     let unpaused = match core_api.unpause_submission(submission_id, conn).await {
@@ -311,38 +314,56 @@ async fn handle_delegate_event(
     Ok(unpaused)
 }
 
-#[tracing::instrument(level = "debug", skip(conn))]
+#[tracing::instrument(level = "debug", skip(conn, core_api))]
 async fn handle_kill_event(
     core_api: &CoreApi,
     conn: &mut impl WriterConnection,
     external_task_id: &str,
 ) -> sqlx::Result<()> {
-    // Get the submission_id, if it exists.
-    let submission_id: Option<SubmissionId> = sqlx::query_scalar!(
-        r#"SELECT submission_id AS "submission_id: SubmissionId"
+    let delegated_submission = sqlx::query!(
+        r#"SELECT
+             submission_id AS "submission_id!: SubmissionId",
+             external_job_id
            FROM delegated_submissions
            WHERE external_task_id = $1"#,
         external_task_id,
     )
     .fetch_optional(conn.get_inner())
-    .await?;
+    .await
+    .map_err(|e| {
+        tracing::error!(%external_task_id, "DB error looking up task to cancel: {e:?}");
+        e
+    })?;
 
-    let Some(submission_id) = submission_id else {
+    let Some(delegated_submission) = delegated_submission else {
         tracing::warn!(%external_task_id, "Kill event for unknown external_task_id; ignoring");
         return Ok(());
     };
+    let submission_id = delegated_submission.submission_id;
+    let external_job_id = delegated_submission.external_job_id;
 
     match core_api.cancel_submission(submission_id, conn).await {
         Ok(()) => {}
         Err(E::L(db_err)) => {
-            tracing::error!(%submission_id, "DB error cancelling submission: {db_err:?}");
+            tracing::error!(
+                %submission_id,
+                %external_task_id,
+                %external_job_id,
+                "DB error cancelling submission: {db_err:?}"
+            );
             return Err(db_err.0);
         }
         Err(E::R(E::L(SubmissionNotFound(_)))) => {
-            tracing::warn!(%submission_id, "Submission not found when attempting to cancel; already gone");
+            tracing::warn!(
+                %submission_id,
+                %external_task_id,
+                %external_job_id,
+                "Submission not found when attempting to cancel; already gone"
+            );
         }
         Err(E::R(E::R(_not_cancelable))) => {
-            tracing::debug!(%submission_id, "Submission was already cancelled/failed/completed");
+            tracing::debug!(%submission_id,                %external_task_id,
+                %external_job_id, "Submission was already cancelled/failed/completed");
         }
     }
 
@@ -568,10 +589,13 @@ async fn insert_delegated_submission(
     conn: &mut impl Connection,
     submission_id: SubmissionId,
     external_task_id: &str,
+    external_job_id: &str,
 ) -> sqlx::Result<u64> {
     let rows_affected = sqlx::query!(
-        r#"INSERT INTO delegated_submissions (submission_id, external_task_id, last_status_sent)
-           SELECT $1 AS submission_id, $2 AS external_task_id, NULL AS last_status_sent
+        r#"INSERT INTO delegated_submissions
+                (submission_id, external_task_id, external_job_id, last_status_sent)
+           SELECT $1 AS submission_id, $2 AS external_task_id, $3 AS external_job_id,
+                  NULL AS last_status_sent
            WHERE NOT EXISTS (
             SELECT TRUE
             FROM delegated_submissions
@@ -579,6 +603,7 @@ async fn insert_delegated_submission(
            )"#,
         submission_id,
         external_task_id,
+        external_job_id,
     )
     .execute(conn.get_inner())
     .await?
@@ -591,6 +616,7 @@ async fn insert_delegated_submission(
 struct DelegatedSubmission {
     submission_id: SubmissionId,
     external_task_id: String,
+    external_job_id: String,
     last_status_sent: Option<DelegatedSubmissionStatus>,
 }
 
@@ -604,6 +630,7 @@ fn select_delegated_submissions(
             r#"SELECT
                     submission_id as "submission_id!: SubmissionId",
                     external_task_id,
+                    external_job_id,
                     last_status_sent as "last_status_sent: DelegatedSubmissionStatus"
                 FROM delegated_submissions as t
                 WHERE t.submission_id IN (SELECT value FROM json_each($1))
@@ -617,6 +644,7 @@ fn select_delegated_submissions(
             r#"SELECT
                     submission_id as "submission_id!: SubmissionId",
                     external_task_id,
+                    external_job_id,
                     last_status_sent as "last_status_sent: DelegatedSubmissionStatus"
                 FROM delegated_submissions as t
             "#
@@ -642,9 +670,10 @@ fn out_of_date_delegated_submission(
         Some(SubmissionStatus::Cancelled(_)) => DelegatedSubmissionStatus::Cancelled,
         None => {
             let external_task_id = &task.external_task_id;
+            let external_job_id = &task.external_job_id;
             let submission_id = &task.submission_id;
             // Log to Sentry, for visibility.
-            tracing::error!(%submission_id, %external_task_id,
+            tracing::error!(%submission_id, %external_task_id, %external_job_id,
                 "A submission was delegated, but we could not find its submission. This could be a\
                 resubmitted task, where we already cleaned up the corresponding submission after \
                 failure/completion. Assuming it completed successfully. If this submission was\
@@ -889,7 +918,7 @@ pub mod test {
 
         async fn insert_delegated_submission(&self, submission_id: SubmissionId) {
             let mut conn = self.pool.writer_conn().await.unwrap();
-            insert_delegated_submission(&mut conn, submission_id, "test")
+            insert_delegated_submission(&mut conn, submission_id, "test", "test-job")
                 .await
                 .unwrap();
         }
@@ -1086,6 +1115,7 @@ pub mod test {
                 &DelegatedJob {
                     task_id: "test".to_owned(),
                     payload: DelegatedJobPayload { submission_id },
+                    job_id: json!("test-job"),
                 },
             )
             .await
@@ -1099,6 +1129,14 @@ pub mod test {
             assert_eq!(test.count_delegated_submissions().await, 1);
             submission_status_changes.assert_received(submission_id);
         }
+        let external_job_id = sqlx::query_scalar!(
+            "SELECT external_job_id FROM delegated_submissions WHERE submission_id = $1",
+            submission_id,
+        )
+        .fetch_one(conn.get_inner())
+        .await
+        .unwrap();
+        assert_eq!(external_job_id, json!("test-job").to_string());
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1125,6 +1163,7 @@ pub mod test {
             &DelegatedJob {
                 task_id: "test".to_owned(),
                 payload: DelegatedJobPayload { submission_id },
+                job_id: json!("test-job"),
             },
         )
         .await
@@ -1157,6 +1196,7 @@ pub mod test {
             &DelegatedJob {
                 task_id: "test".to_owned(),
                 payload: DelegatedJobPayload { submission_id },
+                job_id: json!("test-job"),
             },
         )
         .await
@@ -1193,6 +1233,7 @@ pub mod test {
             &DelegatedJob {
                 task_id: "test".to_owned(),
                 payload: DelegatedJobPayload { submission_id },
+                job_id: json!("test-job"),
             },
         )
         .await
@@ -1229,6 +1270,7 @@ pub mod test {
             &DelegatedJob {
                 task_id: "test".to_owned(),
                 payload: DelegatedJobPayload { submission_id },
+                job_id: json!("test-job"),
             },
         )
         .await
@@ -1257,6 +1299,7 @@ pub mod test {
             &DelegatedJob {
                 task_id: "test".to_owned(),
                 payload: DelegatedJobPayload { submission_id },
+                job_id: json!("test-job"),
             },
         )
         .await
@@ -1298,6 +1341,7 @@ pub mod test {
                         payload: DelegatedJobPayload {
                             submission_id: submission,
                         },
+                        job_id: json!("test-job"),
                     }]
                 }
             ]))
