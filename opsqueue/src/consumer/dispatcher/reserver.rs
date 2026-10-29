@@ -13,8 +13,23 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::time::DelayQueue;
 
 #[derive(Clone)]
+// OpsQueue reservations are kept in-memory, here.
 pub struct Reserver {
-    reservations: Cache<ChunkId, (ChunkId, UnboundedSender<ChunkId>, Instant), FxBuildHasher>,
+    reservations: Cache<
+        // ID of the reserved chunk.
+        ChunkId,
+        ( ChunkId,
+          // Channel sender to notify of expired reservations.
+          UnboundedSender<ChunkId>,
+          // When the reservation began.
+          Instant
+        ),
+        FxBuildHasher // Hashing algorithm.
+    >,
+    // Imagine a consumer B starts reading from SQLite, then consumer A
+    // completes a chunk, B still sees the snapshot from earlier when the chunks
+    // was not complete. To reduce the risk of B reserving the chunk, we create
+    // a delay before releasing the in-memory reservation.
     pending_removals: Arc<Mutex<DelayQueue<ChunkId>>>,
 }
 
