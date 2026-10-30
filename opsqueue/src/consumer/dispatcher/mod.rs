@@ -1,5 +1,5 @@
 pub mod metastate;
-pub mod reserver;
+mod reserver;
 
 use crate::{
     common::{
@@ -185,11 +185,6 @@ impl Dispatcher {
     #[must_use]
     pub fn metastate(&self) -> &MetaState {
         &self.metastate
-    }
-
-    #[must_use]
-    pub fn reserver(&self) -> &Reserver {
-        &self.reserver
     }
 
     fn insert_metadata(&self, metadata: &StrategicMetadataMap) {
@@ -388,7 +383,7 @@ mod test {
 
         let pre_reserved_chunk = ChunkId::from((submission_id, u63::new(0).into()));
         dispatcher
-            .reserver()
+            .reserver
             .try_reserve(pre_reserved_chunk, &stale_chunks_notifier)
             .expect("precondition: pre-reserving chunk should succeed");
 
