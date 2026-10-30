@@ -27,7 +27,7 @@ pub struct Reserver {
         FxBuildHasher, // Hashing algorithm.
     >,
     // Imagine a consumer B starts reading from SQLite, then consumer A
-    // completes a chunk, B still sees the snapshot from earlier when the chunks
+    // completes a chunk, B still sees the snapshot from earlier when the chunk
     // was not complete. To reduce the risk of B reserving the chunk, we create
     // a delay before releasing the in-memory reservation.
     pending_removals: Arc<Mutex<DelayQueue<ChunkId>>>,
