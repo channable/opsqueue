@@ -1,5 +1,5 @@
 pub mod metastate;
-pub mod reserver;
+mod reserver;
 
 use crate::{
     common::{
@@ -40,7 +40,7 @@ unsafe extern "C" fn sqlite_reserved_chunk_lookup(
 
     let user_data = unsafe { ffi::sqlite3_user_data(context) }
         .cast_const()
-        .cast::<Reserver<ChunkId, ChunkId>>();
+        .cast::<Reserver>();
     if user_data.is_null() {
         tracing::error!("opsqueue_is_reserved called without registered reserver user_data");
         // Fail open: this callback is an optimization only.
@@ -79,7 +79,7 @@ unsafe extern "C" fn sqlite_reserved_chunk_lookup_destructor(ptr: *mut std::ffi:
     if ptr.is_null() {
         return;
     }
-    let _boxed: Box<Reserver<ChunkId, ChunkId>> = unsafe { Box::from_raw(ptr.cast()) };
+    let _boxed: Box<Reserver> = unsafe { Box::from_raw(ptr.cast()) };
 }
 
 unsafe extern "C" fn sqlite_cstring_destructor(ptr: *mut std::ffi::c_void) {
@@ -166,7 +166,7 @@ unsafe extern "C" fn sqlite_metadata_count_lookup_destructor(ptr: *mut std::ffi:
 
 #[derive(Debug, Clone)]
 pub struct Dispatcher {
-    reserver: Reserver<ChunkId, ChunkId>,
+    reserver: Reserver,
     metastate: Arc<MetaState>,
 }
 
@@ -185,11 +185,6 @@ impl Dispatcher {
     #[must_use]
     pub fn metastate(&self) -> &MetaState {
         &self.metastate
-    }
-
-    #[must_use]
-    pub fn reserver(&self) -> &Reserver<ChunkId, ChunkId> {
-        &self.reserver
     }
 
     fn insert_metadata(&self, metadata: &StrategicMetadataMap) {
@@ -299,7 +294,7 @@ impl Dispatcher {
     ) -> Option<Chunk> {
         let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
         self.reserver
-            .try_reserve(chunk_id, chunk_id, stale_chunks_notifier)
+            .try_reserve(chunk_id, stale_chunks_notifier)
             .map(|_| chunk)
     }
 
@@ -388,12 +383,8 @@ mod test {
 
         let pre_reserved_chunk = ChunkId::from((submission_id, u63::new(0).into()));
         dispatcher
-            .reserver()
-            .try_reserve(
-                pre_reserved_chunk,
-                pre_reserved_chunk,
-                &stale_chunks_notifier,
-            )
+            .reserver
+            .try_reserve(pre_reserved_chunk, &stale_chunks_notifier)
             .expect("precondition: pre-reserving chunk should succeed");
 
         let reserved = dispatcher
