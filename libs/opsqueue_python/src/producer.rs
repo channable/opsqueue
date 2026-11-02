@@ -16,6 +16,7 @@ use crate::{
     errors::{self, CError, CPyResult, FatalPythonException},
 };
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use opsqueue::common::chunk::ChunkIndex;
 use opsqueue::{
     E,
     common::errors::E::{self, L, R},
@@ -317,6 +318,28 @@ impl ProducerClient {
         })
     }
 
+    /// Insert submission chunks via object storage.
+    ///
+    /// Returns the prefix and the chunk count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if chunk upload fails.
+    #[pyo3(signature = (chunk_contents, prefix=None))]
+    pub fn store_chunks(
+        &self,
+        py: Python<'_>,
+        chunk_contents: Py<PyIterator>,
+        prefix: Option<String>,
+    ) -> CPyResult<(String, u64), E![FatalPythonException, ChunksStorageError]> {
+        // We don't need the GIL to upload to GCS, `store_chunks_inner` will reacquire the GIL to
+        // consume the PyIterator as needed.
+        py.detach(|| {
+            let (prefix, chunk_count) = self.store_chunks_inner(chunk_contents, prefix)?;
+            Ok((prefix, chunk_count.into()))
+        })
+    }
+
     /// Insert submission chunks via object storage and enqueue the submission.
     ///
     /// # Errors
@@ -342,27 +365,16 @@ impl ProducerClient {
             InternalProducerClientError,
         ],
     > {
-        // This function is split into two parts.
-        // For the upload to object storage, we need the GIL as we run the python iterator to completion.
-        // For the second part, where we send the submission to the queue, we no longer need the GIL (and unlock it to allow logging later).
+        // We don't need the GIL to upload to GCS or insert the submission, `store_chunks_inner`
+        // will reacquire the GIL to consume the PyIterator as needed.
         py.detach(|| {
-            let prefix = uuid::Uuid::now_v7().to_string();
-            tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
-            let chunk_count = self.block_unless_interrupted(async {
-                let chunk_contents = std::iter::from_fn(move || {
-                    Python::attach(|py|
-                        chunk_contents.bind(py).clone().next()
-                            .map(|item| item.and_then(
-                                |item| item.extract()).map_err(Into::into)))
-                });
-                let stream = futures::stream::iter(chunk_contents);
-                self.object_store_client
-                    .store_chunks(&prefix, ChunkType::Input, stream)
-                    .await
-                    .map_err(|e| CError(R(L(e))))
+            let (prefix, chunk_count ) = self
+                .store_chunks_inner(chunk_contents, None)
+                .map_err(|err| match err.0 {
+                L(e) => CError(L(e)),
+                R(e) => CError(R(L(e))),
             })?;
-            let chunk_count = chunk::ChunkIndex::from(chunk_count);
-            tracing::debug!("Finished uploading to object store. {prefix} contains {chunk_count} chunks");
+            let chunk_count = ChunkIndex::from(chunk_count);
 
             self.block_unless_interrupted(async move {
                 let submission = opsqueue::producer::InsertSubmission {
@@ -580,6 +592,36 @@ impl ProducerClient {
             }
             _ => Ok(None),
         }
+    }
+
+    fn store_chunks_inner(
+        &self,
+        chunk_contents: Py<PyIterator>,
+        prefix: Option<String>,
+    ) -> CPyResult<(String, u63), E![FatalPythonException, ChunksStorageError]> {
+        let prefix = prefix.unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+        tracing::debug!("Uploading submission chunks to object store subfolder {prefix}...");
+        let chunk_count = self.block_unless_interrupted(async {
+            let chunk_contents = std::iter::from_fn(move || {
+                // We need the GIL for producing the next item of the Python iterator.
+                Python::attach(|py| {
+                    chunk_contents
+                        .bind(py)
+                        .clone()
+                        .next()
+                        .map(|item| item.and_then(|item| item.extract()).map_err(Into::into))
+                })
+            });
+            let stream = futures::stream::iter(chunk_contents);
+            self.object_store_client
+                .store_chunks(&prefix, ChunkType::Input, stream)
+                .await
+                .map_err(|e| CError(R(e)))
+        })?;
+        tracing::debug!(
+            "Finished uploading to object store. {prefix} contains {chunk_count} chunks"
+        );
+        Ok((prefix, chunk_count))
     }
 }
 

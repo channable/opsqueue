@@ -1,10 +1,12 @@
 # If you need to debug tests:
 # - use pytest's `--log-cli-level=info` (or `=debug`) argument to get more detailed logs from the producer/consumer clients
 # - use `RUST_LOG="opsqueue=info"` (or `opsqueue=debug` or `debug` for even more verbosity), together with to the pytest option `-s` AKA `--capture=no`, to debug the opsqueue binary itself.
-
+import json
 import logging
 import time
+import uuid
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 
 import pytest
 from conftest import (
@@ -15,7 +17,7 @@ from conftest import (
     StrategyDescription,
     strategy_from_description,
 )
-from opsqueue.common import SerializationFormat
+from opsqueue.common import SerializationFormat, json_as_bytes
 from opsqueue.consumer import ConsumerClient, Chunk
 from opsqueue.producer import (
     SubmissionId,
@@ -824,3 +826,57 @@ def test_cancel_paused(opsqueue: OpsqueueProcess) -> None:
     assert isinstance(
         producer_client.get_submission_status(submission_id), SubmissionStatus.Cancelled
     )
+
+
+def test_store_chunks(opsqueue: OpsqueueProcess) -> None:
+    store_path = Path("/tmp/opsqueue/test_store_chunks")
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}",
+        object_store_url=f"file://{store_path}",
+    )
+    (prefix, chunk_count) = producer_client.store_chunks(
+        [1, 2, 3],
+        chunk_size=2,
+        serialization_format=json_as_bytes,
+    )
+
+    assert chunk_count == 2
+
+    chunk_contents: dict[Path, object] = {}
+
+    for file in (store_path / prefix).iterdir():
+        with file.open("rb") as f:
+            chunk_contents[file] = json.load(f)
+
+    assert chunk_contents == {
+        store_path / prefix / "0-in.bin": [1, 2],
+        store_path / prefix / "1-in.bin": [3],
+    }
+
+
+def test_store_chunks_with_user_supplied_prefix(opsqueue: OpsqueueProcess) -> None:
+    store_path = Path("/tmp/opsqueue/test_store_chunks")
+    producer_client = ProducerClient(
+        f"localhost:{opsqueue.port}",
+        object_store_url=f"file://{store_path}",
+    )
+
+    prefix = uuid.uuid4().hex
+
+    (returned_prefix, chunk_count) = producer_client.store_chunks(
+        [1, 2, 3], chunk_size=2, serialization_format=json_as_bytes, prefix=prefix
+    )
+
+    assert returned_prefix == prefix
+    assert chunk_count == 2
+
+    chunk_contents: dict[Path, object] = {}
+
+    for file in (store_path / prefix).iterdir():
+        with file.open("rb") as f:
+            chunk_contents[file] = json.load(f)
+
+    assert chunk_contents == {
+        store_path / prefix / "0-in.bin": [1, 2],
+        store_path / prefix / "1-in.bin": [3],
+    }
