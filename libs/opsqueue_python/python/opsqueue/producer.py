@@ -12,9 +12,12 @@ from opsqueue.common import (
     DEFAULT_SERIALIZATION_FORMAT,
 )
 from opsqueue.exceptions import (
+    InlineOutputStorageUnsupportedError,
+    SubmissionCancelledError,
     SubmissionFailedError,
     SubmissionNotCancellableError,
     SubmissionNotFoundError,
+    SubmissionPausedError,
     TooManyMatchingSubmissionsError,
 )
 from . import opsqueue_internal
@@ -32,9 +35,12 @@ from .opsqueue_internal import (  # type: ignore[import-not-found]
 
 __all__ = [
     "ChunkFailed",
+    "InlineOutputStorageUnsupportedError",
     "InitialSubmissionStatus",
     "ProducerClient",
     "SubmissionCompleted",
+    "SubmissionCancelledError",
+    "SubmissionPausedError",
     "SubmissionFailed",
     "SubmissionFailedError",
     "SubmissionId",
@@ -239,6 +245,78 @@ class ProducerClient:
             chunk_size=chunk_size,
         )
         return self.blocking_stream_completed_submission_chunks(submission_id, timeout)
+
+    def stream_submission_chunks(
+        self,
+        submission_id: SubmissionId,
+    ) -> Iterator[bytes]:
+        """
+        Yield completed output chunks progressively in chunk-index order.
+
+        While the submission is in progress, this yields each contiguous prefix
+        of ready chunks. A paused submission raises `SubmissionPausedError`;
+        the same iterator can be read again after the submission is resumed. A
+        completed submission ends iteration after all outputs are yielded; a
+        failed submission raises `SubmissionFailedError`. Already-ready chunks
+        may still be yielded after the submission fails; failure is reported
+        when the iterator next polls the submission status.
+
+        `SubmissionPausedError`, `ChunkRetrievalError`, and transient
+        `InternalProducerClientError` failures leave the iterator usable: call
+        `next()` again after the underlying condition is resolved. The other
+        errors below end iteration and cannot be retried on this iterator.
+
+        Non-empty submissions inserted with `insert_submission_direct` use
+        inline output storage and cannot be streamed by this method.
+
+        Raises:
+        - `SubmissionNotFoundError` if the submission does not exist.
+        - `SubmissionFailedError` if the submission fails.
+        - `InternalProducerClientError` if polling the submission fails.
+        - `ChunkRetrievalError` if an output chunk cannot be retrieved.
+        - `SubmissionCancelledError` if the submission is cancelled.
+        - `SubmissionPausedError` if the submission is paused.
+        - `InlineOutputStorageUnsupportedError` if the submission uses inline output storage.
+        """
+        return self.inner.stream_submission_chunks(  # type: ignore[no-any-return]
+            submission_id
+        )
+
+    async def async_stream_submission_chunks(
+        self,
+        submission_id: SubmissionId,
+    ) -> AsyncIterator[bytes]:
+        """
+        Yield completed output chunks progressively in chunk-index order.
+
+        While the submission is in progress, this yields each contiguous prefix
+        of ready chunks. A paused submission raises `SubmissionPausedError`;
+        the same iterator can be read again after the submission is resumed. A
+        completed submission ends iteration after all outputs are yielded; a
+        failed submission raises `SubmissionFailedError`. Already-ready chunks
+        may still be yielded after the submission fails; failure is reported
+        when the iterator next polls the submission status.
+
+        `SubmissionPausedError`, `ChunkRetrievalError`, and transient
+        `InternalProducerClientError` failures leave the iterator usable: call
+        `anext()` again after the underlying condition is resolved. The other
+        errors below end iteration and cannot be retried on this iterator.
+
+        Non-empty submissions inserted with `insert_submission_direct` use
+        inline output storage and cannot be streamed by this method.
+
+        Raises:
+        - `SubmissionNotFoundError` if the submission does not exist.
+        - `SubmissionFailedError` if the submission fails.
+        - `InternalProducerClientError` if polling the submission fails.
+        - `ChunkRetrievalError` if an output chunk cannot be retrieved.
+        - `SubmissionCancelledError` if the submission is cancelled.
+        - `SubmissionPausedError` if the submission is paused.
+        - `InlineOutputStorageUnsupportedError` if the submission uses inline output storage.
+        """
+        return await self.inner.async_stream_submission_chunks(  # type: ignore[no-any-return]
+            submission_id
+        )
 
     async def async_run_submission_chunks(
         self,

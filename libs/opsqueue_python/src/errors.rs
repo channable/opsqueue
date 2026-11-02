@@ -14,9 +14,12 @@ use crate::common;
 
 // Expected errors:
 import_exception!(opsqueue.exceptions, SubmissionFailedError);
+import_exception!(opsqueue.exceptions, SubmissionCancelledError);
+import_exception!(opsqueue.exceptions, SubmissionPausedError);
 
 // Incorrect usage errors:
 import_exception!(opsqueue.exceptions, IncorrectUsageError);
+import_exception!(opsqueue.exceptions, InlineOutputStorageUnsupportedError);
 import_exception!(opsqueue.exceptions, TryFromIntError);
 import_exception!(opsqueue.exceptions, SubmissionNotFoundError);
 import_exception!(opsqueue.exceptions, SubmissionNotCancellableError);
@@ -151,6 +154,7 @@ impl From<CError<TooManyMatchingSubmissions>> for PyErr {
     }
 }
 
+#[derive(Debug)]
 pub struct SubmissionFailed(
     pub crate::common::SubmissionFailed,
     pub crate::common::ChunkFailed,

@@ -105,8 +105,12 @@ impl From<u63> for ChunkIndex {
 
 #[pyclass(frozen, eq, module = "opsqueue_internal")]
 pub enum Strategy {
+    /// Prioritize older submissions; candidate chunks within each submission
+    /// are ordered by ascending chunk index.
     #[pyo3(constructor=())]
     Oldest(),
+    /// Prioritize newer submissions. Candidate chunks within each submission
+    /// are ordered by ascending chunk index.
     #[pyo3(constructor=())]
     Newest(),
     #[pyo3(constructor=())]
