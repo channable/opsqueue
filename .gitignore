@@ -26,3 +26,6 @@ target/
 .mypy_cache
 .dmypy.json
 .ruff_cache
+
+# Visual Studio Code
+.vscode
