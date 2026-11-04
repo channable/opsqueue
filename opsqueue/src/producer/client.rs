@@ -475,13 +475,15 @@ mod tests {
         let pool = WriterPool::new(pool);
         let mut conn = pool.writer_conn().await.unwrap();
         submission::db::insert_submission_from_chunks(
-            None,
-            vec![None, None, None],
+            crate::producer::ChunkContents::Direct {
+                contents: vec![None, None, None],
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &std::sync::Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .expect("Insertion failed");

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::common::errors::E::{L, R};
-use crate::common::submission::{self, InitialSubmissionStatus, SubmissionId};
+use crate::common::submission::{self, SubmissionId};
 use crate::common::{MaxSubmissions, StrategicMetadataMap};
-use crate::db::{self, DBPools};
+use crate::db::DBPools;
 use crate::tracing::anyhow_as_dyn_error;
 use axum::extract;
 use axum::extract::{Path, State};
@@ -13,19 +13,25 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::Notify;
 
-use super::common::{ChunkContents, InsertSubmission};
+use super::common::InsertSubmission;
 
 pub async fn serve_for_tests(database_pool: DBPools, server_addr: Box<str>) {
     let max_submissions = crate::config::Config::default().max_submissions_returned;
-    ServerState::new(database_pool, Arc::new(Notify::new()), max_submissions)
-        .serve_for_tests(server_addr)
-        .await;
+    ServerState::new(
+        database_pool,
+        Arc::new(Notify::new()),
+        tokio::sync::broadcast::channel(10).0,
+        max_submissions,
+    )
+    .serve_for_tests(server_addr)
+    .await;
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
     pool: DBPools,
     notify_on_insert: Arc<Notify>,
+    submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
     max_submissions: MaxSubmissions,
 }
 
@@ -33,11 +39,13 @@ impl ServerState {
     pub fn new(
         pool: DBPools,
         notify_on_insert: Arc<Notify>,
+        submission_status_changed: tokio::sync::broadcast::Sender<SubmissionId>,
         max_submissions: MaxSubmissions,
     ) -> Self {
         ServerState {
             pool,
             notify_on_insert,
+            submission_status_changed,
             max_submissions,
         }
     }
@@ -130,16 +138,15 @@ async fn cancel_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::cancel_submission(submission_id, &mut conn).await {
-        Ok(()) => Ok(()),
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(L(not_found_err))) => {
-            Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response())
-        }
-        Err(R(R(not_cancellable_err))) => {
-            Err((StatusCode::CONFLICT, Json(not_cancellable_err)).into_response())
-        }
-    }
+    submission::db::cancel_submission(submission_id, &mut conn, &state.submission_status_changed)
+        .await
+        .map_err(|err| match err {
+            L(db_err) => ServerError(db_err.into()).into_response(),
+            R(L(not_found_err)) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+            R(R(not_cancellable_err)) => {
+                (StatusCode::CONFLICT, Json(not_cancellable_err)).into_response()
+            }
+        })
 }
 
 /// 200 if the submission was successfully unpaused.
@@ -154,15 +161,17 @@ async fn unpause_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::unpause_submission(submission_id, &mut conn).await {
-        Ok(()) => {
-            // Wake up any waiting consumers now that new chunks are available.
-            state.notify_on_insert.notify_waiters();
-            Ok(())
-        }
-        Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
-        Err(R(not_found_err)) => Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response()),
-    }
+    submission::db::unpause_submission(
+        submission_id,
+        &mut conn,
+        &state.notify_on_insert,
+        &state.submission_status_changed,
+    )
+    .await
+    .map_err(|err| match err {
+        L(db_err) => ServerError(db_err.into()).into_response(),
+        R(not_found_err) => (StatusCode::NOT_FOUND, Json(not_found_err)).into_response(),
+    })
 }
 
 async fn submission_status(
@@ -213,33 +222,17 @@ async fn insert_submission(
     Json(request): Json<InsertSubmission>,
 ) -> Result<Json<SubmissionId>, ServerError> {
     let mut conn = state.pool.writer_conn().await?;
-    let (prefix, chunk_contents) = match request.chunk_contents {
-        ChunkContents::Direct { contents } => (None, contents),
-        ChunkContents::SeeObjectStorage { prefix, count } => {
-            let count = u64::from(count);
-            (Some(prefix), (0..count).map(|_index| None).collect())
-        }
-    };
+
     let submission_id = submission::db::insert_submission_from_chunks(
-        prefix,
-        chunk_contents,
+        request.chunk_contents,
         request.metadata,
         request.strategic_metadata,
         request.chunk_size.unwrap_or_default(),
         request.initial_status.clone(),
         &mut conn,
+        &state.notify_on_insert,
     )
     .await?;
-
-    // As we already have access to the write checkpoint
-    // and submission inserts result in large DB mutations from time to time
-    // this is the moment to perform an extra WAL checkpoint
-    let _ = db::perform_explicit_wal_checkpoint(conn).await;
-
-    // Notify waiting consumers, but only for submissions which start running immediately.
-    if request.initial_status == InitialSubmissionStatus::InProgress {
-        state.notify_on_insert.notify_waiters();
-    }
 
     Ok(Json(submission_id))
 }

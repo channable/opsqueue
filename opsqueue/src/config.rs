@@ -105,6 +105,25 @@ pub struct Config {
     /// `lookup_submission_ids_by_strategic_metadata` request may return.
     #[arg(long, default_value_t = default_max_submissions_returned())]
     pub max_submissions_returned: MaxSubmissions,
+
+    /// Capacity of the submission-status notification channel. Lagging receivers must do a full scan.
+    #[arg(long, default_value_t = 2048)]
+    pub submission_status_change_channel_capacity: usize,
+
+    #[arg(long)]
+    pub delegation_server_url: Option<url::Url>,
+
+    /// Interval between fallback scans of all delegated submissions.
+    #[arg(long, default_value = "5 seconds")]
+    pub delegation_full_scan_period: humantime::Duration,
+
+    /// Time to batch delegation status changes after the first notification.
+    #[arg(long, default_value = "100ms")]
+    pub delegation_debounce_period: humantime::Duration,
+
+    /// Maximum number of delegated status updates sent in a request.
+    #[arg(long, default_value_t = 2048)]
+    pub delegation_batch_size: usize,
 }
 
 impl Default for Config {
@@ -122,6 +141,13 @@ impl Default for Config {
         let max_chunk_retries = 10;
         let max_submission_age = humantime::Duration::from_str("1 hour").expect("valid humantime");
         let max_submissions_returned = default_max_submissions_returned();
+        let delegation_server_url = None;
+        let submission_status_change_channel_capacity = 2048;
+        let delegation_full_scan_period =
+            humantime::Duration::from_str("5 seconds").expect("valid humantime");
+        let delegation_debounce_period =
+            humantime::Duration::from_str("100ms").expect("valid humantime");
+        let delegation_batch_size = 2048;
         Config {
             port,
             report_bound_port_pipe,
@@ -133,6 +159,11 @@ impl Default for Config {
             max_chunk_retries,
             max_submission_age,
             max_submissions_returned,
+            submission_status_change_channel_capacity,
+            delegation_server_url,
+            delegation_full_scan_period,
+            delegation_debounce_period,
+            delegation_batch_size,
         }
     }
 }
