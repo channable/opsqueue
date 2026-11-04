@@ -151,6 +151,7 @@ impl From<&SubmissionId> for std::time::SystemTime {
 ///
 /// Also see [`SubmissionCompleted`] and [`SubmissionFailed`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "server-logic", derive(sqlx::FromRow))]
 pub struct Submission {
     pub id: SubmissionId,
     pub prefix: Option<String>,
@@ -159,6 +160,7 @@ pub struct Submission {
     pub chunk_size: ChunkSize,
     pub metadata: Option<Metadata>,
     #[serde(default)]
+    #[cfg_attr(feature = "server-logic", sqlx(json))]
     pub strategic_metadata: StrategicMetadataMap,
     pub otel_trace_carrier: String,
 }
