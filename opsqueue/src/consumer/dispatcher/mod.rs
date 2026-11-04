@@ -171,6 +171,11 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    #[cfg(test)]
+    pub(crate) fn is_reserved(&self, chunk_id: &ChunkId) -> bool {
+        self.reserver.is_reserved(chunk_id)
+    }
+
     #[must_use]
     pub fn new(reservation_expiration: Duration) -> Self {
         let reserver = Reserver::new(reservation_expiration);

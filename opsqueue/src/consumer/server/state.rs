@@ -189,7 +189,7 @@ mod tests {
         consumer.complete_chunk(chunk_id, None).await;
         drop(consumer);
 
-        assert!(server_state.dispatcher.reserver().is_reserved(&chunk_id));
+        assert!(server_state.dispatcher.is_reserved(&chunk_id));
         assert!(
             tokio::time::timeout(Duration::from_millis(100), notification)
                 .await
