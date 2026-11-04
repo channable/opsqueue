@@ -143,6 +143,35 @@ class ProducerClient:
             )
             return _async_unchunk_iterator(results_iter, serialization_format)
 
+    def store_chunks(
+        self,
+        ops: Iterable[Any],
+        *,
+        chunk_size: int,
+        serialization_format: SerializationFormat = DEFAULT_SERIALIZATION_FORMAT,
+        prefix: str | None = None,
+    ) -> tuple[str, int]:
+        """
+        Stores input chunks on GCS.
+
+        A prefix is automatically generated, but optionally one can be supplied. When
+        doing so take into account that the prefix will be part of a URL, and thus you
+        probably don't want to use characters like `/`, `#`, `?`, etc. URL escape the
+        value if in doubt.
+
+        Returns the prefix where the chunks are stored and the total amount of chunks.
+
+        Chunking is done automatically, based on the provided chunk size.
+
+        Raises:
+        - `ChunkSizeIsZeroError` if passing an incorrect chunk size of zero;
+        - `InternalProducerClientError` if there is a low-level internal error.
+        """
+        return self.inner.store_chunks(  # type: ignore[no-any-return]
+            _chunk_iterator(ops, chunk_size, serialization_format),
+            prefix,
+        )
+
     def insert_submission(
         self,
         ops: Iterable[Any],
