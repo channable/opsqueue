@@ -889,13 +889,15 @@ pub mod test {
         let mut conn = db_pools.writer_conn().await.unwrap();
         let input_chunks: Vec<_> = (0..10_000).map(|x| Some(format!("{x}").into())).collect();
         crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            input_chunks.clone(),
+            crate::producer::ChunkContents::Direct {
+                contents: input_chunks.clone(),
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &std::sync::Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .unwrap();

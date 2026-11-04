@@ -576,13 +576,15 @@ mod tests {
     async fn insert_one_chunk(db_pools: &db::DBPools) -> SubmissionId {
         let mut conn = db_pools.writer_conn().await.unwrap();
         crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            vec![Some("retry me".into())],
+            crate::producer::ChunkContents::Direct {
+                contents: vec![Some("retry me".into())],
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .unwrap()
@@ -633,13 +635,15 @@ mod tests {
             Some("e".into()),
         ];
         crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            input_chunks.clone(),
+            crate::producer::ChunkContents::Direct {
+                contents: input_chunks.clone(),
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .unwrap();

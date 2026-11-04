@@ -311,6 +311,7 @@ pub mod db {
     use crate::common::chunk::db::delete_chunks_notx;
     use crate::common::extension::Extension;
     use crate::db::DBPools;
+    use crate::producer::ChunkContents;
     use crate::tracing::as_dyn_error;
     use crate::{
         common::{
@@ -321,6 +322,7 @@ pub mod db {
             },
             submission::SubmissionPaused,
         },
+        db,
         db::{Connection, True, WriterConnection},
     };
     use axum_prometheus::metrics::{counter, histogram};
@@ -613,18 +615,25 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if insertion or follow-up completion updates fail.
-    #[tracing::instrument(skip(metadata, chunks_contents, conn))]
+    #[tracing::instrument(skip(metadata, chunk_contents, conn, notify_on_insert))]
     pub async fn insert_submission_from_chunks(
-        prefix: Option<String>,
-        chunks_contents: Vec<chunk::Content>,
+        chunk_contents: ChunkContents,
         metadata: Option<Metadata>,
         strategic_metadata: StrategicMetadataMap,
         chunk_size: ChunkSize,
         initial_status: InitialSubmissionStatus,
         mut conn: impl WriterConnection,
+        notify_on_insert: &Arc<Notify>,
     ) -> Result<SubmissionId, DatabaseError> {
+        let (prefix, physical_chunk_contents) = match chunk_contents {
+            ChunkContents::Direct { contents } => (None, contents),
+            ChunkContents::SeeObjectStorage { prefix, count } => {
+                let count = u64::from(count);
+                (Some(prefix), (0..count).map(|_index| None).collect())
+            }
+        };
         let submission_id = SubmissionId::new();
-        let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
+        let len = physical_chunk_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
         let otel_trace_carrier = crate::tracing::current_context_to_json();
         let submission = Submission {
             id: submission_id,
@@ -636,7 +645,7 @@ pub mod db {
             strategic_metadata,
             otel_trace_carrier,
         };
-        let chunks: Vec<Chunk> = chunks_contents
+        let chunks: Vec<Chunk> = physical_chunk_contents
             .into_iter()
             .enumerate()
             .map(move |(chunk_index, uri)| {
@@ -652,6 +661,16 @@ pub mod db {
             InitialSubmissionStatus::InProgress => {
                 insert_submission(submission, chunks, &mut conn).await?;
             }
+        }
+
+        // As we already have access to the write checkpoint
+        // and submission inserts result in large DB mutations from time to time
+        // this is the moment to perform an extra WAL checkpoint
+        let _ = db::perform_explicit_wal_checkpoint(conn).await;
+
+        // Notify waiting consumers, but only for submissions which start running immediately.
+        if initial_status == InitialSubmissionStatus::InProgress {
+            notify_on_insert.notify_waiters();
         }
 
         Ok(submission_id)
@@ -1820,13 +1839,13 @@ pub mod test {
         let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
 
         let submission_id = insert_submission_from_chunks(
-            None,
-            chunks,
+            crate::producer::ChunkContents::Direct { contents: chunks },
             None,
             strategic_metadata.clone(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &Arc::new(Notify::new()),
         )
         .await
         .expect("insertion failed");
@@ -1907,46 +1926,54 @@ pub mod test {
 
             let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
             let old_one = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let old_two = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let old_three = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let old_four_unfailed = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
@@ -1986,35 +2013,41 @@ pub mod test {
             let cutoff_timestamp = Utc::now();
 
             let too_new_one = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let _too_new_two_unfailed = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let too_new_three = insert_submission_from_chunks(
-                None,
-                chunks_contents.clone(),
+                crate::producer::ChunkContents::Direct {
+                    contents: chunks_contents.clone(),
+                },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
@@ -2066,18 +2099,13 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         insert_submission_from_chunks(
-            // prefix
+            crate::producer::ChunkContents::Direct { contents: vec![] },
             None,
-            // chunks
-            vec![],
-            // metadata
-            None,
-            // strategic_metadata
             StrategicMetadataMap::default(),
-            // chunk size
             ChunkSize::default(),
             InitialSubmissionStatus::InProgress,
             &mut conn,
+            &Arc::new(Notify::new()),
         )
         .await
         .expect("insertion failed");

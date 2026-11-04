@@ -375,13 +375,15 @@ mod test {
 
         let mut writer_conn = pools.writer_conn().await.unwrap();
         let submission_id = crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            vec![Some("a".into()), Some("b".into()), Some("c".into())],
+            crate::producer::ChunkContents::Direct {
+                contents: vec![Some("a".into()), Some("b".into()), Some("c".into())],
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut writer_conn,
+            &std::sync::Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .unwrap();

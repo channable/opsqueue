@@ -155,13 +155,15 @@ mod tests {
         let db_pools = DBPools::from_test_pool(&pool);
         let mut conn = db_pools.writer_conn().await.unwrap();
         crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            vec![Some("work".into())],
+            crate::producer::ChunkContents::Direct {
+                contents: vec![Some("work".into())],
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &Arc::new(Notify::new()),
         )
         .await
         .unwrap();

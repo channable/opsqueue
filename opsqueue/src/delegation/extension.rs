@@ -96,24 +96,24 @@ mod tests {
         let (referenced, unreferenced) = {
             let mut conn = db.writer_conn().await.unwrap();
             let referenced = insert_submission_from_chunks(
-                None,
-                vec![],
+                crate::producer::ChunkContents::Direct { contents: vec![] },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::InProgress,
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();
             let unreferenced = insert_submission_from_chunks(
-                None,
-                vec![],
+                crate::producer::ChunkContents::Direct { contents: vec![] },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 InitialSubmissionStatus::InProgress,
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap();

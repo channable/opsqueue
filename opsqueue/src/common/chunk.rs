@@ -1011,13 +1011,15 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let submission_id = crate::common::submission::db::insert_submission_from_chunks(
-            None,
-            vec![Some("first".into())],
+            crate::producer::ChunkContents::Direct {
+                contents: vec![Some("first".into())],
+            },
             None,
             StrategicMetadataMap::default(),
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            &std::sync::Arc::new(tokio::sync::Notify::new()),
         )
         .await
         .unwrap();

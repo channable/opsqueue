@@ -863,13 +863,13 @@ pub mod test {
         ) -> SubmissionId {
             let mut conn = self.pool.writer_conn().await.unwrap();
             insert_submission_from_chunks(
-                None,
-                chunks,
+                crate::producer::ChunkContents::Direct { contents: chunks },
                 None,
                 StrategicMetadataMap::default(),
                 ChunkSize::default(),
                 initial_status,
                 &mut conn,
+                &Arc::new(Notify::new()),
             )
             .await
             .unwrap()
