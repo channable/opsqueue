@@ -31,9 +31,15 @@ impl Drop for ConsumerState {
 
         // We're not tracking chunk durations that are unreserved during consumer shutdown,
         // as those will be by definition unfinished
+        let had_reservations = !reservations.is_empty();
         self.server_state
             .dispatcher
             .finish_reservations_sync(reservations.iter());
+        // Notify consumers if the dropped consumer had active chunks that should be picked up
+        // again.
+        if had_reservations {
+            self.server_state.notify_on_insert.notify_waiters();
+        }
     }
 }
 
