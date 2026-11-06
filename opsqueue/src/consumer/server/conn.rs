@@ -211,6 +211,11 @@ impl ConsumerConn {
         use SyncServerToClientResponse::ChunksReserved;
         let maybe_response = match msg.contents {
             WantToReserveChunks { max, strategy } => {
+                // Start listening on `notify_on_insert` immediately. In order to wake consumers
+                // when a notification happens concurrently with the execution of the code below.
+                let mut notification = Box::pin(self.notify_on_insert.clone().notified_owned());
+                notification.as_mut().enable();
+
                 let chunks_or_err = self
                     .consumer_state
                     .fetch_and_reserve_chunks(strategy.clone(), max, &self.tx)
@@ -234,10 +239,9 @@ impl ConsumerConn {
                             "No work to do for {} / {max} / {strategy:?}, retrying later",
                             msg.nonce
                         );
-                        let notifier = self.notify_on_insert.clone();
                         let tx2 = self.tx2.clone();
                         tokio::spawn(async move {
-                            notifier.notified().await;
+                            notification.await;
                             let _ = tx2.send(RetryReservation {
                                 nonce: msg.nonce,
                                 max,

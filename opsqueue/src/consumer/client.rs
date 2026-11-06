@@ -566,7 +566,6 @@ mod tests {
     use chunk::ChunkSize;
     use std::time::Duration;
     use tokio::sync::Notify;
-    use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
     use super::*;
@@ -611,18 +610,13 @@ mod tests {
             cancellation_token,
             Duration::from_mins(1),
         ));
-
-        yield_now().await;
+        yield_now().await; // Give the server a chance to bind to the socket.
 
         let client = Client::new(ws_uri).await.unwrap();
-        yield_now().await;
-
         let chunks = client
             .reserve_chunks(3, Strategy::Oldest)
             .await
             .expect("No internal error");
-        yield_now().await;
-
         assert_eq!(
             chunks
                 .iter()
@@ -637,9 +631,204 @@ mod tests {
         let two = client.reserve_chunks(1, Strategy::Oldest);
         let three = client.reserve_chunks(1, Strategy::Oldest);
 
-        yield_now().await;
-
         let _three = three.await;
         let _two = two.await;
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn retry_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let uri = "0.0.0.0:10084";
+        let ws_uri = "ws://0.0.0.0:10084";
+        let cancellation_token = CancellationToken::new();
+        let task_tracker = TaskTracker::new();
+
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        let input_chunks = vec![Some("a".into())];
+        let notify_on_insert = Arc::new(Notify::new());
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            input_chunks.clone(),
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut conn,
+            notify_on_insert.clone(),
+        )
+        .await
+        .unwrap();
+
+        let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
+            db_pools,
+            uri.into(),
+            cancellation_token,
+            Duration::from_mins(1),
+        ));
+        yield_now().await; // Give the server a chance to bind to the socket.
+
+        let client = Client::new(ws_uri).await.unwrap();
+        let (chunk, _) = client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+        let next_reservation = client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "Reservation should remain pending until the chunk is retried"
+        );
+
+        client.fail_chunk(chunk_id, "retry".into()).await.unwrap();
+
+        let (chunk, _) = tokio::time::timeout(Duration::from_secs(2), &mut next_reservation)
+            .await
+            .expect("Retrying a failed chunk should wake the waiting consumer")
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+        assert_eq!(chunk.submission_id, submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn disconnect_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let uri = "0.0.0.0:10085";
+        let ws_uri = "ws://0.0.0.0:10085";
+        let cancellation_token = CancellationToken::new();
+        let task_tracker = TaskTracker::new();
+
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        let input_chunks = vec![Some("a".into())];
+        let notify_on_insert = Arc::new(Notify::new());
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            input_chunks.clone(),
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut conn,
+            notify_on_insert.clone(),
+        )
+        .await
+        .unwrap();
+
+        let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
+            db_pools,
+            uri.into(),
+            cancellation_token,
+            Duration::from_mins(1),
+        ));
+        yield_now().await; // Give the server a chance to bind to the socket.
+
+        let first_client = Client::new(ws_uri).await.unwrap();
+        let waiting_client = Client::new(ws_uri).await.unwrap();
+
+        let (chunk, _) = first_client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let next_reservation = waiting_client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "Reservation should remain pending until the first client disconnects"
+        );
+
+        drop(first_client);
+
+        let (chunk, _) = tokio::time::timeout(Duration::from_secs(2), &mut next_reservation)
+            .await
+            .expect("Disconnecting the first client should wake the waiting consumer")
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+        assert_eq!(chunk.submission_id, submission_id);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn failed_completion_wakes_waiting_consumer(pool: sqlx::SqlitePool) {
+        let db_pools = db::DBPools::from_test_pool(&pool);
+        let uri = "0.0.0.0:10086";
+        let ws_uri = "ws://0.0.0.0:10086";
+        let cancellation_token = CancellationToken::new();
+        let task_tracker = TaskTracker::new();
+
+        let mut conn = db_pools.writer_conn().await.unwrap();
+        let input_chunks = vec![Some("a".into())];
+        let notify_on_insert = Arc::new(Notify::new());
+        let submission_id = crate::common::submission::db::insert_submission_from_chunks(
+            None,
+            input_chunks.clone(),
+            None,
+            StrategicMetadataMap::default(),
+            ChunkSize::default(),
+            InitialSubmissionStatus::default(),
+            &mut conn,
+            notify_on_insert.clone(),
+        )
+        .await
+        .unwrap();
+
+        let _server_handle = task_tracker.spawn(crate::consumer::server::serve_for_tests(
+            db_pools,
+            uri.into(),
+            cancellation_token,
+            Duration::from_mins(1),
+        ));
+        yield_now().await; // Give the server a chance to bind to the socket.
+
+        let client = Client::new(ws_uri).await.unwrap();
+
+        let (chunk, _) = client
+            .reserve_chunks(1, Strategy::Oldest)
+            .await
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+
+        assert_eq!(chunk.submission_id, submission_id);
+
+        let chunk_id = ChunkId::from((chunk.submission_id, chunk.chunk_index));
+        let next_reservation = client.reserve_chunks(1, Strategy::Oldest);
+        tokio::pin!(next_reservation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut next_reservation)
+                .await
+                .is_err(),
+            "Reservation should remain pending until the DB completion fails"
+        );
+
+        sqlx::query(
+            "CREATE TRIGGER reject_completion BEFORE INSERT ON chunks_completed
+             BEGIN SELECT RAISE(ABORT, 'completion rejected'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        client.complete_chunk(chunk_id, None).await.unwrap();
+
+        let (chunk, _) = tokio::time::timeout(Duration::from_secs(2), &mut next_reservation)
+            .await
+            .expect("A failed DB completion should wake the waiting consumer")
+            .expect("No internal error")
+            .pop()
+            .unwrap();
+        assert_eq!(chunk.submission_id, submission_id);
     }
 }
