@@ -563,9 +563,9 @@ impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> 
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use std::time::Duration;
-
     use chunk::ChunkSize;
+    use std::time::Duration;
+    use tokio::sync::Notify;
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
@@ -611,6 +611,9 @@ mod tests {
                 chunks.reverse();
             }),
         ];
+
+        let notify_on_insert = Arc::new(Notify::new());
+
         // Run the test for each strategy and expected chunk ordering pair.
         for (strategy, order_chunks) in cases {
             let submission_id = crate::common::submission::db::insert_submission_from_chunks(
@@ -621,6 +624,7 @@ mod tests {
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                notify_on_insert.clone(),
             )
             .await
             .unwrap();
