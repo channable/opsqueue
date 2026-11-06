@@ -59,7 +59,7 @@ use std::{marker::PhantomData, num::NonZero, time::Duration};
 use futures::future::BoxFuture;
 use magic::Bool;
 use sqlx::{
-    Connection as _, Sqlite, SqliteConnection, SqlitePool,
+    Sqlite, SqliteConnection, SqlitePool,
     migrate::MigrateDatabase,
     sqlite::SqlitePoolOptions,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -133,15 +133,9 @@ pub trait Connection {
             + Sync
             + 't,
         O: Send,
-        E: From<sqlx::Error> + Send,
-    {
-        self.get_inner()
-            .transaction(move |inner| {
-                let conn = Conn::from_tx(inner);
-                f(conn)
-            })
-            .await
-    }
+        E: From<sqlx::Error> + Send;
+
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static);
 }
 
 /// A writable database connection.
@@ -170,6 +164,23 @@ where
 
     fn get_inner(&mut self) -> &mut SqliteConnection {
         <C as Connection>::get_inner(*self)
+    }
+
+    #[allow(async_fn_in_trait)]
+    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    where
+        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+            + Send
+            + Sync
+            + 't,
+        O: Send,
+        E: From<sqlx::Error> + Send,
+    {
+        <C as Connection>::transaction(*self, f).await
+    }
+
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
+        <C as Connection>::on_commit(*self, f);
     }
 }
 

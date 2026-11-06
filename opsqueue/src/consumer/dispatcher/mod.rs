@@ -359,6 +359,7 @@ mod test {
     use crate::common::chunk::ChunkSize;
     use crate::common::submission::InitialSubmissionStatus;
     use crate::db::DBPools;
+    use tokio::sync::Notify;
     use tokio::sync::mpsc::unbounded_channel;
     use ux::u63;
 
@@ -369,6 +370,7 @@ mod test {
         let (stale_chunks_notifier, mut _stale_chunks_receiver) = unbounded_channel::<ChunkId>();
 
         let mut writer_conn = pools.writer_conn().await.unwrap();
+        let notify_on_insert = Arc::new(Notify::new());
         let submission_id = crate::common::submission::db::insert_submission_from_chunks(
             None,
             vec![Some("a".into()), Some("b".into()), Some("c".into())],
@@ -377,6 +379,7 @@ mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut writer_conn,
+            notify_on_insert,
         )
         .await
         .unwrap();

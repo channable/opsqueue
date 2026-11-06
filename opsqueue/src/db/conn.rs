@@ -1,13 +1,12 @@
 //! Concrete implementation of [`Connection`] and related types.
 
-use std::marker::PhantomData;
-
-use sqlx::{Sqlite, SqliteConnection, pool::PoolConnection};
-
 use super::{
     Connection,
     magic::{Bool, False, True},
 };
+use futures::future::BoxFuture;
+use sqlx::{Connection as SqlxConnection, Error, Sqlite, SqliteConnection, pool::PoolConnection};
+use std::marker::PhantomData;
 
 /// A connection to the database.
 ///
@@ -39,10 +38,14 @@ impl<W: Bool> Conn<W> {
         }
     }
     pub(super) fn from_tx<'tx, 'conn>(
-        inner: &'tx mut sqlx::Transaction<'conn, sqlx::Sqlite>,
+        inner: &'tx mut sqlx::Transaction<'conn, Sqlite>,
+        on_commit_callbacks: &'tx mut Vec<Box<dyn FnOnce() + Sync + Send>>,
     ) -> Conn<W, Tx<'tx, 'conn>> {
         Conn {
-            inner: InnerConn::InTransaction(Tx(inner)),
+            inner: InnerConn::InTransaction(Tx {
+                inner,
+                on_commit_callbacks,
+            }),
             _type: PhantomData,
         }
     }
@@ -57,12 +60,29 @@ pub type Reader<Tx> = Conn<False, Tx>;
 /// A database transaction.
 ///
 /// Used as a parameter to [`Conn`] when a transaction is active.
-pub struct Tx<'tx, 'conn>(&'tx mut sqlx::Transaction<'conn, sqlx::Sqlite>);
+pub struct Tx<'tx, 'conn> {
+    inner: &'tx mut sqlx::Transaction<'conn, sqlx::Sqlite>,
+    on_commit_callbacks: &'tx mut Vec<Box<dyn FnOnce() + Sync + Send>>,
+}
 
 /// Used for the `Tx` slot of the [`Conn`] if we're not in a transaction.
 ///
 /// This is an empty value that can never be populated.
 pub enum NoTransaction {}
+
+impl<Writable> Conn<Writable, NoTransaction>
+where
+    Writable: Bool,
+{
+    fn get_pool_connection(&mut self) -> &mut PoolConnection<Sqlite> {
+        match &mut self.inner {
+            InnerConn::Pool(pool_connection) => pool_connection,
+            InnerConn::InTransaction(_) => {
+                unreachable!("connection shouldn't have been in a transaction but it was")
+            }
+        }
+    }
+}
 
 impl<Writable> Connection for Conn<Writable, NoTransaction>
 where
@@ -71,9 +91,57 @@ where
     type Writable = Writable;
     type Transaction = False;
     fn get_inner(&mut self) -> &mut SqliteConnection {
+        self.get_pool_connection()
+    }
+
+    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    where
+        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+            + Send
+            + Sync
+            + 't,
+        O: Send,
+        E: From<Error> + Send,
+    {
+        let mut on_commit_callbacks = Vec::new();
+        // Note that we can't use `SqlxConnection::transaction` because it forces
+        // `on_commit_callbacks` to have a `'static` lifetime. Therefore we use `begin`, `commit`
+        // and `rollback` explicitly.
+        let mut transaction = SqlxConnection::begin(self.get_inner()).await?;
+        match f(Conn::from_tx(&mut transaction, &mut on_commit_callbacks)).await {
+            Ok(result) => {
+                transaction.commit().await?;
+
+                for callback in on_commit_callbacks {
+                    callback();
+                }
+
+                Ok(result)
+            }
+            Err(error) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
+        }
+    }
+
+    fn on_commit(&mut self, f: impl FnOnce()) {
+        // Since we are not in a transaction, any mutations are already committed, so we run `f`
+        // directly.
+        f();
+    }
+}
+
+impl<'tx, 'conn, Writable> Conn<Writable, Tx<'tx, 'conn>>
+where
+    Writable: Bool,
+{
+    fn get_tx<'a>(&'a mut self) -> &'a mut Tx<'tx, 'conn> {
         match &mut self.inner {
-            InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::InTransaction(_) => unreachable!(),
+            InnerConn::Pool(_) => {
+                unreachable!("connection should have been in a transaction but wasn't")
+            }
+            InnerConn::InTransaction(tx) => tx,
         }
     }
 }
@@ -84,11 +152,44 @@ where
 {
     type Writable = Writable;
     type Transaction = True;
+
     fn get_inner(&mut self) -> &mut SqliteConnection {
-        match &mut self.inner {
-            InnerConn::Pool(pool_connection) => pool_connection,
-            InnerConn::InTransaction(transaction) => transaction.0,
+        self.get_tx().inner
+    }
+
+    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    where
+        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+            + Send
+            + Sync
+            + 't,
+        O: Send,
+        E: From<Error> + Send,
+    {
+        let mut on_commit_callbacks = Vec::new();
+        // Note that we can't use `SqlxConnection::transaction` because it forces
+        // `on_commit_callbacks` to have a `'static` lifetime. Therefore we use `begin`, `commit`
+        // and `rollback` explicitly.
+        let mut transaction = SqlxConnection::begin(self.get_inner()).await?;
+        match f(Conn::from_tx(&mut transaction, &mut on_commit_callbacks)).await {
+            Ok(result) => {
+                transaction.commit().await?;
+                // Since this is a nested transaction we propagate the callbacks to the parent
+                // transaction after the nested transaction commits.
+                self.get_tx()
+                    .on_commit_callbacks
+                    .extend(on_commit_callbacks);
+                Ok(result)
+            }
+            Err(error) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
         }
+    }
+
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
+        self.get_tx().on_commit_callbacks.push(Box::new(f));
     }
 }
 

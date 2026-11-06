@@ -16,7 +16,9 @@ use opsqueue::db::{self};
 use std::io::Write;
 use std::num::NonZero;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 // Human-readable name for an OpsQueue strategy.
 type StrategyName = &'static str;
@@ -186,6 +188,7 @@ async fn seed_or_extend(
                 i64::try_from(metadata_value).unwrap(),
             );
             let chunks = vec![Some(b"x".to_vec()); usize::try_from(chunks_per_submission).unwrap()];
+            let notify_on_insert = Arc::new(Notify::new());
             insert_submission_from_chunks(
                 None,
                 chunks,
@@ -194,6 +197,7 @@ async fn seed_or_extend(
                 ChunkSize::default(),
                 InitialSubmissionStatus::default(),
                 &mut conn,
+                notify_on_insert,
             )
             .await
             .unwrap();
