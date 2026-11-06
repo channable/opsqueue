@@ -45,7 +45,7 @@ pub async fn serve_for_tests(
         reservation_expiration,
         config,
     );
-    let router = ServerState::build_router(state);
+    let router = ServerState::build_router(state.run_background());
     let app = Router::new().nest("/consumer", router);
     let listener = tokio::net::TcpListener::bind(&*server_addr)
         .await
@@ -78,8 +78,12 @@ impl ServerState {
         config: &'static Config,
     ) -> Self {
         let dispatcher = Dispatcher::new(reservation_expiration);
-        let (completer, completer_tx) =
-            Completer::new(pool.writer_pool(), &dispatcher, config.max_chunk_retries);
+        let (completer, completer_tx) = Completer::new(
+            pool.writer_pool(),
+            &dispatcher,
+            config.max_chunk_retries,
+            notify_on_insert.clone(),
+        );
         Self {
             pool,
             completer: Some(completer),
@@ -186,6 +190,7 @@ pub struct Completer {
     dispatcher: Dispatcher,
     count: usize,
     max_chunk_retries: u32,
+    notify_on_insert: Arc<Notify>,
 }
 
 impl Completer {
@@ -194,6 +199,7 @@ impl Completer {
         pool: &db::WriterPool,
         dispatcher: &Dispatcher,
         max_chunk_retries: u32,
+        notify_on_insert: Arc<Notify>,
     ) -> (Self, tokio::sync::mpsc::Sender<CompleterMessage>) {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         let pool = pool.clone();
@@ -203,6 +209,7 @@ impl Completer {
             dispatcher: dispatcher.clone(),
             count: 0,
             max_chunk_retries,
+            notify_on_insert,
         };
         (me, tx)
     }
@@ -243,7 +250,19 @@ impl Completer {
                     reservations.lock().expect("No poison").remove(&id);
                     if let Some(started_at) = self
                         .dispatcher
-                        .finish_reservation(&mut conn, id, true)
+                        .finish_reservation(
+                            &mut conn,
+                            id,
+                            // We remove the reservation with a slight delay if the chunk was
+                            // completed. We do this because a concurrent thread in
+                            // `ConsumerState::fetch_and_reserve_chunks` might re-reserve completed
+                            // chunks.
+                            //
+                            // We don't delay when there was an error, and thus the completion
+                            // wasn't successful. Otherwise, the consumers notified below wouldn't
+                            // see the unreserved chunk and would go back to sleep.
+                            db_res.is_ok(),
+                        )
                         .await
                     {
                         histogram!(crate::prometheus::CHUNKS_DURATION_COMPLETED_HISTOGRAM)
@@ -251,6 +270,12 @@ impl Completer {
                     }
                     histogram!(crate::prometheus::CONSUMER_COMPLETE_CHUNK_DURATION)
                         .record(start.elapsed());
+
+                    // Notify consumers if something went wrong and thus the chunk is ready to
+                    // be picked up again.
+                    if db_res.is_err() {
+                        self.notify_on_insert.notify_waiters();
+                    }
 
                     // And while we have the connection already,
                     // let's make an extra WAL checkpoint every so often
@@ -291,6 +316,11 @@ impl Completer {
 
                     histogram!(crate::prometheus::CONSUMER_FAIL_CHUNK_DURATION)
                         .record(start.elapsed());
+
+                    // Notify consumers if this chunk needs to be retried.
+                    if !matches!(failed_permanently.as_ref(), Ok(true)) {
+                        self.notify_on_insert.notify_waiters();
+                    }
 
                     failed_permanently?;
                     Ok(())
