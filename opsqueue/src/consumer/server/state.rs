@@ -19,6 +19,11 @@ use super::ServerState;
 use crate::common::errors::{E, IncorrectUsage, LimitIsZero};
 
 #[derive(Debug, Clone)]
+// OpsQueue server's state (reservations) for a consumer.
+//
+// The reason for tracking reservations in 'ConsumerState' in addition to in the
+// 'Dispatcher' is to handle cleanup of the consumer's reservations when they
+// disconnect.
 pub struct ConsumerState {
     server_state: Arc<ServerState>,
     // The following are the consumer-specific chunks that are currently reserved.

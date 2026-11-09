@@ -199,7 +199,9 @@ impl Dispatcher {
         }
     }
 
-    /// Fetch chunks according to strategy and reserve them in memory.
+    /// Fetch chunks according to strategy and reserve them in memory. This does
+    /// NOT update the '`ConsumerState`', only the 'Dispatcher' reservations are
+    /// updated.
     ///
     /// # Errors
     ///
