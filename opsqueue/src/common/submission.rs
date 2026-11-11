@@ -1343,7 +1343,7 @@ pub mod db {
         id: SubmissionId,
         failed_chunk_id: ChunkIndex,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), DatabaseError> {
         let now = chrono::prelude::Utc::now();
 
         query!(
@@ -1360,7 +1360,10 @@ pub mod db {
             id,
         )
             .fetch_one(conn.get_inner())
-            .await?;
+            .await
+            .map_err(|err| {
+                DatabaseError(err, Some(format!("Failed to move submission {id:?} to submissions_failed for failed chunk {failed_chunk_id:?}")))
+            })?;
         counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
         histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(
             crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
@@ -1380,7 +1383,7 @@ pub mod db {
         failed_chunk_index: ChunkIndex,
         failure: String,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), DatabaseError> {
         conn.transaction(move |mut tx| {
             Box::pin(
                 async move { fail_submission_notx(id, failed_chunk_index, failure, &mut tx).await },
@@ -1399,7 +1402,7 @@ pub mod db {
         failed_chunk_index: ChunkIndex,
         failure: String,
         mut conn: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), DatabaseError> {
         fail_submission_raw(id, failed_chunk_index, &mut conn).await?;
         super::chunk::db::move_chunk_to_failed_chunks(
             (id, failed_chunk_index).into(),

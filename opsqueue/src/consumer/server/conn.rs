@@ -222,7 +222,7 @@ impl ConsumerConn {
                             // In the unlikely event of a DatabaseError,
                             // this is not the client's fault but _our_ fault.
                             // Therefore, we send the client an empty vec back, and log the error.
-                            E::L(DatabaseError(_)) => Some(ChunksReserved(Ok(Vec::new()))),
+                            E::L(DatabaseError(_, _)) => Some(ChunksReserved(Ok(Vec::new()))),
                             E::R(incorrect_usage) => Some(ChunksReserved(Err(incorrect_usage))),
                         }
                     }

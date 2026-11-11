@@ -6,6 +6,11 @@
 //! This is a conscious choice: While it makes some function signatures more complex,
 //! it allows us to be super precise in what kind of errors can and cannot occur
 //! in certain API calls.
+#[cfg(feature = "server-logic")]
+use std::fmt;
+#[cfg(feature = "server-logic")]
+use std::fmt::{Display, Formatter};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,9 +22,29 @@ use super::{
 };
 
 #[cfg_attr(feature = "server-logic", derive(Error, Debug))]
-#[cfg_attr(feature = "server-logic", error("Low-level database error"))]
 #[cfg(feature = "server-logic")]
-pub struct DatabaseError(#[from] pub sqlx::Error);
+pub struct DatabaseError(
+    #[source] pub sqlx::Error,
+    pub Option<String>, // Optional additional context.
+);
+
+#[cfg(feature = "server-logic")]
+impl From<sqlx::Error> for DatabaseError {
+    fn from(error: sqlx::Error) -> Self {
+        Self(error, None)
+    }
+}
+
+#[cfg(feature = "server-logic")]
+impl Display for DatabaseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Low-level database error")?;
+        if let Some(context) = &self.1 {
+            write!(f, ": {context}")?;
+        }
+        Ok(())
+    }
+}
 
 #[cfg(feature = "server-logic")]
 impl<T> From<DatabaseError> for E<DatabaseError, T> {

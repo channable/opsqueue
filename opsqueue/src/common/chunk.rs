@@ -326,7 +326,7 @@ pub mod db {
                     } else {
                         tracing::warn!(
                             "Could not complete chunk {:?} because it was either: \
-                completed, failed, or cancelled before. Ignoring.",
+                            completed, failed, or cancelled before. Ignoring.",
                             chunk_id
                         );
                     }
@@ -352,7 +352,7 @@ pub mod db {
         chunk_id: ChunkId,
         output_content: Option<Vec<u8>>,
         mut tx: impl WriterConnection<Transaction = True>,
-    ) -> sqlx::Result<bool> {
+    ) -> Result<bool, DatabaseError> {
         let now = chrono::prelude::Utc::now();
         let chunk_moved = query!(
             "
@@ -396,8 +396,11 @@ pub mod db {
                 "UPDATE submissions SET chunks_done = chunks_done + 1 WHERE submissions.id = $1 RETURNING submissions.chunk_size;",
                 chunk_id.submission_id,
             )
-                .fetch_one(tx.get_inner())
-                .await?;
+            .fetch_one(tx.get_inner())
+            .await
+            .map_err(|err| {
+                DatabaseError(err, Some(format!("Failed to increment chunks_done for {chunk_id:?}")))
+            })?;
         }
         Ok(chunk_moved)
     }
@@ -413,7 +416,7 @@ pub mod db {
         failure: String,
         mut conn: impl WriterConnection,
         max_retries: u32,
-    ) -> sqlx::Result<bool> {
+    ) -> Result<bool, DatabaseError> {
         let failed_permanently = conn
             .transaction(move |mut tx| {
                 Box::pin(async move {
@@ -443,12 +446,12 @@ pub mod db {
                             )
                             .await?;
 
-                            Ok::<_, sqlx::Error>(true)
+                            Ok::<_, DatabaseError>(true)
                         } else {
                             counter!(crate::prometheus::CHUNKS_RETRIED_COUNTER).increment(1);
                             // When retrying, the chunk re-enters ('stays') in the backlog,
                             // so we *don't* decrement the backlog gauge here.
-                            Ok::<_, sqlx::Error>(false)
+                            Ok::<_, DatabaseError>(false)
                         }
                     } else {
                         tracing::warn!(
@@ -456,7 +459,7 @@ pub mod db {
                             completed, failed, or cancelled before. Ignoring.",
                             chunk_id
                         );
-                        Ok::<_, sqlx::Error>(false)
+                        Ok::<_, DatabaseError>(false)
                     }
                 })
             })
@@ -474,7 +477,7 @@ pub mod db {
         chunk_id: ChunkId,
         failure: String,
         mut conn: impl WriterConnection,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), DatabaseError> {
         let now = chrono::prelude::Utc::now();
         let ChunkId {
             submission_id,
@@ -497,7 +500,11 @@ pub mod db {
     chunk_index,
     submission_id,
     chunk_index,
-    ).fetch_one(conn.get_inner()).await?;
+        ).fetch_one(conn.get_inner())
+         .await
+         .map_err(|err| {
+            DatabaseError(err, Some(format!("Failed to move chunk {chunk_id:?} to chunks_failed")))
+        })?;
 
         counter!(crate::prometheus::CHUNKS_FAILED_COUNTER).increment(1);
         gauge!(crate::prometheus::CHUNKS_BACKLOG_GAUGE).decrement(1);
