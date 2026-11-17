@@ -37,6 +37,7 @@ impl<W: Bool> Conn<W> {
             _type: PhantomData,
         }
     }
+    /// Construct a `Conn` from an existing transaction.
     pub(super) fn from_tx<'tx, 'conn>(
         inner: &'tx mut sqlx::Transaction<'conn, Sqlite>,
         on_commit_callbacks: &'tx mut Vec<Box<dyn FnOnce() + Sync + Send>>,
@@ -74,6 +75,8 @@ impl<Writable> Conn<Writable, NoTransaction>
 where
     Writable: Bool,
 {
+    /// A 'Conn' without an active transaction can provide exclusive
+    /// mutable access to the connection pool.
     fn get_pool_connection(&mut self) -> &mut PoolConnection<Sqlite> {
         match &mut self.inner {
             InnerConn::Pool(pool_connection) => pool_connection,
@@ -94,14 +97,14 @@ where
         self.get_pool_connection()
     }
 
-    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
-        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+        for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
             + Send
             + Sync
             + 't,
-        O: Send,
-        E: From<Error> + Send,
+        Out: Send,
+        Err: From<Error> + Send,
     {
         let mut on_commit_callbacks = Vec::new();
         // Note that we can't use `SqlxConnection::transaction` because it forces
@@ -151,14 +154,14 @@ where
         self.get_tx().inner
     }
 
-    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
-        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+        for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
             + Send
             + Sync
             + 't,
-        O: Send,
-        E: From<Error> + Send,
+        Out: Send,
+        Err: From<Error> + Send,
     {
         let mut on_commit_callbacks = Vec::new();
         // Note that we can't use `SqlxConnection::transaction` because it forces
@@ -187,12 +190,14 @@ impl<Writable> Transaction for Conn<Writable, Tx<'_, '_>>
 where
     Writable: Bool,
 {
+    /// Provide a function to be executed once after committing.
     fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
         self.get_tx().on_commit_callbacks.push(Box::new(f));
     }
 }
 
 #[derive(Debug)]
+// Database access either through a pool of available connections, or an active transaction
 enum InnerConn<Tx> {
     Pool(PoolConnection<Sqlite>),
     InTransaction(Tx),

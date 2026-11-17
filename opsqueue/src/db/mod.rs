@@ -59,7 +59,7 @@ use std::{marker::PhantomData, num::NonZero, time::Duration};
 use futures::future::BoxFuture;
 use magic::Bool;
 use sqlx::{
-    Sqlite, SqliteConnection, SqlitePool,
+    Error, Sqlite, SqliteConnection, SqlitePool,
     migrate::MigrateDatabase,
     sqlite::SqlitePoolOptions,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -126,14 +126,14 @@ pub trait Connection {
     ///
     /// Within this transaction, you can call functions that require `Connection<Transaction = True>`.
     #[allow(async_fn_in_trait)]
-    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
-        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+        for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
             + Send
             + Sync
             + 't,
-        O: Send,
-        E: From<sqlx::Error> + Send;
+        Out: Send,
+        Err: From<Error> + Send;
 }
 
 /// A writable database connection.
