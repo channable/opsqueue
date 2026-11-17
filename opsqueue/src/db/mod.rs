@@ -59,7 +59,7 @@ use std::{marker::PhantomData, num::NonZero, time::Duration};
 use futures::future::BoxFuture;
 use magic::Bool;
 use sqlx::{
-    Connection as _, Sqlite, SqliteConnection, SqlitePool,
+    Error, Sqlite, SqliteConnection, SqlitePool,
     migrate::MigrateDatabase,
     sqlite::SqlitePoolOptions,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
@@ -126,22 +126,14 @@ pub trait Connection {
     ///
     /// Within this transaction, you can call functions that require `Connection<Transaction = True>`.
     #[allow(async_fn_in_trait)]
-    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
-        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+        for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
             + Send
             + Sync
             + 't,
-        O: Send,
-        E: From<sqlx::Error> + Send,
-    {
-        self.get_inner()
-            .transaction(move |inner| {
-                let conn = Conn::from_tx(inner);
-                f(conn)
-            })
-            .await
-    }
+        Out: Send,
+        Err: From<Error> + Send;
 }
 
 /// A writable database connection.
@@ -161,6 +153,14 @@ where
     type Transaction = <T as Connection>::Transaction;
 }
 
+pub trait Transaction: Connection<Transaction = True> {
+    /// Register a callback to run after the transaction commits.
+    ///
+    /// Callbacks are deferred until the outermost transaction commits and are dropped if any
+    /// transaction in the current stack rolls back.
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static);
+}
+
 impl<C> Connection for &mut C
 where
     C: Connection,
@@ -170,6 +170,27 @@ where
 
     fn get_inner(&mut self) -> &mut SqliteConnection {
         <C as Connection>::get_inner(*self)
+    }
+
+    async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
+    where
+        for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
+            + Send
+            + Sync
+            + 't,
+        O: Send,
+        E: From<sqlx::Error> + Send,
+    {
+        <C as Connection>::transaction(*self, f).await
+    }
+}
+
+impl<C> Transaction for &mut C
+where
+    C: Transaction,
+{
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
+        <C as Transaction>::on_commit(*self, f);
     }
 }
 
