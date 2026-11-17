@@ -1,7 +1,7 @@
 //! Concrete implementation of [`Connection`] and related types.
 
 use super::{
-    Connection,
+    Connection, Transaction,
     magic::{Bool, False, True},
 };
 use futures::future::BoxFuture;
@@ -124,12 +124,6 @@ where
             }
         }
     }
-
-    fn on_commit(&mut self, f: impl FnOnce()) {
-        // Since we are not in a transaction, any mutations are already committed, so we run `f`
-        // directly.
-        f();
-    }
 }
 
 impl<'tx, 'conn, Writable> Conn<Writable, Tx<'tx, 'conn>>
@@ -187,7 +181,12 @@ where
             }
         }
     }
+}
 
+impl<Writable> Transaction for Conn<Writable, Tx<'_, '_>>
+where
+    Writable: Bool,
+{
     fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
         self.get_tx().on_commit_callbacks.push(Box::new(f));
     }
@@ -216,20 +215,6 @@ mod tests {
             .await
             .unwrap();
         Pool::new(pool)
-    }
-
-    #[tokio::test]
-    async fn on_commit_runs_immediately_outside_a_transaction() {
-        let pool = test_pool().await;
-        let mut conn = pool.acquire().await.unwrap();
-        let callback_count = Arc::new(AtomicUsize::new(0));
-        let callback = callback_count.clone();
-
-        conn.on_commit(move || {
-            callback.fetch_add(1, Ordering::SeqCst);
-        });
-
-        assert_eq!(callback_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

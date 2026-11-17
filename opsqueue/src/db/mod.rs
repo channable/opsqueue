@@ -134,13 +134,6 @@ pub trait Connection {
             + 't,
         O: Send,
         E: From<sqlx::Error> + Send;
-
-    /// Register a callback to run after the transaction commits.
-    ///
-    /// Callbacks run immediately when this connection is not in a transaction, are deferred until
-    /// the outermost transaction commits when registered in a nested transaction, and are dropped
-    /// if the transaction rolls back.
-    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static);
 }
 
 /// A writable database connection.
@@ -158,6 +151,14 @@ where
     T: Connection<Writable = True>,
 {
     type Transaction = <T as Connection>::Transaction;
+}
+
+pub trait Transaction: Connection<Transaction = True> {
+    /// Register a callback to run after the transaction commits.
+    ///
+    /// Callbacks are deferred until the outermost transaction commits and are dropped if any
+    /// transaction in the current stack rolls back.
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static);
 }
 
 impl<C> Connection for &mut C
@@ -182,9 +183,14 @@ where
     {
         <C as Connection>::transaction(*self, f).await
     }
+}
 
+impl<C> Transaction for &mut C
+where
+    C: Transaction,
+{
     fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
-        <C as Connection>::on_commit(*self, f);
+        <C as Transaction>::on_commit(*self, f);
     }
 }
 
