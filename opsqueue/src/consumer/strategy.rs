@@ -291,6 +291,7 @@ pub mod test {
     use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::Row;
     use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
+    use std::sync::Arc;
 
     unsafe extern "C" fn sqlite_reserved_chunk_lookup_noop(
         context: *mut ffi::sqlite3_context,
@@ -876,6 +877,7 @@ pub mod test {
     use crate::common::submission::InitialSubmissionStatus;
     use crate::db::Connection;
     use futures::stream::TryStreamExt as _;
+    use tokio::sync::Notify;
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     /// Tests whether the 'cutting the deck' technique is working
@@ -888,6 +890,7 @@ pub mod test {
 
         let mut conn = db_pools.writer_conn().await.unwrap();
         let input_chunks: Vec<_> = (0..10_000).map(|x| Some(format!("{x}").into())).collect();
+        let notify_on_insert = Arc::new(Notify::new());
         crate::common::submission::db::insert_submission_from_chunks(
             None,
             input_chunks.clone(),
@@ -896,6 +899,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert,
         )
         .await
         .unwrap();

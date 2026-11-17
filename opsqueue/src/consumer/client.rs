@@ -563,9 +563,9 @@ impl<R> From<InternalConsumerClientError> for E<InternalConsumerClientError, R> 
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 mod tests {
-    use std::time::Duration;
-
     use chunk::ChunkSize;
+    use std::time::Duration;
+    use tokio::sync::Notify;
     use tokio::task::yield_now;
     use tokio_util::task::TaskTracker;
 
@@ -589,6 +589,9 @@ mod tests {
             Some("d".into()),
             Some("e".into()),
         ];
+
+        let notify_on_insert = Arc::new(Notify::new());
+
         crate::common::submission::db::insert_submission_from_chunks(
             None,
             input_chunks.clone(),
@@ -597,6 +600,7 @@ mod tests {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
