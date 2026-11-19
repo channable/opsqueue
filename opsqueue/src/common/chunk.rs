@@ -59,6 +59,13 @@ impl Default for ChunkSize {
 }
 
 #[cfg(feature = "server-logic")]
+impl sqlx::Type<sqlx::Sqlite> for ChunkSize {
+    fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
+        <i64 as sqlx::Type<sqlx::Sqlite>>::type_info()
+    }
+}
+
+#[cfg(feature = "server-logic")]
 impl sqlx::Decode<'_, sqlx::Sqlite> for ChunkSize {
     fn decode(
         value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'_>,
