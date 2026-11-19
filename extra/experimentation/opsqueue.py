@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 import sqlite3
-
 from contextlib import contextmanager
+
 from fastapi import FastAPI
-from pydantic import BaseModel
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 app = FastAPI()
 client = TestClient(app)
@@ -23,10 +23,10 @@ def db(db_name):
     try:
         cur = conn.cursor()
         yield cur
-    except Exception as e:
+    except Exception:
         # do something with exception
         conn.rollback()
-        raise e
+        raise
     else:
         conn.commit()
     finally:

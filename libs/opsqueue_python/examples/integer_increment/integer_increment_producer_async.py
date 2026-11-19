@@ -1,6 +1,7 @@
 # It's recommended to just experiment with this in ipython
-import logging
 import asyncio
+import logging
+
 from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
@@ -9,7 +10,7 @@ client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/integer_incremen
 
 
 async def main(top: int = 1_000) -> int:
-    input_iter = range(0, top)
+    input_iter = range(top)
     output_iter = await client.async_run_submission(input_iter, chunk_size=1000)
     logging.info(f"Submission for {top} done!")
 

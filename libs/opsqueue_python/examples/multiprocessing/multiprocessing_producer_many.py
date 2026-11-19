@@ -1,5 +1,6 @@
 import logging
 import multiprocessing
+
 from opsqueue.producer import ProducerClient
 
 logging.basicConfig(
@@ -9,7 +10,7 @@ logging.basicConfig(
 
 def run_a_producer(id: int) -> None:
     client = ProducerClient("localhost:3999", "file:///tmp/opsqueue/multi/")
-    input_iter = range(0, 2_000)
+    input_iter = range(2_000)
     output_iter = client.run_submission(
         input_iter, chunk_size=10, strategic_metadata={"user_id": id}
     )

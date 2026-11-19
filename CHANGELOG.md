@@ -1,5 +1,9 @@
 # OpsQueue changelog
 
+## 0.45.2
+
+Bump Python from 3.13 to 3.14, and bump `nixpkgs`
+
 ## 0.45.1
 
 `fetch_and_reserve_chunks` sees a single picture/snapshot - @jerbaroo
