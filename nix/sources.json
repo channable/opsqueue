@@ -17,10 +17,10 @@
         "homepage": "",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "567a49d1913ce81ac6e9582e3553dd90a955875f",
-        "sha256": "1vq77hlx8mi3z03pw2nf6r5h7473r1p9yxyf58ym3fh01zppmfln",
+        "rev": "e21fec321d73511849707a7585e4ea155ee4bf40",
+        "sha256": "1zbwxnk9kghl14jk25k2xvjg8m4ncdq1x1w19lclpra1csgdcan9",
         "type": "tarball",
-        "url": "https://github.com/NixOS/nixpkgs/archive/567a49d1913ce81ac6e9582e3553dd90a955875f.tar.gz",
+        "url": "https://github.com/NixOS/nixpkgs/archive/e21fec321d73511849707a7585e4ea155ee4bf40.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     },
     "rust-overlay": {

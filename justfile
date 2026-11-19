@@ -76,7 +76,7 @@ nix-test-integration *TEST_ARGS: nix-build
   nix_build_bin_dir=$(just nix-build-bin)
 
   cd libs/opsqueue_python/tests
-  export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.13/site-packages"
+  export PYTHONPATH="${nix_build_python_library_dir}/lib/python3.14/site-packages"
   export OPSQUEUE_BIN="${nix_build_bin_dir}/bin/opsqueue"
   export RUST_LOG="opsqueue=debug"
 

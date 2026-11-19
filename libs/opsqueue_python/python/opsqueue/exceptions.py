@@ -1,11 +1,11 @@
 ## Expected errors:
 
+
 from . import opsqueue_internal
-from typing import Optional
 
 
 class SubmissionFailedError(Exception):
-    __slots__ = ["submission", "chunk", "failure"]
+    __slots__ = ["chunk", "failure", "submission"]
     """
     Raised when a submission failed,
 
@@ -45,12 +45,12 @@ class SubmissionNotCancellableError(Exception):
 
     """
 
-    __slots__ = ["submission", "chunk"]
+    __slots__ = ["chunk", "submission"]
 
     def __init__(
         self,
         submission: opsqueue_internal.SubmissionNotCancellable,
-        chunk: Optional[opsqueue_internal.ChunkFailed] = None,
+        chunk: opsqueue_internal.ChunkFailed | None = None,
     ):
         super().__init__()
         self.submission = submission
@@ -79,8 +79,6 @@ class IncorrectUsageError(TypeError):
     incorrectly.
     """
 
-    pass
-
 
 class TryFromIntError(IncorrectUsageError):
     """
@@ -88,8 +86,6 @@ class TryFromIntError(IncorrectUsageError):
     but an invalid integer is passed (such as passing a negative value
     to a place expecting zero or positive).
     """
-
-    pass
 
 
 class SubmissionNotFoundError(IncorrectUsageError):
@@ -122,16 +118,12 @@ class ChunkCountIsZeroError(IncorrectUsageError):
     but rather be handled transparently by Opsqueue.
     """
 
-    pass
-
 
 class NewObjectStoreClientError(IncorrectUsageError):
     """
     Raised when incorrect settings were used when attempting to initialize
     the object store connection.
     """
-
-    pass
 
 
 class SubmissionNotCompletedYetError(IncorrectUsageError):
@@ -140,8 +132,6 @@ class SubmissionNotCompletedYetError(IncorrectUsageError):
     from a completed submission but the submission
     is not completed yet.
     """
-
-    pass
 
 
 class TooManyMatchingSubmissionsError(IncorrectUsageError):
@@ -180,8 +170,6 @@ class OpsqueueInternalError(Exception):
     Base type for all internal exceptions
     """
 
-    pass
-
 
 class UnexpectedOpsqueueConsumerServerResponseError(OpsqueueInternalError):
     """
@@ -192,15 +180,11 @@ class UnexpectedOpsqueueConsumerServerResponseError(OpsqueueInternalError):
     or that there is an implementation error in the Opsqueue code.
     """
 
-    pass
-
 
 class ChunkRetrievalError(OpsqueueInternalError):
     """
     Raised when there is a problem when fetching a chunk from the object store.
     """
-
-    pass
 
 
 class ChunksStorageError(OpsqueueInternalError):
@@ -209,8 +193,6 @@ class ChunksStorageError(OpsqueueInternalError):
     is attempting to store all its chunks into the object store.
     """
 
-    pass
-
 
 class ChunkStorageError(OpsqueueInternalError):
     """
@@ -218,20 +200,14 @@ class ChunkStorageError(OpsqueueInternalError):
     is storing a chunk to the object store.
     """
 
-    pass
-
 
 class InternalConsumerClientError(OpsqueueInternalError):
     """
     Raised for any other kind of Consumer client exception
     """
 
-    pass
-
 
 class InternalProducerClientError(OpsqueueInternalError):
     """
     Raised for any other kind of Producer client exception
     """
-
-    pass

@@ -1,18 +1,19 @@
-import cbor2
-import pickle
 import faulthandler
-import signal
-import sys
-from contextlib import contextmanager, ExitStack
-from typing import Generator, Callable, Any, Iterable
-import multiprocess  # type: ignore[import-untyped]
-import subprocess
+import functools
 import os
-import pytest
+import pickle
+import signal
+import subprocess
+import sys
+from collections.abc import Callable, Generator, Iterable
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-import functools
+from typing import Any
 
+import cbor2
+import multiprocess  # type: ignore[import-untyped]
+import pytest
 from opsqueue.common import SerializationFormat, json_as_bytes
 from opsqueue.consumer import Strategy
 
@@ -100,15 +101,15 @@ def _handle_sigterm(signum: int, frame: object) -> None:
             file=sys.stderr,
             flush=True,
         )
-        for pid in worker_pids.keys():
+        for pid, pid_info in worker_pids.items():
             try:
                 os.kill(pid, signal.SIGUSR1)
             except ProcessLookupError:
                 # Worker already exited.
                 continue
-            except Exception as exc:  # pragma: no cover - defensive diagnostics
+            except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive diagnostics
                 print(
-                    f"[opsqueue pytest] Failed sending SIGUSR1 to child pid={pid} {worker_pids[pid]}: {exc}",
+                    f"[opsqueue pytest] Failed sending SIGUSR1 to child pid={pid} {pid_info}: {exc}",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -133,7 +134,7 @@ def _handle_sigterm(signum: int, frame: object) -> None:
         )
         try:
             print(dump_path.read_text(encoding="utf-8"), file=sys.stderr, flush=True)
-        except Exception as exc:  # pragma: no cover - defensive diagnostics
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive diagnostics
             print(
                 f"[opsqueue pytest] Failed reading dump file for child pid={pid} {worker_pids[pid]}: {exc}",
                 file=sys.stderr,
@@ -208,7 +209,7 @@ def opsqueue_bin_location() -> Path:
 
 
 @pytest.fixture
-def opsqueue() -> Generator[OpsqueueProcess, None, None]:
+def opsqueue() -> Generator[OpsqueueProcess]:
     with opsqueue_service() as opsqueue_process:
         yield opsqueue_process
 
@@ -218,7 +219,7 @@ def opsqueue_service(
     *,
     port: int = 0,  # The default of 0 means "pick any free port".
     command_args: Iterable[str] = (),
-) -> Generator[OpsqueueProcess, None, None]:
+) -> Generator[OpsqueueProcess]:
     # This will create a SQLite database in memory.
     # We need the `cache=shared` to allow sharing this DB between all threads within the same OS process.
     temp_dbname = "file::memory:?cache=shared"
@@ -322,7 +323,7 @@ def _background_main(function: Callable[..., None], args: Iterable[Any]) -> None
 def background_process(
     function: Callable[..., None],
     args: Iterable[Any] = (),
-) -> Generator[multiprocess.Process, None, None]:
+) -> Generator[multiprocess.Process]:
     proc = multiprocess.Process(
         target=_background_main,
         args=(function, args),
@@ -343,7 +344,7 @@ def background_process(
 @contextmanager
 def multiple_background_processes(
     function: Callable[[int], None], count: int
-) -> Generator[list[multiprocess.Process], None, None]:
+) -> Generator[list[multiprocess.Process]]:
     with ExitStack() as stack:
         yield [
             stack.enter_context(background_process(function, args=(p,)))
@@ -373,7 +374,7 @@ any_strategies: Iterable[StrategyDescription] = (
 )
 def basic_consumer_strategy(
     request: pytest.FixtureRequest,
-) -> Generator[StrategyDescription, None, None]:
+) -> Generator[StrategyDescription]:
     yield request.param
 
 
@@ -384,14 +385,14 @@ def basic_consumer_strategy(
 )
 def any_consumer_strategy(
     request: pytest.FixtureRequest,
-) -> Generator[StrategyDescription, None, None]:
+) -> Generator[StrategyDescription]:
     yield request.param
 
 
 @pytest.fixture(scope="function", params=[json_as_bytes, cbor2, pickle])
 def serialization_format(
     request: pytest.FixtureRequest,
-) -> Generator[SerializationFormat, None, None]:
+) -> Generator[SerializationFormat]:
     yield request.param
 
 

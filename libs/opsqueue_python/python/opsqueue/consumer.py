@@ -1,21 +1,20 @@
 from __future__ import annotations
-from collections.abc import Sequence
+
 import typing
-from typing import Any, Callable, cast
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import opentelemetry
-import opentelemetry.trace
 import opentelemetry.baggage
+import opentelemetry.trace
 import opentelemetry.util.types
 
-from . import opsqueue_internal
+from . import common, opsqueue_internal, tracing
 from .opsqueue_internal import Chunk, Strategy, SubmissionId  # type: ignore[import-not-found]
-from . import tracing
-from . import common
 
 DEFAULT_STRATEGY = Strategy.Random()
 
-__all__ = ["ConsumerClient", "Strategy", "Chunk", "SubmissionId"]
+__all__ = ["Chunk", "ConsumerClient", "Strategy", "SubmissionId"]
 
 
 class ConsumerClient:
@@ -23,14 +22,14 @@ class ConsumerClient:
     Opsqueue consumer client. Allows working on individual (chunks of) operations.
     """
 
-    __slots__ = "inner"
+    __slots__ = ("inner",)
 
     def __init__(
         self,
         opsqueue_url: str,
         object_store_url: str,
         *,
-        object_store_options: list[tuple[str, str]] = [],
+        object_store_options: list[tuple[str, str]] | None = None,
     ):
         """
         Creates a new consumer client.
@@ -46,6 +45,8 @@ class ConsumerClient:
 
         Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
         """
+        if object_store_options is None:
+            object_store_options = []
         self.inner = opsqueue_internal.ConsumerClient(
             opsqueue_url, object_store_url, object_store_options
         )

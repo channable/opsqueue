@@ -1,14 +1,11 @@
 import logging
-from opsqueue.consumer import ConsumerClient, Strategy
 
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import (
-    BatchSpanProcessor,
-    # ConsoleSpanExporter,
-)
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # type: ignore[attr-defined]
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opsqueue.consumer import ConsumerClient, Strategy
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 
@@ -32,8 +29,8 @@ def run_consumer() -> None:
 
     @tracer.start_as_current_span("incrementer")
     def incrementer(data: int) -> int:
-        import time
         import random
+        import time
 
         time.sleep(0.01)
 

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterable, Iterator, AsyncIterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any, cast
 
 from opentelemetry import trace
+
 from opsqueue.common import (
-    SerializationFormat,
-    encode_chunk,
-    decode_chunk,
     DEFAULT_SERIALIZATION_FORMAT,
+    SerializationFormat,
+    decode_chunk,
+    encode_chunk,
 )
 from opsqueue.exceptions import (
     SubmissionFailedError,
@@ -17,17 +18,17 @@ from opsqueue.exceptions import (
     SubmissionNotFoundError,
     TooManyMatchingSubmissionsError,
 )
-from . import opsqueue_internal
-from . import tracing
+
+from . import opsqueue_internal, tracing
 from .opsqueue_internal import (  # type: ignore[import-not-found]
-    SubmissionId,
-    SubmissionStatus,
+    ChunkFailed,
+    InitialSubmissionStatus,
     SubmissionCompleted,
     SubmissionFailed,
-    ChunkFailed,
+    SubmissionId,
     SubmissionNotCancellable,
     SubmissionPaused,
-    InitialSubmissionStatus,
+    SubmissionStatus,
 )
 
 __all__ = [
@@ -55,14 +56,14 @@ class ProducerClient:
     Can also be used for basic introspection/debugging/maintenance of an opsqueue queue.
     """
 
-    __slots__ = "inner"
+    __slots__ = ("inner",)
 
     def __init__(
         self,
         opsqueue_url: str,
         object_store_url: str,
         *,
-        object_store_options: list[tuple[str, str]] = [],
+        object_store_options: list[tuple[str, str]] | None = None,
     ):
         """
         Creates a new producer client.
@@ -76,6 +77,8 @@ class ProducerClient:
 
         Raises `NewObjectStoreClientError` when the given `object_store_url` is incorrect.
         """
+        if object_store_options is None:
+            object_store_options = []
         self.inner = opsqueue_internal.ProducerClient(
             opsqueue_url, object_store_url, object_store_options
         )
@@ -454,9 +457,9 @@ def _chunk_iterator(
 ) -> Iterator[bytes]:
     if chunk_size <= 0:
         raise ChunkSizeIsZeroError
-    return map(
-        lambda c: encode_chunk(c, serialization_format),
-        itertools.batched(iter, chunk_size),
+    return (
+        encode_chunk(c, serialization_format)
+        for c in itertools.batched(iter, chunk_size)
     )
 
 
@@ -465,8 +468,7 @@ def _unchunk_iterator(
 ) -> Iterator[Any]:
     for chunk in encoded_chunks_iter:
         ops = decode_chunk(chunk, serialization_format)
-        for op in ops:
-            yield op
+        yield from ops
 
 
 async def _async_unchunk_iterator(

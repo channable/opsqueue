@@ -15,7 +15,7 @@ let
 
   crane = import sources.crane { pkgs = final; };
   craneLib = crane.overrideToolchain (pkgs: rustToolchain);
-  python3 = final.python313.override { packageOverrides = pythonOverlay; };
+  python3 = final.python314.override { packageOverrides = pythonOverlay; };
 in
 {
   inherit rustToolchain python3;
