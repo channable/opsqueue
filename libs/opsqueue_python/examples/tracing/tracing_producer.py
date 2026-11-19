@@ -1,20 +1,19 @@
+import contextlib
 import logging
 import typing
-import opentelemetry.context
-from opentelemetry.context import Context
+from collections.abc import Generator
 
-import contextlib
-from typing import Optional, Generator
-from opentelemetry import trace
+import opentelemetry.context
 from opentelemetry import baggage as otel_baggage
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     # ConsoleSpanExporter,
 )
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # type: ignore[attr-defined]
-
 from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
@@ -35,21 +34,23 @@ def set_up_global_tracer() -> None:
 
 
 def do_something() -> None:
-    with trace.get_tracer(__name__).start_as_current_span("do_something"):
-        with added_baggage(baggage={"app_mode": "preview"}):
-            # print(opentelemetry.baggage.get_all())
+    with (
+        trace.get_tracer(__name__).start_as_current_span("do_something"),
+        added_baggage(baggage={"app_mode": "preview"}),
+    ):
+        # print(opentelemetry.baggage.get_all())
 
-            client = ProducerClient(
-                "localhost:3999", "file:///tmp/opsqueue/tracing_example"
-            )
+        client = ProducerClient(
+            "localhost:3999", "file:///tmp/opsqueue/tracing_example"
+        )
 
-            input_iter = range(0, 100)
-            output_iter = client.run_submission(input_iter, chunk_size=10)
+        input_iter = range(100)
+        output_iter = client.run_submission(input_iter, chunk_size=10)
 
-            # Now do something with the output:
-            # for x in output_iter:
-            #    print(x)
-            print(sum(output_iter))
+        # Now do something with the output:
+        # for x in output_iter:
+        #    print(x)
+        print(sum(output_iter))
 
 
 def main() -> None:
@@ -59,10 +60,10 @@ def main() -> None:
 
 @contextlib.contextmanager
 def added_baggage(
-    baggage: Optional[dict[str, str]] = None,
-    context: Optional[Context] = None,
-) -> Generator[None, None, None]:
-    attached_context_tokens: list[Context] = list()
+    baggage: dict[str, str] | None = None,
+    context: Context | None = None,
+) -> Generator[None]:
+    attached_context_tokens: list[Context] = []
 
     if baggage:
         for key, value in baggage.items():

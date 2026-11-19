@@ -5,9 +5,9 @@ This file implements a super simple consumer for Opsqueue.
 
 import os
 import random
-import requests
 import time
 
+import requests
 from google.cloud import storage
 
 DIR_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -95,7 +95,7 @@ def main():
         for op in ops_generator(full_file_path):
             try:
                 process(op)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"Failed to process op: {op}. Exception: {e}")
 
         # Send a success message back to the queue

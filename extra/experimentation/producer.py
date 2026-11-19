@@ -6,10 +6,10 @@ Every second it inserts a random submission into the queue.
 """
 
 import random
-import requests
 import time
 import uuid
 
+import requests
 from google.cloud import storage
 
 

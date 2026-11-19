@@ -1,5 +1,6 @@
 import logging
 import multiprocessing
+
 from opsqueue.consumer import ConsumerClient, Strategy
 
 

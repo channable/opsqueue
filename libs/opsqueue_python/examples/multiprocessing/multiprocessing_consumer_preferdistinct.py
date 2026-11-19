@@ -5,6 +5,7 @@
 # we expect them to finish roughly at the same time.
 import logging
 import multiprocessing
+
 from opsqueue.consumer import ConsumerClient, Strategy
 
 
