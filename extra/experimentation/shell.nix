@@ -1,4 +1,4 @@
-{ pkgs ? import ./nixpkgs-pinned.nix {} }:
+{ pkgs ? import ../../nix/nixpkgs-pinned.nix { } }:
   pkgs.mkShell rec {
     python = pkgs.python314.withPackages (ps: [
       ps.fastapi
