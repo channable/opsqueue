@@ -10,28 +10,28 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    OpsqueueProcess,
+    StrategyDescription,
     background_process,
     multiple_background_processes,
-    OpsqueueProcess,
     opsqueue_service,
-    StrategyDescription,
     strategy_from_description,
 )
 from opsqueue.common import SerializationFormat, json_as_bytes
-from opsqueue.consumer import ConsumerClient, Chunk
+from opsqueue.consumer import Chunk, ConsumerClient
 from opsqueue.producer import (
-    SubmissionId,
+    ChunkFailed,
+    InitialSubmissionStatus,
     ProducerClient,
     SubmissionCompleted,
     SubmissionFailed,
-    ChunkFailed,
-    SubmissionStatus,
     SubmissionFailedError,
-    SubmissionNotFoundError,
+    SubmissionId,
     SubmissionNotCancellable,
     SubmissionNotCancellableError,
+    SubmissionNotFoundError,
+    SubmissionStatus,
     TooManyMatchingSubmissionsError,
-    InitialSubmissionStatus,
 )
 
 SUBMISSION_COMPLETED_TIMEOUT = 10.0
@@ -60,7 +60,7 @@ def test_roundtrip(
         consumer_client.run_each_op(increment, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -132,7 +132,7 @@ def test_complete_then_fail_chunks(
                 )
 
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
-        input_iter = range(0, n_ops)
+        input_iter = range(n_ops)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -142,7 +142,7 @@ def test_complete_then_fail_chunks(
         )
         res = sum(output_iter)
 
-        assert res == sum(range(0, n_ops))
+        assert res == sum(range(n_ops))
 
 
 def test_empty_submission(opsqueue: OpsqueueProcess) -> None:
@@ -192,7 +192,7 @@ def test_roundtrip_explicit_serialization_format(
         )
 
     with background_process(run_consumer) as _consumer:
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
@@ -238,7 +238,7 @@ def test_submission_failure_exception(opsqueue: OpsqueueProcess) -> None:
     with background_process(run_consumer) as consumer:
         logging.error(f"Opsqueue: {opsqueue}")
         logging.error(f"Consumer: {consumer}")
-        input_iter = range(0, 100)
+        input_iter = range(100)
 
         with pytest.raises(SubmissionFailedError) as exc_info:
             producer_client.run_submission(
@@ -282,13 +282,13 @@ def test_chunk_roundtrip(
         consumer_client.run_each_chunk(increment_list, strategy=strategy)
 
     with background_process(run_consumer) as _consumer:
-        input_iter = map(lambda i: cbor2.dumps([i, i, i]), range(0, 10))
-        output_iter: Iterator[list[int]] = map(
-            lambda c: cbor2.loads(c),
-            producer_client.run_submission_chunks(
+        input_iter = (cbor2.dumps([i, i, i]) for i in range(10))
+        output_iter: Iterator[list[int]] = (
+            cbor2.loads(c)
+            for c in producer_client.run_submission_chunks(
                 input_iter,
                 timeout=SUBMISSION_COMPLETED_TIMEOUT,
-            ),
+            )
         )
         import itertools
 
@@ -325,7 +325,7 @@ def test_many_consumers(
 
     n_consumers = 16
     with multiple_background_processes(run_consumer, n_consumers) as _consumers:
-        input_iter = range(0, 1000)
+        input_iter = range(1000)
         output_iter: Iterator[int] = producer_client.run_submission(
             input_iter,
             chunk_size=100,
@@ -358,7 +358,7 @@ def test_async_producer(opsqueue: OpsqueueProcess) -> None:
 
     async def run_one_submission(top: int) -> int:
         logging.debug(f"Running submission {top}")
-        input_iter = range(0, top)
+        input_iter = range(top)
         output_iter = await producer_client.async_run_submission(
             input_iter, chunk_size=1000
         )
@@ -645,7 +645,7 @@ def test_lookup_submission_ids_by_strategic_metadata(opsqueue: OpsqueueProcess) 
             strategic_metadata
         )
         assert isinstance(found_ids, list)
-        assert all(map(lambda x: isinstance(x, SubmissionId), found_ids))
+        assert all(isinstance(x, SubmissionId) for x in found_ids)
         assert found_ids == expected_ids
 
     test_lookup({"foo": 1}, [id_1, id_2])
@@ -751,13 +751,12 @@ def test_run_submission_timeout(opsqueue: OpsqueueProcess) -> None:
 
         consumer_client.run_each_op(process_op)
 
-    with background_process(run_consumer) as _consumer:
-        with pytest.raises(TimeoutError):
-            producer_client.run_submission(
-                [1],
-                chunk_size=1,
-                timeout=0.1,
-            )
+    with background_process(run_consumer) as _consumer, pytest.raises(TimeoutError):
+        producer_client.run_submission(
+            [1],
+            chunk_size=1,
+            timeout=0.1,
+        )
 
 
 def test_unpause_and_complete(opsqueue: OpsqueueProcess) -> None:

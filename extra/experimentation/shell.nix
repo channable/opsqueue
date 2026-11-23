@@ -1,6 +1,6 @@
-{ pkgs ? import ./nixpkgs-pinned.nix {} }:
+{ pkgs ? import ../../nix/nixpkgs-pinned.nix { } }:
   pkgs.mkShell rec {
-    python = pkgs.python313.withPackages (ps: [
+    python = pkgs.python314.withPackages (ps: [
       ps.fastapi
       ps.google-cloud-storage
       ps.httpx

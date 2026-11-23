@@ -7,8 +7,9 @@ this script so it can be committed alongside the code it measures.
 """
 
 import csv
-import matplotlib.pyplot as plt  # noqa: E402
 from collections import defaultdict
+
+import matplotlib.pyplot as plt
 
 CSV_PATH = "opsqueue/benches/chunks_select_bench.csv"
 OUT_PATH = "opsqueue/benches/chunks_select_bench.svg"

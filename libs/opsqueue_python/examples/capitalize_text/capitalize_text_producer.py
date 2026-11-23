@@ -1,7 +1,8 @@
 import logging
 import re
-from opsqueue.producer import ProducerClient
 from collections.abc import Iterable
+
+from opsqueue.producer import ProducerClient
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
 
@@ -15,8 +16,7 @@ def file_to_words(filename: str) -> Iterable[str]:
     """
     with open(filename) as input_file:
         for line in input_file:
-            for word in re.split("\\b", line):
-                yield word
+            yield from re.split("\\b", line)
 
 
 def print_words(words: Iterable[str]) -> None:

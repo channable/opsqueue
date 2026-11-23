@@ -1,4 +1,5 @@
 import logging
+
 from opsqueue.consumer import ConsumerClient, Strategy
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)

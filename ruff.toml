@@ -7,3 +7,6 @@ indent-style = "space"
 line-ending = "lf"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+
+[lint]
+ignore = ["LOG015"]
