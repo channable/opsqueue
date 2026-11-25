@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::common::errors::E::{L, R};
-use crate::common::submission::{self, InitialSubmissionStatus, SubmissionId};
+use crate::common::submission::{self, SubmissionId};
 use crate::common::{MaxSubmissions, StrategicMetadataMap};
 use crate::db::{self, DBPools};
 use crate::tracing::anyhow_as_dyn_error;
@@ -154,12 +154,14 @@ async fn unpause_submission(
         .writer_conn()
         .await
         .map_err(|e| ServerError(e.into()).into_response())?;
-    match submission::db::unpause_submission(submission_id, &mut conn).await {
-        Ok(()) => {
-            // Wake up any waiting consumers now that new chunks are available.
-            state.notify_on_insert.notify_waiters();
-            Ok(())
-        }
+    match submission::db::unpause_submission(
+        submission_id,
+        &mut conn,
+        state.notify_on_insert.clone(),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
         Err(L(db_err)) => Err(ServerError(db_err.into()).into_response()),
         Err(R(not_found_err)) => Err((StatusCode::NOT_FOUND, Json(not_found_err)).into_response()),
     }
@@ -228,18 +230,17 @@ async fn insert_submission(
         request.chunk_size.unwrap_or_default(),
         request.initial_status.clone(),
         &mut conn,
+        state.notify_on_insert.clone(),
     )
     .await?;
 
     // As we already have access to the write checkpoint
     // and submission inserts result in large DB mutations from time to time
     // this is the moment to perform an extra WAL checkpoint
-    let _ = db::perform_explicit_wal_checkpoint(conn).await;
-
-    // Notify waiting consumers, but only for submissions which start running immediately.
-    if request.initial_status == InitialSubmissionStatus::InProgress {
-        state.notify_on_insert.notify_waiters();
-    }
+    // TODO: Do we want to have something similar to `on_commit` for this?
+    //  Note that we can't use `on_commit` as-is, since it could result in
+    //  multiple checkpointing operations at the end of a transaction.
+    let _ = db::perform_explicit_wal_checkpoint(&mut conn).await;
 
     Ok(Json(submission_id))
 }

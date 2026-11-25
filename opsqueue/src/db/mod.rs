@@ -67,6 +67,7 @@ use sqlx::{
 
 use conn::{Conn, NoTransaction, Reader, Tx, Writer};
 
+use crate::db::magic::IsTrue;
 pub use magic::{False, True};
 use tokio::time::MissedTickBehavior;
 
@@ -122,6 +123,29 @@ pub trait Connection {
     /// Access the [`sqlx`] connection.
     fn get_inner(&mut self) -> &mut SqliteConnection;
 
+    /// Register a callback to run after the transaction commits.
+    ///
+    /// Callbacks are deferred until the outermost transaction commits and are dropped if any
+    /// transaction in the current stack rolls back. This method is only available while a
+    /// transaction is active.
+    ///
+    /// ```
+    /// use opsqueue::db::{Connection, True};
+    /// fn register_after_commit<C: Connection<Transaction = True>>(mut conn: C) {
+    ///     conn.on_commit(|| {});
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use opsqueue::db::{Connection, False};
+    /// fn cannot_register<C: Connection<Transaction = False>>(mut conn: C) {
+    ///     conn.on_commit(|| {});
+    /// }
+    /// ```
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static)
+    where
+        Self::Transaction: IsTrue;
+
     /// Execute a transaction.
     ///
     /// Within this transaction, you can call functions that require `Connection<Transaction = True>`.
@@ -139,27 +163,9 @@ pub trait Connection {
 /// A writable database connection.
 ///
 /// This is an alias for [`Connection`]. See its docs for details.
-pub trait WriterConnection: Connection<Writable = True> {
-    /// Whether this connection is currently in a transaction.
-    ///
-    /// See [`Connection::Transaction`] for details.
-    type Transaction: Bool;
-}
+pub trait WriterConnection: Connection<Writable = True> {}
 
-impl<T> WriterConnection for T
-where
-    T: Connection<Writable = True>,
-{
-    type Transaction = <T as Connection>::Transaction;
-}
-
-pub trait Transaction: Connection<Transaction = True> {
-    /// Register a callback to run after the transaction commits.
-    ///
-    /// Callbacks are deferred until the outermost transaction commits and are dropped if any
-    /// transaction in the current stack rolls back.
-    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static);
-}
+impl<T> WriterConnection for T where T: Connection<Writable = True> {}
 
 impl<C> Connection for &mut C
 where
@@ -172,6 +178,13 @@ where
         <C as Connection>::get_inner(*self)
     }
 
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static)
+    where
+        Self::Transaction: IsTrue,
+    {
+        <C as Connection>::on_commit(*self, f);
+    }
+
     async fn transaction<O, E, F>(&mut self, f: F) -> Result<O, E>
     where
         for<'t> F: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<O, E>>
@@ -182,15 +195,6 @@ where
         E: From<sqlx::Error> + Send,
     {
         <C as Connection>::transaction(*self, f).await
-    }
-}
-
-impl<C> Transaction for &mut C
-where
-    C: Transaction,
-{
-    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
-        <C as Transaction>::on_commit(*self, f);
     }
 }
 
@@ -424,6 +428,16 @@ pub mod magic {
 
     impl Bool for True {}
     impl Bool for False {}
+
+    /// Marks the type-level boolean `True`.
+    ///
+    /// This marker lets generic code express a boolean constraint as a bound on an associated
+    /// type. When an API is forwarded through a generic wrapper such as `&mut C`, an equality
+    /// constraint on the wrapper's associated type may not provide a usable proof about the
+    /// wrapped type's associated type; this trait makes that proof explicit.
+    pub trait IsTrue: Bool {}
+
+    impl IsTrue for True {}
 }
 
 /// Connects to the `SQLite` database, creating it if it doesn't exist yet, and migrating it

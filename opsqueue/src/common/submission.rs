@@ -305,6 +305,11 @@ impl Submission {
 
 #[cfg(feature = "server-logic")]
 pub mod db {
+    use super::{
+        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, InitialSubmissionStatus, Metadata,
+        Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
+        SubmissionStatus, Utc, chunk,
+    };
     use crate::tracing::as_dyn_error;
     use crate::{
         common::{
@@ -320,12 +325,8 @@ pub mod db {
     use axum_prometheus::metrics::{counter, histogram};
     use chunk::ChunkSize;
     use sqlx::{Database, QueryBuilder, Sqlite, query, query_as, query_scalar};
-
-    use super::{
-        Chunk, ChunkCount, ChunkIndex, DateTime, Duration, E, InitialSubmissionStatus, Metadata,
-        Submission, SubmissionCancelled, SubmissionCompleted, SubmissionFailed, SubmissionId,
-        SubmissionStatus, Utc, chunk,
-    };
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     impl<'q> sqlx::Encode<'q, Sqlite> for SubmissionId {
         fn encode_by_ref(
@@ -373,7 +374,7 @@ pub mod db {
     /// Returns an error if insertion fails.
     pub async fn insert_submission_raw(
         submission: &Submission,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
@@ -390,6 +391,10 @@ pub mod db {
         )
             .execute(conn.get_inner())
             .await?;
+
+        conn.on_commit(|| {
+            counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
+        });
 
         Ok(())
     }
@@ -430,14 +435,14 @@ pub mod db {
         submission: Submission,
         chunks: Vec<Chunk>,
         mut conn: impl WriterConnection,
+        notify_on_insert: Arc<Notify>,
     ) -> Result<(), DatabaseError> {
-        use axum_prometheus::metrics::counter;
         use futures::FutureExt as _;
 
-        let chunks_total = submission.chunks_total.into();
+        let chunks_total: u64 = submission.chunks_total.into();
         tracing::debug!("Inserting submission {}", submission.id);
 
-        let res = conn
+        conn
             .transaction(move |mut tx| {
                 async move {
                     insert_submission_raw(&submission, &mut tx).await?;
@@ -447,27 +452,28 @@ pub mod db {
                         &mut tx,
                     )
                         .await?;
-                    super::chunk::db::insert_many_chunks(chunks, &mut tx).await?;
+                    chunk::db::insert_many_chunks(chunks, &mut tx).await?;
 
                     // Empty submissions get special handling: we mark them as completed right away.
                     // See https://github.com/channable/opsqueue/issues/86 for rationale.
                     if chunks_total == 0 {
-                        maybe_complete_submission(submission.id, tx).await
+                        maybe_complete_submission(submission.id, &mut tx).await
                             .map_err(|e| match e {
                                 // Forward our database errors to the caller.
                                 E::L(e) => e,
                                 E::R(_) => panic!("Failed to find submission that was just inserted in this transaction"),
                             })?;
+                    } else {
+                    tx.on_commit(move || {
+                            // Notify waiting consumers, if the submission has chunks.
+                            notify_on_insert.notify_waiters();
+                        });
                     }
+
                     Ok(())
                 }
                     .boxed()
-            })
-            .await;
-
-        counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
-        counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
-        res
+            }).await
     }
 
     #[tracing::instrument(skip(chunks, conn))]
@@ -476,39 +482,32 @@ pub mod db {
         chunks: Vec<Chunk>,
         mut conn: impl WriterConnection,
     ) -> Result<(), DatabaseError> {
-        use axum_prometheus::metrics::counter;
         use futures::FutureExt as _;
 
-        let chunks_total = submission.chunks_total.into();
         tracing::debug!("Inserting paused submission {}", submission.id);
 
-        let res = conn
-            .transaction(move |mut tx| {
-                async move {
-                    insert_paused_submission_raw(&submission, &mut tx).await?;
-                    insert_submission_metadata_raw(
-                        &submission,
-                        &submission.strategic_metadata,
-                        &mut tx,
-                    )
-                    .await?;
-                    super::chunk::db::insert_many_paused_chunks(&chunks, &mut tx).await?;
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await;
+        conn.transaction(move |mut tx| {
+            async move {
+                insert_paused_submission_raw(&submission, &mut tx).await?;
+                insert_submission_metadata_raw(
+                    &submission,
+                    &submission.strategic_metadata,
+                    &mut tx,
+                )
+                .await?;
+                chunk::db::insert_many_paused_chunks(chunks, &mut tx).await?;
 
-        counter!(crate::prometheus::SUBMISSIONS_PAUSED_COUNTER).increment(1);
-        counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
-        counter!(crate::prometheus::CHUNKS_TOTAL_COUNTER).increment(chunks_total);
-        res
+                Ok(())
+            }
+            .boxed()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(conn))]
     async fn insert_paused_submission_raw(
         submission: &Submission,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), DatabaseError> {
         sqlx::query!(
             "
@@ -525,6 +524,11 @@ pub mod db {
         )
             .execute(conn.get_inner())
             .await?;
+
+        conn.on_commit(|| {
+            counter!(crate::prometheus::SUBMISSIONS_PAUSED_COUNTER).increment(1);
+            counter!(crate::prometheus::SUBMISSIONS_TOTAL_COUNTER).increment(1);
+        });
 
         Ok(())
     }
@@ -544,6 +548,7 @@ pub mod db {
     pub async fn unpause_submission(
         id: SubmissionId,
         mut conn: impl WriterConnection,
+        notify_on_insert: Arc<Notify>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         conn.transaction(move |mut tx| {
             Box::pin(async move {
@@ -551,7 +556,12 @@ pub mod db {
                 super::chunk::db::restore_paused_chunks(id, &mut tx).await?;
                 // NOTE: We need to check whether the submission is completed, because it might
                 // be the case that we are unpausing a 0-chunk submission.
-                maybe_complete_submission(id, &mut tx).await?;
+                let completed = maybe_complete_submission(id, &mut tx).await?;
+
+                if !completed {
+                    tx.on_commit(move || notify_on_insert.notify_waiters());
+                }
+
                 Ok(())
             })
         })
@@ -561,7 +571,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub(super) async fn unpause_submission_raw(
         id: SubmissionId,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let res = query!(
             "
@@ -580,7 +590,9 @@ pub mod db {
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
-            counter!(crate::prometheus::SUBMISSIONS_UNPAUSED_COUNTER).increment(1);
+            conn.on_commit(|| {
+                counter!(crate::prometheus::SUBMISSIONS_UNPAUSED_COUNTER).increment(1);
+            });
             Ok(())
         }
     }
@@ -601,7 +613,8 @@ pub mod db {
     /// # Errors
     ///
     /// Returns an error if insertion or follow-up completion updates fail.
-    #[tracing::instrument(skip(metadata, chunks_contents, conn))]
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip(metadata, chunks_contents, conn, notify_on_insert))]
     pub async fn insert_submission_from_chunks(
         prefix: Option<String>,
         chunks_contents: Vec<chunk::Content>,
@@ -610,6 +623,7 @@ pub mod db {
         chunk_size: ChunkSize,
         initial_status: InitialSubmissionStatus,
         mut conn: impl WriterConnection,
+        notify_on_insert: Arc<Notify>,
     ) -> Result<SubmissionId, DatabaseError> {
         let submission_id = SubmissionId::new();
         let len = chunks_contents.len().try_into().expect("Vector length larger than u63 range. Unlikely because of RAM constraints but theoretically possible");
@@ -638,7 +652,7 @@ pub mod db {
                 insert_paused_submission(submission, chunks, &mut conn).await?;
             }
             InitialSubmissionStatus::InProgress => {
-                insert_submission(submission, chunks, &mut conn).await?;
+                insert_submission(submission, chunks, &mut conn, notify_on_insert).await?;
             }
         }
 
@@ -1242,9 +1256,9 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub(super) async fn cancel_submission_raw(
         id: SubmissionId,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
-        let now = chrono::prelude::Utc::now();
+        let now = Utc::now();
 
         let res = query!(
             "
@@ -1263,10 +1277,12 @@ pub mod db {
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
-            counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
-            histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
-                crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-            );
+            let duration = crate::prometheus::time_delta_as_f64(now - id.timestamp());
+            conn.on_commit(move || {
+                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+                histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM)
+                    .record(duration);
+            });
             Ok(())
         }
     }
@@ -1274,7 +1290,7 @@ pub mod db {
     #[tracing::instrument(skip(conn))]
     pub(super) async fn cancel_paused_submission_raw(
         id: SubmissionId,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
 
@@ -1295,10 +1311,12 @@ pub mod db {
         if res.rows_affected() == 0 {
             Err(E::R(SubmissionNotFound(id)))
         } else {
-            counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
-            histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM).record(
-                crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-            );
+            let duration = crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp());
+            conn.on_commit(move || {
+                counter!(crate::prometheus::SUBMISSIONS_CANCELLED_COUNTER).increment(1);
+                histogram!(crate::prometheus::SUBMISSIONS_DURATION_CANCEL_HISTOGRAM)
+                    .record(duration);
+            });
             Ok(())
         }
     }
@@ -1310,41 +1328,47 @@ pub mod db {
         mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), E<DatabaseError, SubmissionNotFound>> {
         let now = chrono::prelude::Utc::now();
-        query!(
-            "
-    SAVEPOINT complete_submission_raw;
+        conn.transaction(move |mut tx| {
+            Box::pin(async move {
+                query!(
+                    "
+                    INSERT INTO submissions_completed
+                    (id, chunks_total, prefix, metadata, completed_at)
+                    SELECT id, chunks_total, prefix, metadata, julianday($1) FROM submissions WHERE id = $2;
 
-    INSERT INTO submissions_completed
-    (id, chunks_total, prefix, metadata, completed_at)
-    SELECT id, chunks_total, prefix, metadata, julianday($1) FROM submissions WHERE id = $2;
+                    DELETE FROM submissions WHERE id = $3 RETURNING *;
+                    ",
+                    now,
+                    id,
+                    id,
+                )
+                    .fetch_one(tx.get_inner())
+                    .await
+                    .map_err(|e| match e {
+                        sqlx::Error::RowNotFound => E::R(SubmissionNotFound(id)),
+                        e => E::L(DatabaseError::from(e)),
+                    })?;
 
-    DELETE FROM submissions WHERE id = $3 RETURNING *;
+                let duration = crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp());
+                tx.on_commit(move || {
+                    counter!(crate::prometheus::SUBMISSIONS_COMPLETED_COUNTER).increment(1);
+                    histogram!(crate::prometheus::SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM).record(
+                        duration,
+                    );
+                });
 
-    RELEASE SAVEPOINT complete_submission_raw;
-    ",
-            now,
-            id,
-            id,
-        )
-        .fetch_one(conn.get_inner())
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => E::R(SubmissionNotFound(id)),
-            e => E::L(DatabaseError::from(e)),
-        })?;
-        counter!(crate::prometheus::SUBMISSIONS_COMPLETED_COUNTER).increment(1);
-        histogram!(crate::prometheus::SUBMISSIONS_DURATION_COMPLETE_HISTOGRAM).record(
-            crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-        );
-        tracing::debug!("Completed submission {id}, timestamp {}", id.timestamp());
-        Ok(())
+                tracing::debug!("Completed submission {id}, timestamp {}", id.timestamp());
+                Ok(())
+            })
+        })
+            .await
     }
 
     #[tracing::instrument(skip(conn))]
     pub(super) async fn fail_submission_raw(
         id: SubmissionId,
         failed_chunk_id: ChunkIndex,
-        mut conn: impl WriterConnection,
+        mut conn: impl WriterConnection<Transaction = True>,
     ) -> Result<(), DatabaseError> {
         let now = chrono::prelude::Utc::now();
 
@@ -1366,10 +1390,12 @@ pub mod db {
             .map_err(|err| {
                 DatabaseError(err, Some(format!("Failed to move submission {id:?} to submissions_failed for failed chunk {failed_chunk_id:?}")))
             })?;
-        counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
-        histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(
-            crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp()),
-        );
+
+        let duration = crate::prometheus::time_delta_as_f64(Utc::now() - id.timestamp());
+        conn.on_commit(move || {
+            counter!(crate::prometheus::SUBMISSIONS_FAILED_COUNTER).increment(1);
+            histogram!(crate::prometheus::SUBMISSIONS_DURATION_FAIL_HISTOGRAM).record(duration);
+        });
 
         Ok(())
     }
@@ -1609,16 +1635,18 @@ pub mod db {
 #[cfg(test)]
 #[cfg(feature = "server-logic")]
 pub mod test {
+    use crate::common::StrategicMetadataMap;
+    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
+    use crate::db::{Connection as _, WriterPool};
     use chrono::Utc;
     use chunk::ChunkSize;
+    use futures::FutureExt;
     use itertools::Itertools;
     use sqlformat::{FormatOptions, QueryParams, format};
     use sqlx::{Execute, Row, Sqlite};
     use std::assert_matches;
-
-    use crate::common::StrategicMetadataMap;
-    use crate::common::chunk::db::{count_chunks, count_chunks_failed, count_chunks_paused};
-    use crate::db::{Connection as _, WriterPool};
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     use super::db::*;
     use super::*;
@@ -1761,11 +1789,52 @@ pub mod test {
             ChunkSize::default(),
         )
         .unwrap();
-        insert_submission(submission, chunks, &mut conn)
+
+        let notify_on_insert = Arc::new(Notify::new());
+        let notified = notify_on_insert.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        insert_submission(submission, chunks, &mut conn, notify_on_insert.clone())
             .await
             .expect("insertion failed");
 
+        assert!(
+            notified.now_or_never().is_some(),
+            "notify_on_insert should have been notified"
+        );
+
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    /// Test whether empty submissions are marked as completed right away by `insert_submission_from_chunks`.
+    pub async fn auto_complete_empty_submission(db: sqlx::SqlitePool) {
+        let db = WriterPool::new(db);
+        let mut conn = db.writer_conn().await.unwrap();
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+
+        let (submission, chunks) =
+            Submission::from_vec(vec![], None, ChunkSize::default()).unwrap();
+
+        let notify_on_insert = Arc::new(Notify::new());
+        let notified = notify_on_insert.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        insert_submission(submission, chunks, &mut conn, notify_on_insert.clone())
+            .await
+            .expect("insertion failed");
+
+        assert!(
+            notified.now_or_never().is_none(),
+            "notify_on_insert was unexpectedly notified"
+        );
+
+        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
+        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
+        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
@@ -1778,7 +1847,9 @@ pub mod test {
             ChunkSize(1),
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+
+        let notify_on_insert = Arc::new(Notify::new());
+        insert_submission(submission.clone(), chunks, &mut conn, notify_on_insert)
             .await
             .expect("insertion failed");
 
@@ -1800,6 +1871,7 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
         let chunks = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
+        let notify_on_insert = Arc::new(Notify::new());
 
         let submission_id = insert_submission_from_chunks(
             None,
@@ -1809,6 +1881,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert,
         )
         .await
         .expect("insertion failed");
@@ -1829,7 +1902,8 @@ pub mod test {
             ChunkSize::default(),
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+        let notify_on_insert = Arc::new(Notify::new());
+        insert_submission(submission.clone(), chunks, &mut conn, notify_on_insert)
             .await
             .expect("insertion failed");
 
@@ -1854,7 +1928,8 @@ pub mod test {
             ChunkSize::default(),
         )
         .unwrap();
-        insert_submission(submission.clone(), chunks, &mut conn)
+        let notify_on_insert = Arc::new(Notify::new());
+        insert_submission(submission.clone(), chunks, &mut conn, notify_on_insert)
             .await
             .expect("insertion failed");
 
@@ -1876,6 +1951,8 @@ pub mod test {
         let db = WriterPool::new(db);
         let mut conn = db.writer_conn().await.unwrap();
 
+        let notify_on_insert = Arc::new(Notify::new());
+
         let chunks_contents = vec![Some("foo".into()), Some("bar".into()), Some("baz".into())];
         let old_one = insert_submission_from_chunks(
             None,
@@ -1885,6 +1962,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1896,6 +1974,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1907,6 +1986,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1918,6 +1998,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1951,6 +2032,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1962,6 +2044,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -1973,6 +2056,7 @@ pub mod test {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert.clone(),
         )
         .await
         .unwrap();
@@ -2007,33 +2091,6 @@ pub mod test {
         let _sub2 = submission_status(old_four_unfailed, &mut conn)
             .await
             .unwrap();
-    }
-
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    /// Test whether empty submissions are marked as completed right away by `insert_submission_from_chunks`.
-    pub async fn auto_complete_empty_submission(db: sqlx::SqlitePool) {
-        let db = WriterPool::new(db);
-        let mut conn = db.writer_conn().await.unwrap();
-        insert_submission_from_chunks(
-            // prefix
-            None,
-            // chunks
-            vec![],
-            // metadata
-            None,
-            // strategic_metadata
-            StrategicMetadataMap::default(),
-            // chunk size
-            ChunkSize::default(),
-            InitialSubmissionStatus::InProgress,
-            &mut conn,
-        )
-        .await
-        .expect("insertion failed");
-
-        assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
-        assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);
-        assert_eq!(count_submissions_failed(&mut conn).await.unwrap(), 0);
     }
 
     /// Removes the given top-level key from a JSON object, panicking if it was not present.
@@ -2164,7 +2221,20 @@ pub mod test {
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 3);
 
-        unpause_submission(submission.id, &mut conn).await.unwrap();
+        let notify_on_insert = Arc::new(Notify::new());
+        let notified = notify_on_insert.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        unpause_submission(submission.id, &mut conn, notify_on_insert.clone())
+            .await
+            .unwrap();
+
+        assert!(
+            notified.now_or_never().is_some(),
+            "notify_on_insert should have been notified"
+        );
+
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 1);
         assert_eq!(count_submissions_paused(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 3);
@@ -2187,7 +2257,19 @@ pub mod test {
         assert_eq!(count_chunks(&mut conn).await.unwrap(), 0);
         assert_eq!(count_chunks_paused(&mut conn).await.unwrap(), 0);
 
-        unpause_submission(submission.id, &mut conn).await.unwrap();
+        let notify_on_insert = Arc::new(Notify::new());
+        let notified = notify_on_insert.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        unpause_submission(submission.id, &mut conn, notify_on_insert.clone())
+            .await
+            .unwrap();
+
+        assert!(
+            notified.now_or_never().is_none(),
+            "notify_on_insert was unexpectedly notified"
+        );
 
         assert_eq!(count_submissions(&mut conn).await.unwrap(), 0);
         assert_eq!(count_submissions_completed(&mut conn).await.unwrap(), 1);

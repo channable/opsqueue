@@ -1,8 +1,8 @@
 //! Concrete implementation of [`Connection`] and related types.
 
 use super::{
-    Connection, Transaction,
-    magic::{Bool, False, True},
+    Connection,
+    magic::{Bool, False, IsTrue, True},
 };
 use futures::future::BoxFuture;
 use sqlx::{Connection as SqlxConnection, Error, Sqlite, SqliteConnection, pool::PoolConnection};
@@ -97,6 +97,13 @@ where
         self.get_pool_connection()
     }
 
+    fn on_commit(&mut self, _f: impl FnOnce() + Send + Sync + 'static)
+    where
+        Self::Transaction: IsTrue,
+    {
+        unreachable!("on_commit is only available for connections with an active transaction")
+    }
+
     async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
         for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
@@ -154,6 +161,13 @@ where
         self.get_tx().inner
     }
 
+    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static)
+    where
+        Self::Transaction: IsTrue,
+    {
+        self.get_tx().on_commit_callbacks.push(Box::new(f));
+    }
+
     async fn transaction<Out, Err, Fun>(&mut self, f: Fun) -> Result<Out, Err>
     where
         for<'t> Fun: FnOnce(Conn<Self::Writable, Tx<'t, '_>>) -> BoxFuture<'t, Result<Out, Err>>
@@ -183,16 +197,6 @@ where
                 Err(error)
             }
         }
-    }
-}
-
-impl<Writable> Transaction for Conn<Writable, Tx<'_, '_>>
-where
-    Writable: Bool,
-{
-    /// Provide a function to be executed once after committing.
-    fn on_commit(&mut self, f: impl FnOnce() + Send + Sync + 'static) {
-        self.get_tx().on_commit_callbacks.push(Box::new(f));
     }
 }
 

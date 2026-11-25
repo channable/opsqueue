@@ -452,6 +452,8 @@ mod tests {
         db::{DBPools, WriterPool},
         producer::common::ChunkContents,
     };
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
     async fn start_server_in_background(pool: &sqlx::SqlitePool, url: &str) {
         let db_pools = DBPools::from_test_pool(pool);
@@ -474,6 +476,7 @@ mod tests {
 
         let pool = WriterPool::new(pool);
         let mut conn = pool.writer_conn().await.unwrap();
+        let notify_on_insert = Arc::new(Notify::new());
         submission::db::insert_submission_from_chunks(
             None,
             vec![None, None, None],
@@ -482,6 +485,7 @@ mod tests {
             ChunkSize::default(),
             InitialSubmissionStatus::default(),
             &mut conn,
+            notify_on_insert,
         )
         .await
         .expect("Insertion failed");
